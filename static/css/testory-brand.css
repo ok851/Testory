@@ -31,21 +31,26 @@
 }
 
 .testory-logo-word {
-  font-weight: 700;
+  font-size: 1rem !important;
+  font-weight: 700 !important;
   letter-spacing: -0.02em;
-  line-height: 1.1;
+  line-height: 1.1 !important;
 }
 
 /* 品牌名统一加粗（与副标题 small 分离，避免部分页被继承成 500） */
 .testory-logo-name {
-  font-weight: 700;
+  font-size: 1rem !important;
+  font-weight: 700 !important;
   letter-spacing: -0.02em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .testory-logo-word small {
   display: block;
-  font-size: 0.65rem;
-  font-weight: 500;
+  font-size: 0.65rem !important;
+  font-weight: 500 !important;
   opacity: 0.65;
   letter-spacing: 0.02em;
 }
@@ -437,4 +442,24 @@ html.dark body.testory-desktop-client .testory-desktop-badge {
 .testory-auth-step.active {
   background: #818cf8;
   box-shadow: 0 0 0 4px rgba(129, 140, 248, 0.2);
+}
+
+/* ==========================================================
+   统一导航标题排版（最终规则）
+   覆盖 Tailwind CDN preflight 的 small{font-size:80%} 等干扰，
+   确保所有页面的左上角 Testory 字体大小/粗细完全一致。
+   ========================================================== */
+#testoryMainNav .testory-logo,
+#testoryMainNav .testory-logo-word,
+#testoryMainNav .testory-logo-name {
+  font-size: 1rem !important;
+  font-weight: 700 !important;
+  line-height: 1.1 !important;
+}
+
+#testoryMainNav .testory-logo-word small,
+html #testoryMainNav .testory-logo-word small,
+html.dark #testoryMainNav .testory-logo-word small {
+  font-size: 0.65rem !important;
+  font-weight: 500 !important;
 }

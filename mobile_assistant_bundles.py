@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """插件市场：Testory 移动端助手 APK 安装与检测。"""
 from __future__ import annotations
 
@@ -454,7 +454,7 @@ def get_testory_assistant_catalog_entry() -> Dict[str, Any]:
     return {
         "id": _PLUGIN_ID,
         "name": manifest.get("name") or "Testory 移动端助手",
-        "icon": "fa-mobile-screen-button",
+        "icon": "fas fa-mobile-screen-button",
         "icon_color": "#059669",
         "version": manifest.get("version") or "1.0.0",
         "type": "runtime_bundle",
@@ -465,3 +465,4 @@ def get_testory_assistant_catalog_entry() -> Dict[str, Any]:
         "local_bundle_ready": resolve_assistant_apk_path() is not None,
         "requires_device_for_full_install": False,
     }
+

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """插件市场后台安装任务（切换页面不中断）。"""
 
 from __future__ import annotations
@@ -16,9 +16,10 @@ _jobs_mem: Dict[str, Dict[str, Any]] = {}
 ProgressCallback = Callable[[int, str], None]
 
 # 耗时较长的运行时包默认后台安装
-BACKGROUND_PLUGIN_IDS = frozenset(
-
-)
+BACKGROUND_PLUGIN_IDS = frozenset({
+    "chromium",
+    "opencv",
+})
 
 
 def _jobs_file() -> Path:
@@ -162,3 +163,5 @@ def start_install_job(plugin_id: str) -> str:
 
 def should_install_in_background(plugin_id: str) -> bool:
     return (plugin_id or "").strip() in BACKGROUND_PLUGIN_IDS
+
+

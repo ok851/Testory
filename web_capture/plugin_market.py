@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """插件市场：网页捕获浏览器扩展安装与状态检测。"""
 
 from __future__ import annotations
@@ -187,6 +187,9 @@ _MOBILE_RUNTIME_PLUGIN_IDS = frozenset(
     }
 )
 
+# 组件类型 ID（由 components_manager 管理）
+_COMPONENT_IDS = frozenset({'chromium', 'opencv'})
+
 
 def _mobile_runtime_installed(plugin_id: str) -> bool:
     """移动端运行时包：必须存在对应可执行文件，空目录或仅 JSON 登记不算已安装。"""
@@ -228,6 +231,13 @@ def prune_stale_plugin_records() -> int:
 
 def is_plugin_installed(plugin_id: str) -> bool:
     pid = (plugin_id or "").strip()
+    # 组件类型由 components_manager 管理
+    if pid in _COMPONENT_IDS:
+        try:
+            from components_manager import is_installed as _comp_installed
+            return _comp_installed(pid)
+        except Exception:
+            return False
     if pid in _MOBILE_RUNTIME_PLUGIN_IDS:
         return _mobile_runtime_installed(pid)
 
@@ -301,6 +311,21 @@ def _extension_connected() -> bool:
 def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
     """为目录项附加安装状态（不以浏览器连接作为安装前置条件）。"""
     pid = plugin.get("id") or ""
+    # 组件类型由 components_manager 管理
+    if pid in _COMPONENT_IDS:
+        out = dict(plugin)
+        try:
+            from components_manager import is_installed as _comp_installed
+            installed = _comp_installed(pid)
+        except Exception:
+            installed = False
+        out["installed"] = installed
+        out["connected"] = False
+        out["install_dir"] = ""
+        out["installed_at"] = ""
+        out["status_label"] = "已安装" if installed else "未安装"
+        out["status_tone"] = "ok" if installed else "muted"
+        return out
     rec = (_load_state().get("plugins") or {}).get(pid) or {}
     installed = is_plugin_installed(pid)
     out = dict(plugin)
@@ -371,6 +396,27 @@ def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
         from mobile_assistant_bundles import get_testory_assistant_catalog_entry
 
         items.append(get_testory_assistant_catalog_entry())
+    except Exception:
+        pass
+    # 运行组件（Chromium、OpenCV 等）
+    try:
+        from components_manager import COMPONENT_DEFS
+
+        for _cid, _cdef in COMPONENT_DEFS.items():
+            items.append(
+                {
+                    "id": _cid,
+                    "category": "component",
+                    "name": _cdef.get("name", _cid),
+                    "icon": _cdef.get("icon", "📦"),
+                    "icon_color": "#8B5CF6",
+                    "version": _cdef.get("version", "1.0.0"),
+                    "type": "component",
+                    "description": _cdef.get("description", ""),
+                    "features": _cdef.get("required_by", []),
+                    "estimated_size_mb": _cdef.get("estimated_size_mb", 0),
+                }
+            )
     except Exception:
         pass
     return items
@@ -537,7 +583,11 @@ def install_plugin(plugin_id: str, *, background: Optional[bool] = None) -> Dict
         except Exception:
             background = False
 
-    if background and meta.get("type") == "runtime_bundle":
+    # 组件类型始终后台安装（耗时较长）
+    if background is None and meta.get("type") == "component":
+        background = True
+
+    if background and meta.get("type") in ("runtime_bundle", "component"):
         try:
             from plugin_install_jobs import start_install_job
 
@@ -577,6 +627,24 @@ def install_plugin_sync(
     state = _load_state()
     plugins = state.setdefault("plugins", {})
     now = datetime.now(timezone.utc).isoformat()
+
+    # 组件类型由 components_manager 安装
+    if meta.get("type") == "component":
+        try:
+            from components_manager import install as _comp_install
+            def _comp_progress(_status: str, _percent: float, _message: str) -> None:
+                _progress(int(_percent), _message)
+            ok = _comp_install(pid, progress=_comp_progress)
+            if ok:
+                return {
+                    "success": True,
+                    "plugin_id": pid,
+                    "installed": True,
+                    "message": "组件安装完成。平台将在需要时自动调用该组件。",
+                }
+            return {"success": False, "error": "组件安装失败，请检查网络后重试"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     if meta.get("type") == "runtime_bundle":
         if pid == "mobile-android-platform-tools":
@@ -681,3 +749,14 @@ def prepare_extension(browser: str = "chrome", *, target_dir: str = "") -> Dict[
         except OSError as exc:
             return {"success": False, "error": str(exc)}
     return install_plugin(pid)
+
+
+
+
+
+
+
+
+
+
+

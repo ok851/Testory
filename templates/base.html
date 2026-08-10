@@ -48,7 +48,7 @@
     <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui6">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui11">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-upload.css') }}?v=1">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui9">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui5">
@@ -402,6 +402,19 @@
 
         .text-muted { color: #6b7280; }
         html.dark .text-muted { color: #94a3b8; }
+
+        /* 统一导航标题：强制覆盖 Tailwind preflight 的 small{font-size:80%} */
+        #testoryMainNav .testory-logo,
+        #testoryMainNav .testory-logo-word,
+        #testoryMainNav .testory-logo-name {
+            font-size: 1rem !important;
+            font-weight: 700 !important;
+            line-height: 1.1 !important;
+        }
+        #testoryMainNav .testory-logo-word small {
+            font-size: 0.65rem !important;
+            font-weight: 500 !important;
+        }
     </style>
     <style>
         /* FOUC：只藏 body；html 保持主题底。桌面换页白闪由 WebView 深色 DefaultBackground 管，不靠整页 opacity。 */
@@ -461,7 +474,7 @@
             <div class="flex items-center gap-3 flex-shrink-0">
                 <a href="/" class="testory-logo">
                     <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}">
-                    <span class="testory-logo-word"><span class="testory-logo-name">{{ product_name }}</span><small>{{ product_tagline }}</small></span>
+                    <span class="testory-logo-word" style="font-size:1rem!important;line-height:1.1!important"><span class="testory-logo-name" style="font-size:1rem!important;font-weight:700!important">{{ product_name }}</span><small style="font-size:0.65rem!important;font-weight:500!important">{{ product_tagline }}</small></span>
                 </a>
             </div>
             <div class="flex items-center gap-2 flex-wrap justify-end">

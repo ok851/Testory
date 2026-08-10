@@ -59,19 +59,6 @@ body.testory-desktop-client .testory-logo svg {
   height: 32px !important;
 }
 
-body.testory-desktop-client .testory-logo-word {
-  font-size: 1.05rem !important;
-}
-
-body.testory-desktop-client .testory-logo-name {
-  font-weight: 700 !important;
-}
-
-body.testory-desktop-client .testory-logo-word small {
-  font-size: 0.7rem !important;
-  font-weight: 500 !important;
-}
-
 /* ========== 3. 页面容器与间距 ========== */
 
 body.testory-desktop-client .testory-page-main .container {
@@ -829,9 +816,6 @@ body.testory-desktop-client #globalRunBannerStopBtn {
 }
 
 @media (max-width: 1024px) {
-  body.testory-desktop-client .testory-logo-word small {
-    display: none;
-  }
 
   body.testory-desktop-client .hero-section {
     padding-top: 1.75rem !important;

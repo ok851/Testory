@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """可选组件管理 — 用于按需下载和安装大体积组件（Chromium、OpenCV 等）。
 
 组件列表：
@@ -132,14 +132,31 @@ CHECK_FUNCS = {
     "opencv": _check_opencv_installed,
 }
 
+# 安装状态缓存，避免每次请求都执行耗时检测（如 subprocess 调用）
+_check_cache: Dict[str, Any] = {}
+_CHECK_CACHE_TTL = 30  # 秒
+
+
+def _cached_check(component_id: str) -> bool:
+    """带缓存的安装状态检测。"""
+    import time
+
+    now = time.monotonic()
+    cached = _check_cache.get(component_id)
+    if cached and (now - cached[1]) < _CHECK_CACHE_TTL:
+        return cached[0]
+    func = CHECK_FUNCS.get(component_id)
+    result = func() if func else False
+    _check_cache[component_id] = (result, now)
+    return result
+
 
 def list_components() -> List[Dict[str, Any]]:
     """返回所有组件的列表，包含安装状态。"""
     stored = _load_components()
     result = []
     for cid, cdef in COMPONENT_DEFS.items():
-        check = CHECK_FUNCS.get(cid)
-        is_installed = check() if check else False
+        is_installed = _cached_check(cid)
         info = dict(cdef)
         info["installed"] = is_installed
         stored_info = stored.get(cid, {})
@@ -150,14 +167,10 @@ def list_components() -> List[Dict[str, Any]]:
 
 
 def is_installed(component_id: str) -> bool:
-    """检查指定组件是否已安装。"""
+    """检查指定组件是否已安装（带缓存）。"""
     if component_id not in COMPONENT_DEFS:
         return False
-    check = CHECK_FUNCS.get(component_id)
-    if check:
-        return check()
-    stored = _load_components()
-    return bool(stored.get(component_id, {}).get("installed", False))
+    return _cached_check(component_id)
 
 
 def _set_installed(component_id: str, version: str = "") -> None:
@@ -315,3 +328,7 @@ def install(component_id: str, progress: Optional[ProgressCallback] = None) -> b
 def get_available_components() -> List[str]:
     """返回所有可用组件的 ID 列表。"""
     return list(COMPONENT_DEFS.keys())
+
+
+
+
