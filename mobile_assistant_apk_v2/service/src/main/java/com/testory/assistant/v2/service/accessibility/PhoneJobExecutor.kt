@@ -8,6 +8,7 @@ import com.testory.assistant.v2.core.model.ActionType
 import com.testory.assistant.v2.core.model.Step
 import com.testory.assistant.v2.core.model.StepResult
 import com.testory.assistant.v2.core.model.StepVariables
+import com.testory.assistant.v2.core.communication.PcSyncClient
 import com.testory.assistant.v2.core.repository.CaseRepository
 import com.testory.assistant.v2.service.foreground.FloatingControlService
 import com.testory.assistant.v2.service.foreground.RecorderForegroundService
@@ -27,7 +28,8 @@ import javax.inject.Singleton
 @Singleton
 class PhoneJobExecutor @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val caseRepository: CaseRepository
+    private val caseRepository: CaseRepository,
+    private val pcSyncClient: PcSyncClient
 ) {
     data class RunOutcome(
         val success: Boolean,
@@ -36,21 +38,34 @@ class PhoneJobExecutor @Inject constructor(
         val error: String = ""
     )
 
-    suspend fun executeSteps(steps: List<Step>): RunOutcome {
+    suspend fun executeSteps(steps: List<Step>, jobId: String = ""): RunOutcome {
         val service = AccessibilityServiceHolder.instance
             ?: return RunOutcome(false, emptyMap(), emptyList(), "无障碍服务未开启")
 
         ReplaySessionController.reset()
         startForeground(steps.size)
         try {
-            leaveTestoryUi(service)
-            waitUntilLeftSelf(service, 4000L)
+            leaveTestoryUiIfNeeded(service)
 
             val runtimeVariables = linkedMapOf<String, String>()
             val results = mutableListOf<StepResult>()
             var failed = 0
-
             for ((index, step) in steps.withIndex()) {
+                // ── PC 取消检测：每步前轮询 job 状态 ──
+                if (jobId.isNotBlank()) {
+                    val status = try { pcSyncClient.fetchJobStatus(jobId) } catch (_: Exception) { null }
+                    if (status != null && status.shouldAbort) {
+                        Log.w(TAG, "job=$jobId aborted by PC: ${status.abortReason}")
+                        stopForeground()
+                        return RunOutcome(
+                            success = false,
+                            variables = runtimeVariables.toMap(),
+                            results = results,
+                            error = "PC 端已取消任务: ${status.abortReason.ifBlank { "user_pause" }}"
+                        )
+                    }
+                }
+
                 updateProgress(index + 1, steps.size)
                 val preWait = if (step.preWaitMs > 0) step.preWaitMs else 500L
                 delay(preWait)
@@ -167,7 +182,30 @@ class PhoneJobExecutor @Inject constructor(
             }
             last = result
             if (result.success) return result
-            if (attempt < retries - 1) delay(400L * (attempt + 1))
+            if (attempt < retries - 1) {
+                // 元素未找到（NODE_LOOKUP_FAILED）通常意味着广告/弹窗/启动页遮挡，
+                // 用更长的间隔等待遮挡层消失（广告通常 3-5 秒）
+                val isElementMissing = result.actualStrategy == "NODE_LOOKUP_FAILED"
+                        || (result.errorMessage ?: "").contains("Element not found")
+                val delayMs = if (isElementMissing) ELEMENT_MISSING_RETRY_DELAY_MS else 400L * (attempt + 1)
+                delay(delayMs)
+            }
+        }
+        // 最终失败时截屏记录当前画面，便于后续分析（广告/弹窗/异常页面）
+        if (last != null && !last!!.success) {
+            try {
+                val png = service.captureScreenshotPng(null)
+                if (png != null) {
+                    val b64 = Base64.encodeToString(png, Base64.NO_WRAP)
+                    Log.w(TAG, "step failed, screenshot captured (${png.size} bytes)")
+                    last = last!!.copy(
+                        errorMessage = (last!!.errorMessage ?: "") +
+                                " [screenshot_captured=true, screen_data_len=${b64.length}]"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "failure screenshot capture failed", e)
+            }
         }
         return last ?: StepResult(success = false, errorMessage = "unknown")
     }
@@ -269,7 +307,21 @@ class PhoneJobExecutor @Inject constructor(
         } else step
     }
 
-    private fun leaveTestoryUi(service: AssistantAccessibilityService) {
+    /**
+     * 仅在当前界面确实停留在 Testory 自身 UI 时才回桌面；
+     * 若已在目标 App 或其他第三方 App 中，不做任何操作，直接让步骤在当前上下文执行。
+     */
+    private suspend fun leaveTestoryUiIfNeeded(service: AssistantAccessibilityService) {
+        val currentPkg = try {
+            service.activeWindowPackage()
+        } catch (_: Exception) {
+            ""
+        }
+        // 不在自身 UI 中，无需处理
+        if (currentPkg.isNotBlank() && !currentPkg.startsWith("com.testory.assistant")) {
+            return
+        }
+        Log.i(TAG, "currently in Testory UI ($currentPkg), navigating away before replay")
         try {
             val home = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
@@ -282,23 +334,14 @@ class PhoneJobExecutor @Inject constructor(
                 android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME
             )
         } catch (_: Exception) { }
-    }
-
-    private suspend fun waitUntilLeftSelf(
-        service: AssistantAccessibilityService,
-        timeoutMs: Long
-    ): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
+        // 等待离开自身 UI
+        val deadline = System.currentTimeMillis() + 4000L
         while (System.currentTimeMillis() < deadline) {
-            val pkg = try {
-                service.activeWindowPackage()
-            } catch (_: Exception) {
-                ""
-            }
-            if (pkg.isNotBlank() && !pkg.startsWith("com.testory.assistant")) return true
+            val pkg = try { service.activeWindowPackage() } catch (_: Exception) { "" }
+            if (pkg.isNotBlank() && !pkg.startsWith("com.testory.assistant")) return
             delay(200)
         }
-        return false
+        Log.w(TAG, "failed to leave Testory UI within timeout")
     }
 
     private suspend fun ensureTargetPackage(
@@ -371,5 +414,7 @@ class PhoneJobExecutor @Inject constructor(
     companion object {
         private const val TAG = "PhoneJobExecutor"
         private const val HUMAN_GATE_TIMEOUT_MS = 120_000L
+        /** 元素未找到时的重试间隔（广告/弹窗通常 3-5 秒后消失） */
+        private const val ELEMENT_MISSING_RETRY_DELAY_MS = 2500L
     }
 }

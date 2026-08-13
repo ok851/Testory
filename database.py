@@ -506,6 +506,31 @@ class Database:
             )
         ''')
 
+        # ── step_results 扩展字段（企业级运行历史） ──
+        _sr_alter_cols = [
+            ("started_at", "TIMESTAMP"),
+            ("selector_strategy", "TEXT"),
+            ("selector_attempts", "INTEGER DEFAULT 1"),
+            ("selector_resolve_ms", "REAL DEFAULT 0"),
+            ("action_execute_ms", "REAL DEFAULT 0"),
+            ("wait_ms", "REAL DEFAULT 0"),
+            ("retry_count", "INTEGER DEFAULT 0"),
+            ("page_url_before", "TEXT"),
+            ("page_url_after", "TEXT"),
+            ("page_title", "TEXT"),
+            ("iframe_context", "TEXT"),
+            ("extracted_value", "TEXT"),
+            ("expected_value", "TEXT"),
+            ("compare_result", "TEXT"),
+            ("screenshot_before", "TEXT"),
+            ("console_errors", "TEXT"),
+        ]
+        for _col_name, _col_type in _sr_alter_cols:
+            try:
+                cursor.execute(f"ALTER TABLE step_results ADD COLUMN {_col_name} {_col_type}")
+            except sqlite3.OperationalError:
+                pass
+
         # 创建全局变量表（支持全局/项目/用例三种作用域）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS variables (
@@ -3537,8 +3562,68 @@ class Database:
         conn.close()
         return result_id
 
+    def create_step_result_v2(
+        self,
+        run_history_id: int,
+        *,
+        step_id: int = 0,
+        step_order: int = 0,
+        action: str = "",
+        selector_value: str = "",
+        input_value: str = "",
+        description: str = "",
+        status: str = "success",
+        error: str = "",
+        screenshot: str = "",
+        duration: float = 0.0,
+        started_at: str = "",
+        selector_strategy: str = "",
+        selector_attempts: int = 1,
+        selector_resolve_ms: float = 0.0,
+        action_execute_ms: float = 0.0,
+        wait_ms: float = 0.0,
+        retry_count: int = 0,
+        page_url_before: str = "",
+        page_url_after: str = "",
+        page_title: str = "",
+        iframe_context: str = "",
+        extracted_value: str = "",
+        expected_value: str = "",
+        compare_result: str = "",
+        screenshot_before: str = "",
+        console_errors: str = "",
+    ) -> int:
+        """记录单步骤执行结果（企业级详细版本）。"""
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        local_time = _utc_now_sql()
+        cursor.execute(
+            """INSERT INTO step_results
+               (run_history_id, step_id, step_order, action, selector_value, input_value,
+                description, status, error, screenshot, duration, created_at,
+                started_at, selector_strategy, selector_attempts, selector_resolve_ms,
+                action_execute_ms, wait_ms, retry_count,
+                page_url_before, page_url_after, page_title, iframe_context,
+                extracted_value, expected_value, compare_result,
+                screenshot_before, console_errors)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                run_history_id, step_id, step_order, action, selector_value, input_value,
+                description, status, error, screenshot, duration, local_time,
+                started_at, selector_strategy, selector_attempts, selector_resolve_ms,
+                action_execute_ms, wait_ms, retry_count,
+                page_url_before, page_url_after, page_title, iframe_context,
+                extracted_value, expected_value, compare_result,
+                screenshot_before, console_errors,
+            ),
+        )
+        result_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return result_id
+
     def get_step_results(self, run_history_id: int) -> List[Dict[str, Any]]:
-        """获取某次运行的所有步骤结果"""
+        """获取某次运行的所有步骤结果（含扩展字段）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
@@ -3546,11 +3631,19 @@ class Database:
             (run_history_id,)
         )
         rows = cursor.fetchall()
+        # 获取列名（兼容新增列）
+        col_names = [desc[0] for desc in cursor.description] if cursor.description else []
         conn.close()
-        return [{'id': r[0], 'run_history_id': r[1], 'step_id': r[2], 'step_order': r[3],
-                 'action': r[4], 'selector_value': r[5], 'input_value': r[6],
-                 'description': r[7], 'status': r[8], 'error': r[9],
-                 'screenshot': r[10], 'duration': r[11], 'created_at': _bj_iso(r[12])} for r in rows]
+        results = []
+        for r in rows:
+            row_dict = {}
+            for idx, col in enumerate(col_names):
+                val = r[idx] if idx < len(r) else None
+                if col == "created_at" or col == "started_at":
+                    val = _bj_iso(val)
+                row_dict[col] = val
+            results.append(row_dict)
+        return results
 
     # ==================== 变量管理方法 ====================
 

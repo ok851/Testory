@@ -1514,20 +1514,24 @@ def _run_mobile_tool_with_progress(
     def _on_tick(job: Dict[str, Any]) -> None:
         st = str((job or {}).get("status") or "pending")
         jid = str((job or {}).get("job_id") or "")
+        step_count = len((job or {}).get("steps") or [])
+        claimed_at = float((job or {}).get("claimed_at") or 0)
+        elapsed = int(time.time() - claimed_at) if claimed_at > 0 else 0
         if st == "pending":
             msg = (
                 f"仍在等待手机领取任务（job={jid or '?'}，status=pending）。"
                 "若长时间不动：请确认无障碍已开启且 APK 显示已连接。"
             )
         elif st == "running":
-            msg = f"手机已领取任务，本机回放中（job={jid or '?'}）…"
+            elapsed_hint = f"已执行 {elapsed}s" if elapsed > 0 else ""
+            step_hint = f"，共 {step_count} 步" if step_count > 0 else ""
+            msg = f"手机已领取任务，本机回放中（{elapsed_hint}{step_hint}）…"
         else:
             msg = f"手机任务状态：{st}（job={jid or '?'}）"
         try:
             progress_q.put_nowait(msg)
         except Exception:
             pass
-
     def _worker() -> None:
         try:
             result_box.append(
@@ -1618,7 +1622,7 @@ def _cross_end_strategy_lines() -> List[str]:
         "open_app（推荐，带 package_name 如 com.tencent.mobileqq）、"
         "tap/input/wait/home/back；禁止 invent launch_app/start_app/shell/find_and_tap。",
         "- 打开应用示例："
-        '{"action":"open_app","description":"打开QQ","package_name":"com.tencent.mobileqq"}',
+        '{"action":"open_app","description":"打开目标App","package_name":"com.example.app"}',
         "- 应用内点击必须带可见文案定位（勿只写 description）："
         '{"action":"tap","description":"点击登录","selector_type":"text","selector_value":"登录"}',
         "- 勾选协议/复选框：description 含「勾选」且 prefer_checkable（平台会自动补）；"
@@ -1626,6 +1630,13 @@ def _cross_end_strategy_lines() -> List[str]:
         "- 应用内输入：input_value=内容，selector_value=输入框提示文案："
         '{"action":"input","description":"输入手机号","selector_type":"text",'
         '"selector_value":"手机号","input_value":"13800000000"}',
+        "- 【禁止】用 swipe/scroll 来「寻找」登录元素或「探索页面」。"
+        "如果找不到目标元素，应直接向用户报告当前页面状态，而非用滑动猜测。"
+        "swipe/scroll 仅用于明确的翻页需求（如列表滚动到指定项）。",
+        "- 【广告/弹窗处理】很多 App 启动后会显示广告、开屏页、弹窗公告等。"
+        "mobile_run_steps 中 open_app 之后建议加 wait 步骤（如 3000ms）等待广告展示完毕；"
+        "如果广告有关闭按钮（如「跳过」「关闭」「X」），可在 steps 中加入 tap 关闭。"
+        "手机端会在元素未找到时自动重试等待（最多约 7 秒），但主动加入 wait 更可靠。",
         "- mobile_* 工具返回的 success 只表示手势层结果；必须阅读 steps_digest / error。"
         "禁止在工具未全部 OK、或存在未勾选/未推进错误时向用户宣称「已完成」。",
         "- 跨工具共享变量在平台侧累积；参数中可写 {{var}}（如 {{sms_otp}} / {{phone_number}}），平台会替换。",

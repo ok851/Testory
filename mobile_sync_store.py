@@ -908,8 +908,33 @@ def get_run_job(job_id: str) -> Optional[Dict[str, Any]]:
         return dict(job) if job else None
 
 
-def cancel_run_job(job_id: str, *, error: str = "", error_code: str = "MOBILE_JOB_CANCELLED") -> bool:
-    """将 pending/running job 标为 cancelled（任务中止时避免手机稍后误执行）。"""
+def get_run_job_status_lite(job_id: str) -> Optional[Dict[str, Any]]:
+    """轻量级状态查询：手机回放中轮询，仅返回 status / error / error_code / abort_reason。"""
+    _load_jobs_from_disk(force=True)
+    with _LOCK:
+        job = _RUN_JOBS.get(job_id)
+        if not job:
+            return None
+        return {
+            "job_id": job_id,
+            "status": str(job.get("status") or "").strip().lower(),
+            "error": job.get("error") or "",
+            "error_code": job.get("error_code") or "",
+            "abort_reason": job.get("abort_reason") or "",
+        }
+
+
+def cancel_run_job(
+    job_id: str,
+    *,
+    error: str = "",
+    error_code: str = "MOBILE_JOB_CANCELLED",
+    abort_reason: str = "",
+) -> bool:
+    """将 pending/running job 标为 cancelled（任务中止时避免手机稍后误执行）。
+
+    abort_reason: 给手机端看的取消原因（如 user_pause / timeout）。
+    """
     _load_jobs_from_disk(force=True)
     with _LOCK:
         job = _RUN_JOBS.get(job_id)
@@ -921,6 +946,8 @@ def cancel_run_job(job_id: str, *, error: str = "", error_code: str = "MOBILE_JO
         job["status"] = "cancelled"
         job["error"] = (error or "").strip() or "任务已取消"
         job["error_code"] = error_code
+        if abort_reason:
+            job["abort_reason"] = abort_reason
         job["finished_at"] = time.time()
         _persist_jobs_unlocked()
         return True
@@ -944,10 +971,12 @@ def wait_for_run_job(
     last_tick = 0.0
     while time.time() < deadline:
         if abort_event is not None and getattr(abort_event, "is_set", lambda: False)():
+            _reason = str(getattr(abort_event, "_abort_reason", "") or "").strip() or "user_pause"
             cancel_run_job(
                 job_id,
                 error="任务已中止，停止等待手机本机执行",
                 error_code="MOBILE_AWAIT_ABORTED",
+                abort_reason=_reason,
             )
             job = get_run_job(job_id) or {"job_id": job_id}
             job = dict(job)
@@ -1549,6 +1578,20 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         if st != "busy" and err_code != "MOBILE_BUSY":
             _persist_run_history(job_id, body, int(meta["user_id"]))
         return jsonify({"success": True})
+
+    @app.route("/api/mobile/sync/run/<job_id>/status", methods=["GET"])
+    @api_error_handler
+    def api_mobile_sync_run_job_status(job_id: str):
+        """轻量级状态查询：手机回放中每步轮询，检测 PC 是否已取消。"""
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        info = get_run_job_status_lite(job_id)
+        if info is None:
+            return jsonify({"success": False, "error": "job 不存在"}), 404
+        # 手机端只需判断是否应中止
+        info["should_abort"] = info["status"] == "cancelled"
+        return jsonify({"success": True, **info})
 
     @app.route("/api/mobile/sync/ai/status", methods=["GET"])
     @api_error_handler

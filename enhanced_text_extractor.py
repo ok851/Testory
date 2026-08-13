@@ -37,7 +37,7 @@ class EnhancedTextExtractor:
         # 网络爬虫相关配置
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         })
     
     async def initialize_playwright(self):
@@ -70,7 +70,25 @@ class EnhancedTextExtractor:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
             
-            soup = BeautifulSoup(response.text, 'html.parser')
+            html_text = response.text
+            soup = BeautifulSoup(html_text, 'html.parser')
+            
+            # SPA 检测：如果页面是 JS 框架渲染的空壳，直接返回空让调用方走 Playwright
+            body = soup.find('body')
+            if body:
+                visible = body.get_text(strip=True)
+                if len(visible) < 50:
+                    scripts = soup.find_all('script', src=True)
+                    spa_hints = ('react', 'vue', 'angular', 'next', 'nuxt', 'webpack', 'vite', 'chunk')
+                    for s in scripts:
+                        src = (s.get('src') or '').lower()
+                        if any(h in src for h in spa_hints):
+                            logger.info(f"检测到 SPA 页面，爬虫无法提取，将由 Playwright 接管")
+                            return ""
+                    noscript = soup.find('noscript')
+                    if noscript and ('javascript' in noscript.get_text().lower() or '启用' in noscript.get_text()):
+                        logger.info(f"检测到 noscript JavaScript 提示，将由 Playwright 接管")
+                        return ""
             
             if selector:
                 # 使用指定选择器提取

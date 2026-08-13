@@ -79,6 +79,9 @@ interface PcSyncClient {
     /** 上报 job 完成事件（含 variables.sms_otp） */
     suspend fun reportJobResult(jobId: String, payloadJson: String): SyncResult
 
+    /** 轻量级 job 状态查询：手机回放中每步轮询，检测 PC 是否已取消 */
+    suspend fun fetchJobStatus(jobId: String): JobStatusInfo?
+
     /** 获取设备信息 */
     suspend fun getDeviceInfo(): DeviceInfo
 }
@@ -260,4 +263,12 @@ data class PendingRunJob(
     val jobKind: String = "run_steps",
     /** 已映射为 Unified Step IR；extract_otp 也可从 locator/inputText 读 hint/pattern */
     val steps: List<com.testory.assistant.v2.core.model.Step> = emptyList()
+)
+
+data class JobStatusInfo(
+    val jobId: String,
+    val status: String,
+    val shouldAbort: Boolean = false,
+    val abortReason: String = "",
+    val error: String = ""
 )

@@ -35,7 +35,7 @@ class WebCrawlerTextExtractor:
         
         # 默认请求头，模拟真实浏览器
         self.default_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
             'Accept-Encoding': 'gzip, deflate',
@@ -101,6 +101,28 @@ class WebCrawlerTextExtractor:
             logger.error(f"使用选择器提取文本失败: {e}")
             return []
     
+    def detect_spa_shell(self, html: str) -> bool:
+        """检测是否为 SPA 空壳页面（JS 框架渲染，静态 HTML 无实质内容）。"""
+        soup = BeautifulSoup(html, 'html.parser')
+        body = soup.find('body')
+        if not body:
+            return False
+        # SPA 典型特征：body 内只有 <div id="app"> 或 <div id="root">，无可见文本
+        visible_text = body.get_text(strip=True)
+        if len(visible_text) < 50:
+            # 检查是否有 SPA 框架标记
+            scripts = soup.find_all('script', src=True)
+            spa_hints = ('react', 'vue', 'angular', 'next', 'nuxt', 'webpack', 'vite', 'chunk')
+            for s in scripts:
+                src = (s.get('src') or '').lower()
+                if any(h in src for h in spa_hints):
+                    return True
+            # 检查 noscript 提示
+            noscript = soup.find('noscript')
+            if noscript and ('javascript' in noscript.get_text().lower() or '启用' in noscript.get_text()):
+                return True
+        return False
+
     def extract_all_text(self, html: str) -> str:
         """
         提取页面所有文本内容
@@ -278,6 +300,13 @@ class WebCrawlerTextExtractor:
         if not html:
             return result
         
+        # SPA 检测：如果页面是 JS 框架渲染的空壳，标记 success=False 让调用方走 Playwright
+        if self.detect_spa_shell(html):
+            logger.info(f"SPA 页面检测到，爬虫无法提取: {url}")
+            result['success'] = False
+            result['error'] = 'SPA page detected, requires JavaScript rendering'
+            return result
+
         result['success'] = True
         
         # 提取所有文本

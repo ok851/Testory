@@ -12679,9 +12679,16 @@ def _effective_step_iframe_selector(automation, db, step, project_id, case_id, r
             if row_resolve_fn and resolved:
                 resolved = row_resolve_fn(resolved)
             return (resolved or '').strip() or None
-    ci = getattr(automation, 'current_iframe', None) or {}
-    sel = ci.get('selector')
-    return sel if sel else None
+    # current_iframe 现为栈结构（list）；取栈顶
+    ci_stack = getattr(automation, 'current_iframe', None) or []
+    if isinstance(ci_stack, list) and ci_stack:
+        sel = ci_stack[-1].get('selector')
+        return sel if sel else None
+    # 兼容旧格式（dict）
+    if isinstance(ci_stack, dict):
+        sel = ci_stack.get('selector')
+        return sel if sel else None
+    return None
 
 
 def _run_db_step_scroll(input_value: str, iframe_selector=None):
@@ -12929,10 +12936,16 @@ def _run_extract_text_automation_step(
                         )
                 uat_logger.info("文本验证成功")
             else:
-                if action == 'text_compare':
-                    uat_logger.warning("未提取到文本，跳过文本验证")
+                # 元素找到但文本为空：有预期文本时应视为验证失败，而非静默跳过。
+                # compare_type=not_equals 时，空文本 != 预期文本，应通过。
+                if verify_type == 'not_equals':
+                    uat_logger.info("文本验证成功: 提取为空，不等于预期文本")
+                elif action == 'text_compare':
+                    uat_logger.error("文本验证失败: 未提取到文本，无法与预期对比")
+                    raise Exception("文本验证失败: 未提取到文本，无法与预期对比")
                 else:
-                    uat_logger.info("提取文本操作完成（未提取到文本）")
+                    uat_logger.error(f"提取文本为空，预期为「{expected_text[:50]}」，验证失败")
+                    raise Exception(f"提取文本为空，预期为「{expected_text[:50]}」，验证失败")
     else:
         try:
             current_extracted = sync_get_page_text()
@@ -13604,6 +13617,42 @@ def api_run_case(case_id):
                     step_status = 'error'
                     step_error = ''
                     step_screenshot = ''
+
+                    # ── 企业级步骤详情收集 ──
+                    try:
+                        automation._last_step_detail = {}  # 重置上一步残留数据
+                        from step_execution_detail import StepExecutionDetail
+                        _step_detail = StepExecutionDetail(
+                            step_id=step.get('id') or 0,
+                            step_order=step.get('step_order', 0),
+                            action=action,
+                            selector_value=selector_value or "",
+                            input_value=input_value or "",
+                            description=description or "",
+                        )
+                        _step_detail.mark_started()
+                        # 捕获执行前页面状态
+                        try:
+                            if automation.page:
+                                _step_detail.page_url_before = automation.page.url or ""
+                                pass  # page_title 需要 async，同步上下文跳过
+                        except Exception:
+                            pass
+                        _step_detail.iframe_context = iframe_for_step or ""
+                        # 选择性截图：仅特定 action 且浏览器可用时在执行前截图
+                        if _step_detail.should_capture_before() and automation.page is not None:
+                            try:
+                                import os as _os
+                                _ss_dir = _os.path.join(_os.getcwd(), 'screenshots')
+                                _os.makedirs(_ss_dir, exist_ok=True)
+                                _ss_name = f'step_before_{case_id}_{step.get("id", 0)}_{int(time.time())}.png'
+                                _ss_path = _os.path.join(_ss_dir, _ss_name)
+                                sync_take_screenshot(_ss_path)
+                                _step_detail.screenshot_before = _os.path.join('screenshots', _ss_name)
+                            except Exception:
+                                pass
+                    except ImportError:
+                        _step_detail = None
                     
                     uat_logger.log_automation_step(action, selector_value or input_value, description)
                     _case_job_update(
@@ -14057,13 +14106,37 @@ def api_run_case(case_id):
                     
                     # ⭐⭐ 记录成功步骤结果
                     step_duration = round(time.time() - step_start_time, 3)
-                    step_results_list.append({
-                        'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
-                        'action': action, 'selector_value': selector_value,
-                        'input_value': input_value, 'description': description,
-                        'status': step_status, 'error': step_error,
-                        'screenshot': step_screenshot, 'duration': step_duration
-                    })
+                    if _step_detail:
+                        _step_detail.mark_finished(success=True)
+                        # 合并 automation 层的步骤详情（selector_resolve_ms, extracted_value 等）
+                        try:
+                            _auto_detail = getattr(automation, '_last_step_detail', None) or {}
+                            if _auto_detail:
+                                if _auto_detail.get('selector_strategy') and not _step_detail.selector_strategy:
+                                    _step_detail.selector_strategy = _auto_detail['selector_strategy']
+                                if _auto_detail.get('selector_resolve_ms') and not _step_detail.selector_resolve_ms:
+                                    _step_detail.selector_resolve_ms = _auto_detail['selector_resolve_ms']
+                                if _auto_detail.get('action_execute_ms') and not _step_detail.action_execute_ms:
+                                    _step_detail.action_execute_ms = _auto_detail['action_execute_ms']
+                                if _auto_detail.get('extracted_value') is not None and not _step_detail.extracted_value:
+                                    _step_detail.extracted_value = _auto_detail['extracted_value']
+                                automation._last_step_detail = {}  # 重置
+                        except Exception:
+                            pass
+                        try:
+                            if automation.page:
+                                _step_detail.page_url_after = automation.page.url or ""
+                        except Exception:
+                            pass
+                        step_results_list.append(_step_detail.to_db_kwargs())
+                    else:
+                        step_results_list.append({
+                            'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                            'action': action, 'selector_value': selector_value,
+                            'input_value': input_value, 'description': description,
+                            'status': step_status, 'error': step_error,
+                            'screenshot': step_screenshot, 'duration': step_duration
+                        })
                     _case_job_update(
                         user_id,
                         completed_steps=len(step_results_list),
@@ -14082,9 +14155,7 @@ def api_run_case(case_id):
                 try:
                     run_id = db.create_run_history(case_id, 'success', duration, "", extracted_text, expected_text)
                     for sr in step_results_list:
-                        db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
-                            sr['selector_value'], sr['input_value'], sr['description'],
-                            sr['status'], sr['error'], sr['screenshot'], sr['duration'])
+                        db.create_step_result_v2(run_id, **sr)
                     try:
                         from ai_memory_store import ingest_successful_run, memory_ingest_run_success_enabled
     
@@ -14264,13 +14335,38 @@ def api_run_case(case_id):
                 ) if 'step' in dir() else False
                 if not already_recorded and 'step' in dir() and step:
                     failed_step_duration = round(time.time() - step_start_time, 3) if 'step_start_time' in dir() else 0
-                    step_results_list.append({
-                        'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
-                        'action': step.get('action', ''), 'selector_value': step.get('selector_value', ''),
-                        'input_value': step.get('input_value', ''), 'description': step.get('description', ''),
-                        'status': 'error', 'error': error_msg,
-                        'screenshot': failure_screenshot, 'duration': failed_step_duration
-                    })
+                    if '_step_detail' in dir() and _step_detail:
+                        _step_detail.mark_finished(success=False, error=error_msg)
+                        # 合并 automation 层的步骤详情
+                        try:
+                            _auto_detail = getattr(automation, '_last_step_detail', None) or {}
+                            if _auto_detail:
+                                if _auto_detail.get('selector_strategy') and not _step_detail.selector_strategy:
+                                    _step_detail.selector_strategy = _auto_detail['selector_strategy']
+                                if _auto_detail.get('selector_resolve_ms') and not _step_detail.selector_resolve_ms:
+                                    _step_detail.selector_resolve_ms = _auto_detail['selector_resolve_ms']
+                                if _auto_detail.get('action_execute_ms') and not _step_detail.action_execute_ms:
+                                    _step_detail.action_execute_ms = _auto_detail['action_execute_ms']
+                                if _auto_detail.get('extracted_value') is not None and not _step_detail.extracted_value:
+                                    _step_detail.extracted_value = _auto_detail['extracted_value']
+                                automation._last_step_detail = {}  # 重置
+                        except Exception:
+                            pass
+                        _step_detail.screenshot = failure_screenshot or ""
+                        try:
+                            if automation.page:
+                                _step_detail.page_url_after = automation.page.url or ""
+                        except Exception:
+                            pass
+                        step_results_list.append(_step_detail.to_db_kwargs())
+                    else:
+                        step_results_list.append({
+                            'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                            'action': step.get('action', ''), 'selector_value': step.get('selector_value', ''),
+                            'input_value': step.get('input_value', ''), 'description': step.get('description', ''),
+                            'status': 'error', 'error': error_msg,
+                            'screenshot': failure_screenshot, 'duration': failed_step_duration
+                        })
                     uat_logger.error(f"⭐⭐ [步骤记录] 当前失败步骤 ID={step.get('id')} 已记录到列表")
                 elif step_results_list and step_results_list[-1]['status'] == 'success':
                     # 备用：如果上述逆转属不到，把最后一条成功记录改为失败
@@ -14290,9 +14386,7 @@ def api_run_case(case_id):
                     except Exception:
                         pass
                     for sr in step_results_list:
-                        db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
-                            sr['selector_value'], sr['input_value'], sr['description'],
-                            sr['status'], sr['error'], sr['screenshot'], sr['duration'])
+                        db.create_step_result_v2(run_id, **sr)
                     uat_logger.info(f"运行历史记录已保存，Run ID: {run_id}")
                 except Exception as history_error:
                     uat_logger.error(f"保存运行历史记录失败: {history_error}")

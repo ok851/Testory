@@ -282,13 +282,15 @@
         top: 0;
         width: 100%;
         height: 100%;
-        overflow: auto;
+        overflow: hidden;
         background-color: rgba(0,0,0,0.4);
+        justify-content: center;
+        align-items: center;
     }
     
     .modal-content {
         background-color: #fefefe;
-        margin: 15% auto;
+        margin: 0;
         padding: 20px;
         border: 1px solid #888;
         width: 80%;
@@ -448,6 +450,90 @@
     html.dark .run-history-page .loading { color: #9ca3af; }
     html.dark .run-history-page .pagination button { background: #374151; border-color: #4b5563; color: #e5e7eb; }
     html.dark .run-history-page .pagination .page-info { color: #9ca3af; }
+
+    /* ── 步骤级时间线 ── */
+    .step-timeline { margin-top: 16px; }
+    .step-timeline h4 { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #333; }
+    .step-item {
+        display: flex; align-items: flex-start; gap: 12px;
+        padding: 10px 12px; border-left: 3px solid #d9d9d9;
+        margin-bottom: 2px; background: #fafafa; border-radius: 0 4px 4px 0;
+        position: relative; cursor: default; transition: background .15s;
+    }
+    .step-item:hover { background: #f0f5ff; }
+    .step-item.step-success { border-left-color: #52c41a; }
+    .step-item.step-error { border-left-color: #ff4d4f; }
+    .step-item .step-num {
+        min-width: 28px; height: 28px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px; font-weight: 600; color: #fff; flex-shrink: 0;
+    }
+    .step-item.step-success .step-num { background: #52c41a; }
+    .step-item.step-error .step-num { background: #ff4d4f; }
+    .step-body { flex: 1; min-width: 0; }
+    .step-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+    .step-action { font-weight: 600; font-size: 13px; color: #1890ff; }
+    .step-desc { font-size: 12px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px; }
+    .step-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: #888; margin-top: 4px; }
+    .step-meta span { display: inline-flex; align-items: center; gap: 3px; }
+    .step-badge {
+        display: inline-block; padding: 1px 6px; border-radius: 3px;
+        font-size: 10px; font-weight: 600; color: #fff;
+    }
+    .badge-css { background: #722ed1; }
+    .badge-xpath { background: #fa8c16; }
+    .badge-text { background: #13c2c2; }
+    .badge-role { background: #eb2f96; }
+    .badge-testid { background: #2f54eb; }
+    .step-bar-wrap { margin-top: 6px; }
+    .step-bar {
+        height: 6px; border-radius: 3px; background: #f0f0f0; overflow: hidden;
+        display: flex; gap: 1px;
+    }
+    .step-bar .bar-resolve { background: #1890ff; border-radius: 3px 0 0 3px; }
+    .step-bar .bar-action { background: #52c41a; }
+    .step-bar .bar-wait { background: #faad14; border-radius: 0 3px 3px 0; }
+    .step-bar-legend { display: flex; gap: 10px; margin-top: 3px; font-size: 10px; color: #999; }
+    .step-bar-legend span::before {
+        content: ''; display: inline-block; width: 8px; height: 8px;
+        border-radius: 2px; margin-right: 3px; vertical-align: middle;
+    }
+    .step-bar-legend .leg-resolve::before { background: #1890ff; }
+    .step-bar-legend .leg-action::before { background: #52c41a; }
+    .step-bar-legend .leg-wait::before { background: #faad14; }
+    .step-extracted {
+        margin-top: 4px; padding: 4px 8px; background: #f6ffed; border: 1px solid #b7eb8f;
+        border-radius: 3px; font-size: 12px; color: #333; word-break: break-all;
+    }
+    .step-url-change { font-size: 11px; color: #999; margin-top: 2px; }
+    .step-url-change a { color: #1890ff; text-decoration: none; }
+    .step-screenshot-thumb {
+        margin-top: 4px; max-width: 200px; max-height: 120px;
+        border-radius: 3px; border: 1px solid #d9d9d9; cursor: pointer;
+    }
+    .step-expand-btn {
+        background: none; border: 1px solid #d9d9d9; border-radius: 3px;
+        padding: 2px 8px; font-size: 11px; color: #666; cursor: pointer;
+        margin-top: 4px;
+    }
+    .step-expand-btn:hover { border-color: #1890ff; color: #1890ff; }
+    .step-total-bar { margin-bottom: 12px; }
+    .step-total-bar-label { font-size: 11px; color: #999; margin-bottom: 4px; }
+    .step-total-bar .total-bar {
+        height: 10px; border-radius: 5px; background: #f0f0f0; overflow: hidden;
+        display: flex; gap: 1px;
+    }
+    html.dark .step-item { background: #1f2937; border-left-color: #4b5563; }
+    html.dark .step-item:hover { background: #374151; }
+    html.dark .step-item.step-success { border-left-color: #10b981; }
+    html.dark .step-item.step-error { border-left-color: #ef4444; }
+    html.dark .step-action { color: #60a5fa; }
+    html.dark .step-desc { color: #9ca3af; }
+    html.dark .step-meta { color: #6b7280; }
+    html.dark .step-extracted { background: #064e3b; border-color: #065f46; color: #d1d5db; }
+    html.dark .step-bar .bar-resolve { background: #3b82f6; }
+    html.dark .step-bar .bar-action { background: #10b981; }
+    html.dark .step-bar .bar-wait { background: #f59e0b; }
 </style>
 {% endblock %}
 
@@ -762,11 +848,13 @@
         const content = document.getElementById('detailContent');
         
         content.innerHTML = '<div class="loading">' + escapeHtml(t('history_loading')) + '</div>';
-        modal.style.display = 'block';
+        modal.style.display = 'flex';
         
-        fetch(`/api/run-history/${id}`)
-            .then(response => response.json())
-            .then(data => {
+        // 并行加载详情和步骤数据
+        Promise.all([
+            fetch(`/api/run-history/${id}`).then(r => r.json()),
+            fetch(`/api/run-history/${id}/steps`).then(r => r.json()).catch(() => ({success:false}))
+        ]).then(([data, stepsData]) => {
                 if (data.success) {
                     const item = data.record;
                     const ops = item.ops_summary || {};
@@ -838,6 +926,7 @@
                             <span class="detail-label">` + escapeHtml(t('history_detail_error')) + `</span>
                             <div class="detail-value"><pre>${escapeHtml(errTxt)}</pre></div>
                         </div>
+                        ${renderStepTimeline(stepsData)}
                     `;
                 } else {
                     content.innerHTML = '<p>' + escapeHtml(t('history_detail_fail')) + '</p>';
@@ -848,6 +937,130 @@
             });
     }
 
+    // 渲染步骤级时间线
+    function renderStepTimeline(stepsData) {
+        if (!stepsData || !stepsData.success || !stepsData.step_results || !stepsData.step_results.length) {
+            return '';
+        }
+        const steps = stepsData.step_results;
+        const totalDuration = steps.reduce((s, st) => s + (st.duration || 0), 0) || 1;
+
+        function badgeClass(strategy) {
+            const s = (strategy || '').toLowerCase();
+            if (s === 'css') return 'badge-css';
+            if (s === 'xpath') return 'badge-xpath';
+            if (s === 'text') return 'badge-text';
+            if (s === 'role') return 'badge-role';
+            if (s === 'testid') return 'badge-testid';
+            return 'badge-css';
+        }
+        function ms(v) { return (v || 0).toFixed(0) + 'ms'; }
+        function pct(v) { return Math.max(0, Math.min(100, (v / totalDuration) * 100)).toFixed(1); }
+        function esc(s) { return escapeHtml(s || ''); }
+        function truncUrl(u) {
+            if (!u) return '';
+            try { var parsed = new URL(u); return parsed.pathname + (parsed.search || ''); } catch(e) { return u.substring(0, 80); }
+        }
+
+        var html = '<div class="step-timeline">';
+        html += '<h4>📋 步骤执行详情（' + steps.length + ' 步）</h4>';
+
+        // 总耗时条
+        html += '<div class="step-total-bar"><div class="step-total-bar-label">总耗时分布</div><div class="total-bar">';
+        for (var si = 0; si < steps.length; si++) {
+            var st = steps[si];
+            var w = pct(st.duration || 0);
+            var color = st.status === 'success' ? '#52c41a' : '#ff4d4f';
+            html += '<div style="width:' + w + '%;background:' + color + ';min-width:2px;" title="步骤 ' + (st.step_order || si+1) + ': ' + ms(st.duration) + '"></div>';
+        }
+        html += '</div></div>';
+
+        for (var i = 0; i < steps.length; i++) {
+            var step = steps[i];
+            var cls = step.status === 'success' ? 'step-success' : 'step-error';
+            html += '<div class="step-item ' + cls + '">';
+            html += '<div class="step-num">' + (step.step_order || i+1) + '</div>';
+            html += '<div class="step-body">';
+            html += '<div class="step-header">';
+            html += '<span class="step-action">' + esc(step.action) + '</span>';
+            if (step.selector_strategy) {
+                html += '<span class="step-badge ' + badgeClass(step.selector_strategy) + '">' + esc(step.selector_strategy) + '</span>';
+            }
+            if (step.description) {
+                html += '<span class="step-desc" title="' + esc(step.description) + '">' + esc(step.description) + '</span>';
+            }
+            html += '</div>';
+
+            // 耗时条
+            var resolve = step.selector_resolve_ms || 0;
+            var actionMs = step.action_execute_ms || 0;
+            var waitMs = step.wait_ms || 0;
+            var total = (step.duration || 0) * 1000 || 1;
+            if (resolve > 0 || actionMs > 0 || waitMs > 0) {
+                // 防止宽度溢出：按比例缩放到不超过 100%
+                var sumMs = resolve + actionMs + waitMs;
+                var scale = sumMs > total ? total / sumMs : 1;
+                html += '<div class="step-bar-wrap"><div class="step-bar">';
+                if (resolve > 0) html += '<div class="bar-resolve" style="width:' + ((resolve*scale/total)*100).toFixed(1) + '%;"></div>';
+                if (actionMs > 0) html += '<div class="bar-action" style="width:' + ((actionMs*scale/total)*100).toFixed(1) + '%;"></div>';
+                if (waitMs > 0) html += '<div class="bar-wait" style="width:' + ((waitMs*scale/total)*100).toFixed(1) + '%;"></div>';
+                html += '</div><div class="step-bar-legend">';
+                if (resolve > 0) html += '<span class="leg-resolve">定位 ' + ms(resolve) + '</span>';
+                if (actionMs > 0) html += '<span class="leg-action">执行 ' + ms(actionMs) + '</span>';
+                if (waitMs > 0) html += '<span class="leg-wait">等待 ' + ms(waitMs) + '</span>';
+                html += '<span>总计 ' + ms((step.duration||0)*1000) + '</span>';
+                html += '</div></div>';
+            }
+
+            // 元数据
+            html += '<div class="step-meta">';
+            if (step.selector_value) html += '<span>🎯 ' + esc(step.selector_value).substring(0, 60) + '</span>';
+            if (step.input_value) html += '<span>⌨️ ' + esc(step.input_value).substring(0, 40) + '</span>';
+            if (step.retry_count > 0) html += '<span>🔄 重试' + step.retry_count + '次</span>';
+            if (step.selector_attempts > 1) html += '<span>📊 尝试' + step.selector_attempts + '种定位</span>';
+            html += '</div>';
+
+            // 提取的值
+            if (step.extracted_value) {
+                html += '<div class="step-extracted">提取值: ' + esc(step.extracted_value) + '</div>';
+            }
+
+            // 断言结果
+            if (step.compare_result) {
+                var cmpColor = step.compare_result === 'pass' ? '#52c41a' : '#ff4d4f';
+                html += '<div class="step-extracted" style="border-color:' + cmpColor + ';">断言: ' + esc(step.compare_result) + (step.expected_value ? ' (期望: ' + esc(step.expected_value) + ')' : '') + '</div>';
+            }
+
+            // URL 变化
+            if (step.page_url_before && step.page_url_after && step.page_url_before !== step.page_url_after) {
+                html += '<div class="step-url-change">🔗 ' + esc(truncUrl(step.page_url_before)) + ' → <a href="' + esc(step.page_url_after) + '" target="_blank">' + esc(truncUrl(step.page_url_after)) + '</a></div>';
+            }
+
+            // 截图
+            if (step.screenshot_before) {
+                html += '<div><img class="step-screenshot-thumb" src="/' + esc(step.screenshot_before) + '" onclick="window.open(this.src)" title="执行前截图"></div>';
+            }
+            if (step.screenshot) {
+                html += '<div><img class="step-screenshot-thumb" src="/' + esc(step.screenshot) + '" onclick="window.open(this.src)" title="截图"></div>';
+            }
+
+            // 错误
+            if (step.error) {
+                html += '<div class="step-extracted" style="background:#fff2f0;border-color:#ffccc7;color:#cf1322;">❌ ' + esc(step.error) + '</div>';
+            }
+
+            // iframe 上下文
+            if (step.iframe_context) {
+                html += '<div class="step-meta"><span>🖼️ iframe: ' + esc(step.iframe_context) + '</span></div>';
+            }
+
+            html += '</div></div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    
     async function exportEvidence(id) {
         var url = '/api/ai/trace-packs/export?format=zip&run_history_id=' + encodeURIComponent(id);
         try {

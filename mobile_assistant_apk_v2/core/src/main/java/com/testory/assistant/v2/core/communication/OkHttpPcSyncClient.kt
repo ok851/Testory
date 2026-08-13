@@ -705,6 +705,31 @@ class OkHttpPcSyncClient @Inject constructor(
         }
     }
 
+    override suspend fun fetchJobStatus(jobId: String): JobStatusInfo? {
+        if (baseUrl.isEmpty() || jobId.isBlank()) return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = buildRequest("$baseUrl/api/mobile/sync/run/$jobId/status") { get() }
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    return@withContext null
+                }
+                val body = response.body?.string() ?: return@withContext null
+                val obj = json.parseToJsonElement(body).jsonObject
+                if (obj["success"]?.jsonPrimitive?.boolean != true) return@withContext null
+                JobStatusInfo(
+                    jobId = jobId,
+                    status = obj["status"]?.jsonPrimitive?.contentOrNull ?: "",
+                    shouldAbort = obj["should_abort"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    abortReason = obj["abort_reason"]?.jsonPrimitive?.contentOrNull ?: "",
+                    error = obj["error"]?.jsonPrimitive?.contentOrNull ?: ""
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     // ── HTTP helpers ──
 
     private fun buildRequest(url: String, builder: Request.Builder.() -> Request.Builder): Request {

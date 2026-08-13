@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import random
 import numpy as np
 from optional_cv2 import cv2, require_cv2
@@ -216,7 +216,7 @@ def force_reset_execution_state():
     try:
         automation.recording = False
         automation.recorded_steps = []
-        automation.current_iframe = None
+        automation.current_iframe = []
     except Exception:
         pass
     
@@ -664,13 +664,14 @@ class PlaywrightAutomation:
         self._recording_session_clear_cb = None
         self._selection_mode_active = False
         self._web_dom_capture_active = False
-        self.current_iframe = None  # {'selector', 'selector_type', 'iframe'} 由 enter_iframe 设置
+        self.current_iframe = []  # iframe 栈：[{selector, selector_type, iframe}, ...] 由 enter_iframe push
         self._failure_diag_ring: Optional[deque] = None  # console / pageerror / requestfailed
         self._execution_context: Optional[ExecutionContext] = None
         self._captcha_scope_locator = None  # verify 步骤用户拾取元素
         self._captcha_widget_locator = None  # 向上解析的验证码组件根（提示/滑块/刷新）
         self._captcha_max_attempts: Optional[int] = None  # 步骤级最大验证次数
         self._case_run_hint: Dict[str, Any] = {}
+        self._last_step_detail: dict = {}  # 步骤级执行详情，供 app.py 读取
 
     def set_case_run_hint(
         self,
@@ -1431,6 +1432,10 @@ class PlaywrightAutomation:
             uat_logger.error("页面对象为None,无法导航")
             raise Exception("无法创建页面对象")
         self.current_url = url
+        # 页面导航后 iframe 上下文失效，自动清空
+        if self.current_iframe:
+            self.current_iframe = []
+            uat_logger.info("🔄 导航后自动清空 iframe 栈")
         
         uat_logger.info(f"执行导航操作: {url}")
 
@@ -1478,29 +1483,31 @@ class PlaywrightAutomation:
             await self.page.wait_for_selector(wait_sel, state="attached", timeout=20000)
             uat_logger.info(f"✅ 找到 iframe 元素: {wait_sel}")
             iframe_fl = self.page.frame_locator(wait_sel)
-            self.current_iframe = {
+            self.current_iframe.append({
                 "selector": wait_sel,
                 "selector_type": st,
                 "iframe": iframe_fl,
-            }
-            uat_logger.info("✅ 已进入 iframe 并保存 frame_locator 上下文")
+            })
+            depth = len(self.current_iframe)
+            uat_logger.info(f"✅ 已进入 iframe（栈深度 {depth}）并保存 frame_locator 上下文")
         except Exception as e:
             uat_logger.error(f"❌ 进入iframe失败: {e}")
             raise Exception(f"进入iframe失败: {e}") from e
 
     async def exit_iframe(self) -> None:
-        """清除 current_iframe；后续步骤默认回到主文档（直到再次 enter_iframe）。
+        """弹出 iframe 栈顶；后续步骤回到上一层 iframe 或主文档。
 
         须在 Playwright Worker 同线程中调用，勿用 asyncio.run。
-        嵌套 iframe：当前实现为单层，再次 enter 会覆盖；exit 一次即清空。
+        支持嵌套：每次 exit 弹出一层，栈空则回到主文档。
         """
-        uat_logger.info("🔄 跳出iframe（隐式上下文结束），返回主文档")
-        try:
-            self.current_iframe = None
-            uat_logger.info("✅ 成功跳出iframe，返回主文档")
-        except Exception as e:
-            uat_logger.error(f"❌ 跳出iframe失败: {e}")
-            raise Exception(f"跳出iframe失败: {e}") from e
+        uat_logger.info("🔄 跳出iframe（弹出栈顶）")
+        if not self.current_iframe:
+            uat_logger.warning("⚠️ iframe 栈已空，当前已在主文档")
+            return
+        popped = self.current_iframe.pop()
+        depth = len(self.current_iframe)
+        ctx = "主文档" if depth == 0 else f"上层 iframe（栈深度 {depth}）"
+        uat_logger.info(f"✅ 已跳出 iframe: {popped.get('selector', '?')}，当前上下文: {ctx}")
     
     async def select_option(self, selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None, page=None):
         """选择下拉框选项。支持原生select和自定义下拉框（如Element Plus）。page: 可选，指定在哪个标签页执行"""
@@ -5402,6 +5409,10 @@ class PlaywrightAutomation:
                 raise last_exc
         
         try:
+            import time as _time
+            _resolve_t0 = _time.perf_counter()
+            _timing_ok = False
+            _sel_strategy = ''
             element = None
             
             # Determine target context
@@ -5457,6 +5468,8 @@ class PlaywrightAutomation:
                 element = self.page.locator(selector)
                 element = element.first
             
+            _sel_strategy = selector_type or 'css'
+            
             # Ensure element is correctly obtained
             if element is None:
                 uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Element not successfully obtained")
@@ -5470,6 +5483,26 @@ class PlaywrightAutomation:
             except Exception as e:
                 uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Waiting for element existence timed out: {e}")
                 raise Exception(f"等待元素超时: {selector}")
+
+            # 等待文本内容渲染完成（异步加载场景：元素已 attached 但文本尚未填充）
+            try:
+                text_ready_ms = min(3000, max(1000, int(wait_timeout_ms or 5000) // 2))
+                await element.first.evaluate(
+                    """(el, timeout) => new Promise((resolve, reject) => {
+                        if (el.textContent && el.textContent.trim()) return resolve();
+                        const observer = new MutationObserver(() => {
+                            if (el.textContent && el.textContent.trim()) {
+                                observer.disconnect();
+                                resolve();
+                            }
+                        });
+                        observer.observe(el, { childList: true, subtree: true, characterData: true });
+                        setTimeout(() => { observer.disconnect(); resolve(); }, timeout);
+                    })""",
+                    text_ready_ms,
+                )
+            except Exception:
+                pass  # 超时也不阻断，后续提取可能拿到空文本（合法状态）
             
             # Check if element exists
             try:
@@ -5482,7 +5515,12 @@ class PlaywrightAutomation:
                 uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Failed to check element count: {e}")
                 raise Exception(f"检查元素数量失败: {selector}")
             
+            # 元素定位完成（含 wait_for + MutationObserver），记录定位耗时
+            _selector_resolve_ms = round((_time.perf_counter() - _resolve_t0) * 1000, 1)
+            
             # Use appropriate extraction method based on element type
+            _extract_t0 = _time.perf_counter()
+            _timing_ok = True
             extracted_text = ""
             try:
                 # Try to get element's tag name to determine element type
@@ -5513,14 +5551,14 @@ class PlaywrightAutomation:
                             uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] text_content() extraction result: '{extracted_text}'")
                         except Exception as e2:
                             uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] text_content() failed: {e2}")
-            except Exception as e:
+            except Exception as e_tag:
                 # If getting tag name fails, try using general methods to extract text
-                uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] Failed to get tag name: {e}, trying general methods to extract text")
+                uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] Failed to get tag name: {e_tag}, trying general methods to extract text")
                 try:
                     extracted_text = await element.inner_text()
                     uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] General method inner_text() extraction result: '{extracted_text}'")
-                except Exception as e:
-                    uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] inner_text() failed: {e}")
+                except Exception as e_inner:
+                    uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] inner_text() failed: {e_inner}")
                     try:
                         extracted_text = await element.text_content()
                         uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] General method text_content() extraction result: '{extracted_text}'")
@@ -5540,11 +5578,36 @@ class PlaywrightAutomation:
             # Ensure returned text is not None
             result = extracted_text if extracted_text is not None else ""
             if not result:
-                uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Extracted text is empty")
-                raise Exception(f"元素文本提取失败: {selector}")
+                # 元素存在但文本为空：返回空字符串而非抛异常。
+                # 空文本是合法状态（如异步加载未完成、容器元素、确实无文本的元素）。
+                uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] Element found but text is empty, returning empty string")
+                _action_ms = round((_time.perf_counter() - _extract_t0) * 1000, 1)
+                self._last_step_detail = {
+                    'selector_strategy': _sel_strategy,
+                    'selector_resolve_ms': _selector_resolve_ms,
+                    'action_execute_ms': _action_ms,
+                    'extracted_value': '',
+                }
+                return ""
             uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Final extraction result: '{result}'")
+            _action_ms = round((_time.perf_counter() - _extract_t0) * 1000, 1)
+            self._last_step_detail = {
+                'selector_strategy': _sel_strategy,
+                'selector_resolve_ms': _selector_resolve_ms,
+                'action_execute_ms': _action_ms,
+                'extracted_value': result or '',
+            }
             return result
         except Exception as e:
+            _action_ms = round((_time.perf_counter() - _extract_t0) * 1000, 1) if _timing_ok else 0
+            _resolve_ms = round((_time.perf_counter() - _resolve_t0) * 1000, 1)
+            self._last_step_detail = {
+                'selector_strategy': _sel_strategy,
+                'selector_resolve_ms': _resolve_ms,
+                'action_execute_ms': _action_ms,
+                'extracted_value': '',
+                'error': str(e),
+            }
             # Record detailed exception information
             uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Error extracting text: {str(e)}")
             print(f"Error extracting element text: {str(e)}")

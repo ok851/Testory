@@ -126,7 +126,7 @@ class PcRunJobPoller @Inject constructor(
         }
         try {
             Log.i(TAG, "run_steps start job=${pending.jobId} steps=${pending.steps.size}")
-            val outcome = phoneJobExecutor.executeSteps(pending.steps)
+            val outcome = phoneJobExecutor.executeSteps(pending.steps, jobId = pending.jobId)
             val payload = phoneJobExecutor.toReportPayload(outcome)
             pcSyncClient.reportJobResult(pending.jobId, payload.toString())
             Log.i(TAG, "run_steps done job=${pending.jobId} ok=${outcome.success}")
