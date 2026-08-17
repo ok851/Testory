@@ -1,4 +1,4 @@
-import sqlite3
+﻿import sqlite3
 import os
 import json
 import logging
@@ -716,6 +716,74 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                owner_user_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (owner_user_id) REFERENCES users (id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS team_join_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                code TEXT NOT NULL UNIQUE,
+                expires_at TEXT,
+                max_uses INTEGER,
+                use_count INTEGER NOT NULL DEFAULT 0,
+                default_role TEXT NOT NULL DEFAULT 'member',
+                auto_bind_projects_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (team_id) REFERENCES teams (id) ON DELETE CASCADE
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS team_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                team_role TEXT NOT NULL DEFAULT 'member',
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (team_id) REFERENCES teams (id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                UNIQUE(team_id, user_id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS team_default_projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                project_id INTEGER NOT NULL,
+                default_project_role TEXT NOT NULL DEFAULT 'editor',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (team_id) REFERENCES teams (id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+                UNIQUE(team_id, project_id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS team_projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                project_id INTEGER NOT NULL,
+                default_project_role TEXT NOT NULL DEFAULT 'viewer',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (team_id) REFERENCES teams (id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+                UNIQUE(team_id, project_id)
+            )
+        ''')
+
+
+
 
         # 创建用户操作统计表（用于免费版限制）
         cursor.execute('''
@@ -4266,58 +4334,46 @@ class Database:
         } for r in rows]
 
     def check_project_access(self, user_id: int, project_id: int, min_role: str = 'viewer') -> bool:
-        """检查用户是否有项目访问权限
-        min_role: viewer/editor/owner
-        权限级别: owner > editor > viewer
-        """
-        conn = self._sqlite_connect()
-        cursor = conn.cursor()
-
-        # 管理员拥有所有权限
-        cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
-        user_row = cursor.fetchone()
-        if user_row and user_row[0] == 'admin':
-            conn.close()
-            return True
-
-        # 检查项目成员权限
-        cursor.execute(
-            "SELECT role FROM project_members WHERE project_id = ? AND user_id = ?",
-            (project_id, user_id)
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        if not row:
-            return False
-
-        user_role = row[0]
+        """检查用户对项目的有效访问权限"""
         role_levels = {'viewer': 1, 'editor': 2, 'owner': 3}
         required_level = role_levels.get(min_role, 1)
-        user_level = role_levels.get(user_role, 1)
 
-        return user_level >= required_level
-
+        effective = self.get_project_effective_role(project_id, user_id)
+        if effective is None:
+            return False
+        if effective == 'admin':
+            return True
+        return role_levels.get(effective, 0) >= required_level
     def get_user_projects(self, user_id: int) -> List[Dict[str, Any]]:
-        """获取用户有权限访问的所有项目"""
+        """获取用户可见项目：团队项目 + 显式授权 + 系统管理员"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
 
-        # 获取用户是成员的项目 + 管理员可查看所有项目
-        cursor.execute("""
-            SELECT DISTINCT p.id, p.name, p.description, p.tenant_id, p.created_at
-            FROM projects p
-            LEFT JOIN project_members pm ON p.id = pm.project_id
-            LEFT JOIN users u ON u.id = ?
-            WHERE pm.user_id = ? OR u.role = 'admin'
-            ORDER BY p.created_at DESC
-        """, (user_id, user_id))
+        cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+        user_row = cursor.fetchone()
+        is_sys_admin = bool(user_row and user_row[0] == 'admin')
 
+        if is_sys_admin:
+            cursor.execute(f'SELECT {_PROJECTS_SELECT} FROM projects ORDER BY created_at DESC')
+            rows = cursor.fetchall()
+            conn.close()
+            return [_project_row_to_dict(row) for row in rows]
+
+        cursor.execute(
+            f"""
+            SELECT DISTINCT {_PROJECTS_SELECT}
+            FROM projects p
+            LEFT JOIN team_projects tp ON tp.project_id = p.id
+            LEFT JOIN team_members tm ON tm.team_id = tp.team_id AND tm.user_id = ?
+            LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
+            WHERE tm.id IS NOT NULL OR pm.id IS NOT NULL
+            ORDER BY p.created_at DESC
+            """,
+            (user_id, user_id),
+        )
         rows = cursor.fetchall()
         conn.close()
-
         return [_project_row_to_dict(row) for row in rows]
-
     def is_project_owner(self, user_id: int, project_id: int) -> bool:
         """检查用户是否是项目所有者"""
         conn = self._sqlite_connect()
@@ -4330,6 +4386,259 @@ class Database:
         conn.close()
         return result
 
+    # ==================== 团队管理方法 ====================
+
+    def get_or_create_team(self, name: str = '默认团队', owner_user_id: int | None = None):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, name, owner_user_id, status, created_at FROM teams ORDER BY id LIMIT 1')
+            row = cursor.fetchone()
+            if row:
+                return {'id': int(row[0]), 'name': row[1], 'owner_user_id': row[2], 'status': row[3], 'created_at': _bj_iso(row[4])}
+            cursor.execute('INSERT INTO teams (name, owner_user_id, status, created_at) VALUES (?, ?, ?, ?)', (name, owner_user_id, 'active', _utc_now_sql()))
+            team_id = int(cursor.lastrowid)
+            if owner_user_id:
+                cursor.execute('INSERT INTO team_members (team_id, user_id, team_role, joined_at) VALUES (?, ?, ?, ?)', (team_id, owner_user_id, 'admin', _utc_now_sql()))
+            conn.commit()
+            cursor.execute('SELECT id, name, owner_user_id, status, created_at FROM teams WHERE id = ?', (team_id,))
+            row = cursor.fetchone()
+            return {'id': int(row[0]), 'name': row[1], 'owner_user_id': row[2], 'status': row[3], 'created_at': _bj_iso(row[4])}
+        finally:
+            conn.close()
+
+    def update_team(self, team_id: int, **kwargs):
+        allowed = {'name', 'owner_user_id', 'status'}
+        updates, params = [], []
+        for k, v in kwargs.items():
+            if k in allowed:
+                updates.append(f'{k} = ?')
+                params.append(v)
+        if not updates:
+            return False
+        params.append(team_id)
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f'UPDATE teams SET {', '.join(updates)} WHERE id = ?', params)
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def get_team_join_code(self, team_id: int):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, team_id, code, expires_at, max_uses, use_count, default_role, auto_bind_projects_json, created_at FROM team_join_codes WHERE team_id = ? ORDER BY id DESC LIMIT 1', (team_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {'id': int(row[0]), 'team_id': int(row[1]), 'code': row[2], 'expires_at': row[3], 'max_uses': row[4], 'use_count': row[5], 'default_role': row[6], 'auto_bind_projects_json': row[7], 'created_at': _bj_iso(row[8])}
+        finally:
+            conn.close()
+
+    def generate_team_join_code(self, team_id: int, default_role: str = 'member', expires_at: str | None = None, max_uses: int | None = None):
+        import secrets, string
+        code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(12))
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO team_join_codes (team_id, code, expires_at, max_uses, use_count, default_role, auto_bind_projects_json, created_at) VALUES (?, ?, ?, ?, 0, ?, NULL, ?)', (team_id, code, expires_at, max_uses, default_role, _utc_now_sql()))
+            conn.commit()
+            return self.get_team_join_code(team_id)
+        finally:
+            conn.close()
+
+    def add_team_member(self, team_id: int, user_id: int, team_role: str = 'member'):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO team_members (team_id, user_id, team_role, joined_at) VALUES (?, ?, ?, ?)', (team_id, user_id, team_role, _utc_now_sql()))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
+
+    def update_team_member_role(self, team_id: int, user_id: int, team_role: str):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE team_members SET team_role = ? WHERE team_id = ? AND user_id = ?', (team_role, team_id, user_id))
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def remove_team_member(self, team_id: int, user_id: int):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM team_members WHERE team_id = ? AND user_id = ?', (team_id, user_id))
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def get_team_members(self, team_id: int):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT tm.id, tm.user_id, u.username, u.email, tm.team_role, tm.joined_at FROM team_members tm LEFT JOIN users u ON u.id = tm.user_id WHERE tm.team_id = ? ORDER BY tm.id', (team_id,))
+            rows = cursor.fetchall()
+            return [{'id': int(r[0]), 'user_id': int(r[1]), 'username': r[2], 'email': r[3], 'team_role': r[4], 'joined_at': _bj_iso(r[5])} for r in rows]
+        finally:
+            conn.close()
+
+    def add_team_project(self, team_id: int, project_id: int, default_project_role: str = 'viewer') -> bool:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO team_projects (team_id, project_id, default_project_role, created_at) VALUES (?, ?, ?, ?)', (team_id, project_id, default_project_role, _utc_now_sql()))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
+
+    def get_team_ids_for_project(self, project_id: int):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT team_id, default_project_role FROM team_projects WHERE project_id = ?', (project_id,))
+            return cursor.fetchall()
+        finally:
+            conn.close()
+
+    def get_team_role(self, team_id: int, user_id: int):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT team_role FROM team_members WHERE team_id = ? AND user_id = ?', (team_id, user_id))
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def get_project_effective_role(self, project_id: int, user_id: int):
+        role_levels = {'viewer': 1, 'editor': 2, 'owner': 3}
+        best = None
+        best_level = 0
+
+        cursor = None
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+            row = cursor.fetchone()
+            if row and row[0] == 'admin':
+                return 'admin'
+
+            cursor.execute('SELECT team_id, default_project_role FROM team_projects WHERE project_id = ?', (project_id,))
+            team_rows = cursor.fetchall()
+            for team_id, default_project_role in team_rows:
+                cursor.execute('SELECT team_role FROM team_members WHERE team_id = ? AND user_id = ?', (team_id, user_id))
+                member_row = cursor.fetchone()
+                if not member_row:
+                    continue
+                team_role = member_row[0]
+                if team_role == 'admin':
+                    return 'owner'
+                base_role = default_project_role or 'viewer'
+                base_level = role_levels.get(base_role, 1)
+                if base_level > best_level:
+                    best_level = base_level
+                    best = base_role
+
+            cursor.execute('SELECT role FROM project_members WHERE project_id = ? AND user_id = ?', (project_id, user_id))
+            explicit_row = cursor.fetchone()
+            if explicit_row:
+                explicit_level = role_levels.get(explicit_row[0], 0)
+                if explicit_level > best_level:
+                    best_level = explicit_level
+                    best = explicit_row[0]
+
+            return best
+        finally:
+            conn.close()
+
+    def get_team_default_projects(self, team_id: int):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT tp.id, tp.project_id, p.name, tp.default_project_role, tp.created_at FROM team_projects tp LEFT JOIN projects p ON p.id = tp.project_id WHERE tp.team_id = ? ORDER BY tp.id', (team_id,))
+            rows = cursor.fetchall()
+            return [{'id': int(r[0]), 'project_id': int(r[1]), 'project_name': r[2], 'default_project_role': r[3], 'created_at': _bj_iso(r[4])} for r in rows]
+        finally:
+            conn.close()
+
+    def add_team_default_project(self, team_id: int, project_id: int, default_project_role: str = 'viewer'):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO team_projects (team_id, project_id, default_project_role, created_at) VALUES (?, ?, ?, ?)', (team_id, project_id, default_project_role, _utc_now_sql()))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
+
+    def update_team_default_project(self, record_id: int, default_project_role: str):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE team_projects SET default_project_role = ? WHERE id = ?', (default_project_role, record_id))
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def remove_team_default_project(self, record_id: int):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM team_projects WHERE id = ?', (record_id,))
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def join_team_by_code(self, user_id: int, code: str):
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, team_id, code, expires_at, max_uses, use_count, default_role, auto_bind_projects_json FROM team_join_codes WHERE code = ?', (code,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError('团队码无效')
+            join_code_id, team_id, _, expires_at, max_uses, use_count, default_role, auto_bind_projects_json = row
+            now_str = _utc_now_sql()
+            if expires_at and str(expires_at) <= now_str:
+                raise ValueError('团队码已过期')
+            if max_uses is not None and int(max_uses) > 0 and int(use_count) >= int(max_uses):
+                raise ValueError('团队码已达到使用次数上限')
+            try:
+                cursor.execute('INSERT INTO team_members (team_id, user_id, team_role, joined_at) VALUES (?, ?, ?, ?)', (team_id, user_id, default_role or 'member', now_str))
+            except sqlite3.IntegrityError:
+                pass
+            cursor.execute('UPDATE team_join_codes SET use_count = use_count + 1 WHERE id = ?', (join_code_id,))
+            bound_project_ids = []
+            if auto_bind_projects_json:
+                import json as _json
+                try:
+                    arr = _json.loads(auto_bind_projects_json)
+                    if isinstance(arr, list):
+                        bound_project_ids = [int(x) for x in arr if x]
+                except Exception:
+                    bound_project_ids = []
+            for pid in bound_project_ids:
+                try:
+                    cursor.execute('INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, ?, ?)', (pid, user_id, default_role or 'viewer', now_str))
+                except sqlite3.IntegrityError:
+                    pass
+            conn.commit()
+            return {'team_id': team_id, 'user_id': user_id, 'joined_default_projects': bound_project_ids}
+        finally:
+            conn.close()
     # ==================== 审计日志方法 ====================
 
     def add_audit_log(self, user_id: Optional[int], username: str, action: str, target_type: str,

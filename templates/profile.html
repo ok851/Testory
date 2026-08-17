@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block title %}个人信息 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style type="text/tailwindcss">
@@ -183,14 +183,7 @@
                 if (result.success) {
                     document.getElementById('username').value = result.user.username;
                     document.getElementById('role').value = profRoleLabel(result.user.role);
-                    const userResponse = await fetch('/api/users');
-                    const userResult = await userResponse.json();
-                    if (userResult.success) {
-                        const currentUser = userResult.users.find(u => u.id === result.user.id);
-                        if (currentUser && currentUser.email) {
-                            document.getElementById('email').value = currentUser.email;
-                        }
-                    }
+                    document.getElementById('email').value = result.user.email || '';
                 }
             } catch (error) {
                 console.error('加载个人信息表单失败:', error);

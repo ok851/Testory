@@ -592,8 +592,6 @@
             if (userLabel) userLabel.textContent = data.user.username;
             if (userDropdown) userDropdown.classList.remove('hidden');
             if (data.user.role === 'admin') {
-                const userManagementLink = document.getElementById('userManagementLink');
-                if (userManagementLink) userManagementLink.style.display = 'block';
                 const ssoSettingsLink = document.getElementById('ssoSettingsLink');
                 if (ssoSettingsLink) ssoSettingsLink.style.display = 'block';
                 const auditLogsLink = document.getElementById('auditLogsLink');

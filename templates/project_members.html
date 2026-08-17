@@ -1,0 +1,373 @@
+﻿{% extends "base.html" %}
+{% block title %}项目成员管理 - AI自动化测试平台{% endblock %}
+{% block head %}
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .pm-btn { @apply px-4 py-2 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 inline-flex items-center justify-center; }
+            .pm-btn-sm { @apply px-3 py-1.5 text-sm rounded-md; }
+            .pm-btn-primary { @apply bg-primary text-white hover:bg-blue-600 focus:ring-blue-500; }
+            .pm-btn-ghost { @apply bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 focus:ring-gray-400; }
+            .pm-btn-danger { @apply bg-red-500 text-white hover:bg-red-600 focus:ring-red-400; }
+            .pm-card { @apply bg-white dark:bg-gray-900 rounded-lg shadow-md border border-gray-200 dark:border-gray-800 p-6; }
+            .pm-input { @apply w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent; }
+            .pm-select { @apply w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-primary; }
+            .pm-label { @apply block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5; }
+            .pm-badge { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold; }
+            .pm-badge-owner { @apply bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300; }
+            .pm-badge-editor { @apply bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300; }
+            .pm-badge-viewer { @apply bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300; }
+            .pm-th { @apply px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider bg-gray-50 dark:bg-gray-800/60; }
+            .pm-td { @apply px-4 py-3 text-sm text-gray-700 dark:text-gray-300 whitespace-nowrap; }
+            .pm-modal { @apply hidden fixed inset-0 z-50 items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm p-4; }
+            .pm-modal.show { display: flex; }
+            .pm-modal-box { @apply bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-800 w-full max-w-md; }
+        }
+    </style>
+{% endblock %}
+{% block body_class %}bg-gray-100 dark:bg-gray-950 min-h-screen{% endblock %}
+{% block content %}
+    <div class="max-w-5xl mx-auto px-4 py-8">
+        {# ── 页面标题 ── #}
+        <div class="mb-8">
+            <div class="flex items-center gap-3 mb-2">
+                <a href="/team-management" class="text-gray-400 hover:text-primary transition-colors" title="返回团队管理">
+                    <i class="fas fa-arrow-left text-lg"></i>
+                </a>
+                <h2 class="text-3xl font-bold text-gray-800 dark:text-gray-100">
+                    <i class="fas fa-user-gear text-primary mr-3"></i>项目成员管理
+                </h2>
+            </div>
+            <p class="text-gray-500 dark:text-gray-400 mt-2 ml-10">管理每个项目的成员权限，团队管理员可为成员分配不同角色</p>
+        </div>
+
+        {# ── 项目选择 + 成员列表 ── #}
+        <div class="pm-card mb-6">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+                <div class="flex items-center gap-3">
+                    <h3 class="text-xl font-semibold text-gray-700 dark:text-gray-200 flex items-center">
+                        <i class="fas fa-users text-blue-500 mr-3"></i>成员列表
+                    </h3>
+                    <select id="pmProjectSelect" class="pm-select w-auto min-w-[200px]" onchange="onProjectChange()" style="padding-left:10px;">
+                        <option value="">加载中...</option>
+                    </select>
+                </div>
+                <button type="button" id="pmAddMemberBtn" class="pm-btn pm-btn-primary pm-btn-sm" style="display:none;" onclick="showPmAddModal()">
+                    <i class="fas fa-user-plus mr-1.5"></i>添加成员
+                </button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead><tr>
+                        <th class="pm-th rounded-tl-md">ID</th>
+                        <th class="pm-th">用户名</th>
+                        <th class="pm-th">邮箱</th>
+                        <th class="pm-th">项目角色</th>
+                        <th class="pm-th">授权时间</th>
+                        <th class="pm-th rounded-tr-md text-right">操作</th>
+                    </tr></thead>
+                    <tbody id="pmMemberBody"></tbody>
+                </table>
+            </div>
+            <div id="pmEmptyTip" class="hidden text-center py-8 text-gray-400 dark:text-gray-500">
+                <i class="fas fa-user-shield text-3xl mb-2"></i>
+                <p class="text-sm">暂无项目成员</p>
+            </div>
+        </div>
+
+        {# ── 我的角色提示 ── #}
+        <div id="pmMyRoleTip" class="hidden pm-card mb-6 bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
+            <div class="flex items-center gap-3">
+                <i class="fas fa-info-circle text-blue-500 text-lg"></i>
+                <span class="text-sm text-blue-800 dark:text-blue-300">您在当前项目中的有效角色为 <strong id="pmMyRoleValue">-</strong></span>
+            </div>
+        </div>
+    </div>
+
+    {# ── 添加成员弹窗 ── #}
+    <div id="pmAddModal" class="pm-modal">
+        <div class="pm-modal-box p-6">
+            <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-5 flex items-center">
+                <i class="fas fa-user-plus text-primary mr-2"></i>添加项目成员
+            </h4>
+            <div class="space-y-4">
+                <div>
+                    <label class="pm-label">用户名 <span class="text-red-500">*</span></label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-user"></i></span>
+                        <input type="text" id="pmAddUsername" class="pm-input" placeholder="输入已注册的用户名">
+                    </div>
+                </div>
+                <div>
+                    <label class="pm-label">项目角色</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-shield-alt"></i></span>
+                        <select id="pmAddRole" class="pm-select">
+                            <option value="editor">editor（可编辑）</option>
+                            <option value="viewer">viewer（只读）</option>
+                            <option value="owner">owner（可管理成员）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button type="button" class="pm-btn pm-btn-ghost" onclick="closePmModal('pmAddModal')">取消</button>
+                <button type="button" class="pm-btn pm-btn-primary" onclick="pmAddMember()">确认添加</button>
+            </div>
+        </div>
+    </div>
+
+    {# ── 编辑成员弹窗 ── #}
+    <div id="pmEditModal" class="pm-modal">
+        <div class="pm-modal-box p-6">
+            <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-5 flex items-center">
+                <i class="fas fa-user-pen text-primary mr-2"></i>编辑成员角色
+            </h4>
+            <input type="hidden" id="pmEditUserId">
+            <div class="space-y-4">
+                <div>
+                    <label class="pm-label">用户名</label>
+                    <input type="text" id="pmEditUsername" class="pm-input" style="padding-left:10px;" disabled>
+                </div>
+                <div>
+                    <label class="pm-label">项目角色</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-shield-alt"></i></span>
+                        <select id="pmEditRole" class="pm-select">
+                            <option value="viewer">viewer（只读）</option>
+                            <option value="editor">editor（可编辑）</option>
+                            <option value="owner">owner（可管理成员）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button type="button" class="pm-btn pm-btn-ghost" onclick="closePmModal('pmEditModal')">取消</button>
+                <button type="button" class="pm-btn pm-btn-primary" onclick="pmUpdateMember()">保存</button>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script>
+        var pmState = { projects: [], currentProjectId: null, members: [], me: null, myEffectiveRole: 'viewer', loadingProjects: false, loadingMembers: false };
+
+        function pmRoleBadge(role) {
+            if (role === 'owner') return '<span class="pm-badge pm-badge-owner">owner</span>';
+            if (role === 'editor') return '<span class="pm-badge pm-badge-editor">editor</span>';
+            if (role === 'admin') return '<span class="pm-badge pm-badge-owner">admin</span>';
+            return '<span class="pm-badge pm-badge-viewer">viewer</span>';
+        }
+
+        function pmIsProjectManager() {
+            var r = pmState.myEffectiveRole;
+            return r === 'admin' || r === 'owner';
+        }
+
+        function closePmModal(id) { var m = document.getElementById(id); if (m) m.classList.remove('show'); }
+        function showPmModal(id) { var m = document.getElementById(id); if (m) m.classList.add('show'); }
+
+        function pmUpdateAddBtnVisibility() {
+            var btn = document.getElementById('pmAddMemberBtn');
+            if (btn) btn.style.display = pmIsProjectManager() ? '' : 'none';
+        }
+
+        async function pmFetchMe() {
+            try {
+                var res = await fetch('/api/auth/me', { credentials: 'same-origin' });
+                if (!res.ok) return;
+                var data = await res.json();
+                if (data && data.user) pmState.me = data.user;
+            } catch (e) { console.error('加载用户信息失败', e); }
+        }
+
+        async function pmLoadProjects() {
+            if (pmState.loadingProjects) return;
+            pmState.loadingProjects = true;
+            var sel = document.getElementById('pmProjectSelect');
+            sel.innerHTML = '<option value="">加载中...</option>';
+            try {
+                var res = await fetch('/api/projects', { credentials: 'same-origin' });
+                var data = await res.json();
+                var list = (data && data.projects) ? data.projects : [];
+                pmState.projects = list;
+                if (!list.length) {
+                    sel.innerHTML = '<option value="">暂无可管理项目</option>';
+                    pmState.currentProjectId = null;
+                    pmRenderMembers([]);
+                    pmUpdateAddBtnVisibility();
+                    return;
+                }
+                sel.innerHTML = list.map(function(p) {
+                    return '<option value="' + p.id + '">' + (p.name || ('项目 #' + p.id)) + '</option>';
+                }).join('');
+                pmState.currentProjectId = list[0].id;
+                sel.value = String(pmState.currentProjectId);
+                await pmLoadMembers(pmState.currentProjectId);
+            } catch (e) {
+                sel.innerHTML = '<option value="">加载失败</option>';
+            } finally {
+                pmState.loadingProjects = false;
+            }
+        }
+
+        function onProjectChange() {
+            var val = parseInt(document.getElementById('pmProjectSelect').value || '0', 10);
+            if (val > 0) pmLoadMembers(val);
+        }
+
+        async function pmLoadMembers(projectId) {
+            if (!projectId || pmState.loadingMembers) return;
+            pmState.loadingMembers = true;
+            document.getElementById('pmAddMemberBtn').style.display = 'none';
+            try {
+                var res = await fetch('/api/projects/' + projectId + '/members', { credentials: 'same-origin' });
+                if (res.status === 403 || res.status === 401) {
+                    alert('无权限查看该项目成员');
+                    pmRenderMembers([]);
+                    return;
+                }
+                var data = await res.json();
+                pmState.currentProjectId = projectId;
+                pmState.members = (data && data.members) ? data.members : [];
+                pmState.myEffectiveRole = (data && data.my_effective_role) || 'viewer';
+                pmRenderMembers(pmState.members);
+                pmUpdateAddBtnVisibility();
+                pmShowMyRoleTip();
+            } catch (e) {
+                console.error('加载项目成员失败', e);
+            } finally {
+                pmState.loadingMembers = false;
+            }
+        }
+
+        function pmShowMyRoleTip() {
+            var tip = document.getElementById('pmMyRoleTip');
+            var val = document.getElementById('pmMyRoleValue');
+            if (pmState.myEffectiveRole && pmState.myEffectiveRole !== 'viewer') {
+                tip.classList.remove('hidden');
+                val.textContent = pmState.myEffectiveRole;
+            } else {
+                tip.classList.add('hidden');
+            }
+        }
+
+        function pmRenderMembers(members) {
+            var tbody = document.getElementById('pmMemberBody');
+            var emptyTip = document.getElementById('pmEmptyTip');
+            if (!tbody) return;
+            if (!members.length) {
+                tbody.innerHTML = '';
+                if (emptyTip) emptyTip.classList.remove('hidden');
+                return;
+            }
+            if (emptyTip) emptyTip.classList.add('hidden');
+            tbody.innerHTML = members.map(function(m) {
+                var actions = '';
+                if (pmIsProjectManager() && pmState.me && m.user_id !== pmState.me.id) {
+                    actions = '<div class="flex gap-1 justify-end">' +
+                        '<button class="pm-btn pm-btn-ghost pm-btn-sm pm-open-edit" data-user-id="' + m.user_id + '" data-username="' + (m.username || '') + '" data-role="' + (m.role || 'viewer') + '"><i class="fas fa-pen text-xs"></i></button>' +
+                        '<button class="pm-btn pm-btn-danger pm-btn-sm pm-open-del" data-user-id="' + m.user_id + '" data-username="' + (m.username || '') + '"><i class="fas fa-user-minus text-xs"></i></button></div>';
+                } else if (pmState.me && m.user_id === pmState.me.id) {
+                    actions = '<span class="text-xs text-gray-400">当前用户</span>';
+                } else {
+                    actions = '<span class="text-xs text-gray-400">-</span>';
+                }
+                return '<tr class="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">' +
+                    '<td class="pm-td text-gray-500">' + m.user_id + '</td>' +
+                    '<td class="pm-td font-medium"><i class="fas fa-user-circle text-gray-400 mr-1.5"></i>' + (m.username || '-') + '</td>' +
+                    '<td class="pm-td text-gray-500">' + (m.email || '-') + '</td>' +
+                    '<td class="pm-td">' + pmRoleBadge(m.role || 'viewer') + '</td>' +
+                    '<td class="pm-td text-gray-500">' + (m.created_at || '-') + '</td>' +
+                    '<td class="pm-td text-right">' + actions + '</td></tr>';
+            }).join('');
+        }
+
+        function showPmAddModal() {
+            if (!pmState.currentProjectId) { alert('请先选择项目'); return; }
+            if (!pmIsProjectManager()) { alert('仅 owner 或管理员可添加成员'); return; }
+            document.getElementById('pmAddUsername').value = '';
+            document.getElementById('pmAddRole').value = 'editor';
+            showPmModal('pmAddModal');
+        }
+
+        function showPmEditModal(userId, username, role) {
+            if (!pmIsProjectManager()) { alert('仅 owner 或管理员可编辑成员'); return; }
+            document.getElementById('pmEditUserId').value = userId;
+            document.getElementById('pmEditUsername').value = username || '';
+            document.getElementById('pmEditRole').value = role || 'viewer';
+            showPmModal('pmEditModal');
+        }
+
+        async function pmAddMember() {
+            if (!pmState.currentProjectId) return;
+            var username = (document.getElementById('pmAddUsername').value || '').trim();
+            var role = document.getElementById('pmAddRole').value;
+            if (!username) { alert('请输入用户名'); return; }
+            try {
+                var res = await fetch('/api/projects/' + pmState.currentProjectId + '/members', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ username: username, role: role })
+                });
+                var data = await res.json();
+                if (res.ok && data.success) { closePmModal('pmAddModal'); await pmLoadMembers(pmState.currentProjectId); }
+                else { alert('添加失败：' + (data.error || '请检查用户名是否存在')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        async function pmUpdateMember() {
+            var userId = parseInt(document.getElementById('pmEditUserId').value || '0', 10);
+            var role = document.getElementById('pmEditRole').value;
+            if (!pmState.currentProjectId || !userId) return;
+            try {
+                var res = await fetch('/api/projects/' + pmState.currentProjectId + '/members/' + userId, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ role: role })
+                });
+                var data = await res.json();
+                if (res.ok && data.success) { closePmModal('pmEditModal'); await pmLoadMembers(pmState.currentProjectId); }
+                else { alert('更新失败：' + (data.error || '')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        async function pmRemoveMember(userId, username) {
+            if (!pmState.currentProjectId) return;
+            if (!confirm('确认移除成员「' + (username || userId) + '」吗？')) return;
+            try {
+                var res = await fetch('/api/projects/' + pmState.currentProjectId + '/members/' + userId, {
+                    method: 'DELETE', credentials: 'same-origin'
+                });
+                var data = await res.json();
+                if (res.ok && data.success) { await pmLoadMembers(pmState.currentProjectId); }
+                else { alert('移除失败：' + (data.error || '')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        document.addEventListener('click', function(e) {
+            if (e.target.closest && e.target.closest('.pm-modal') && e.target.classList.contains('pm-modal')) {
+                e.target.classList.remove('show');
+            }
+            var editBtn = e.target.closest && e.target.closest('.pm-open-edit');
+            if (editBtn) {
+                showPmEditModal(
+                    parseInt(editBtn.getAttribute('data-user-id') || '0', 10),
+                    editBtn.getAttribute('data-username') || '',
+                    editBtn.getAttribute('data-role') || 'viewer'
+                );
+                return;
+            }
+            var delBtn = e.target.closest && e.target.closest('.pm-open-del');
+            if (delBtn) {
+                pmRemoveMember(
+                    parseInt(delBtn.getAttribute('data-user-id') || '0', 10),
+                    delBtn.getAttribute('data-username') || ''
+                );
+            }
+        });
+
+        /* 初始化 */
+        (async function() {
+            await pmFetchMe();
+            await pmLoadProjects();
+        })();
+    </script>
+{% endblock %}

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 
 try:
@@ -1178,6 +1178,24 @@ def role_required(*roles):
         return wrapper
     return decorator
 
+def team_admin_or_sys_admin(func):
+    """允许系统管理员或团队管理员访问"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify({'success': False, 'error': '未登录'}), 401
+        # 系统管理员直接放行
+        if getattr(current_user, 'role', '') == 'admin':
+            return func(*args, **kwargs)
+        # 团队管理员放行
+        _db = Database()
+        _team = _db.get_or_create_team(owner_user_id=current_user.id)
+        if _db.get_team_role(_team["id"], current_user.id) == "admin":
+            return func(*args, **kwargs)
+        return jsonify({'success': False, 'error': '需要团队管理员权限'}), 403
+    return wrapper
+
+
 def token_or_login_required(func):
     """支持 Bearer Token 或 Flask-Login Session 两种认证方式（用于 Webhook/CI）"""
     @functools.wraps(func)
@@ -2025,7 +2043,8 @@ def api_me():
         'user': {
             'id': current_user.id, 
             'username': current_user.username, 
-            'role': current_user.role
+            'role': current_user.role,
+            'email': current_user.email if hasattr(current_user, 'email') else (Database().get_user_by_id(current_user.id) or {}).get('email')
         },
         'deployment': {
             'mode': __import__('deployment_config').get_deployment_mode().value,
@@ -11774,9 +11793,16 @@ def api_create_project():
         }), 403
 
     project_id = db.create_project(name, description)
-
+    project_id = _db.create_project(name, description)
     # 将创建者添加为项目所有者
     _db.add_project_member(project_id, current_user.id, role='owner')
+
+    # 自动将新项目链接到创建者所在团队（默认 viewer 权限）
+    try:
+        _team = _db.get_or_create_team(owner_user_id=current_user.id)
+        _db.add_team_project(_team['id'], project_id, 'viewer')
+    except Exception:
+        pass
 
     return jsonify({'success': True, 'project_id': project_id})
 
@@ -17675,13 +17701,185 @@ def license_page():
     return render_template('license.html')
 
 
-@app.route('/user-management')
+@app.route('/team-management')
 @login_required
-@role_required('admin')
-def user_management_page():
-    """用户管理页面（仅管理员）"""
-    return render_template('user_management.html')
+def team_management_page():
+    """团队管理页面"""
+    return render_template('team_management.html')
 
+@app.route('/join-team')
+@login_required
+def join_team_page():
+    """团队管理页面"""
+    """加入团队页面"""
+
+
+
+@app.route('/project-members')
+@login_required
+def project_members_page():
+    return render_template('project_members.html')
+
+@app.route('/api/teams/current', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_get_current_team():
+    _db = Database()
+    team = _db.get_or_create_team(owner_user_id=current_user.id)
+    join_code = _db.get_team_join_code(team['id'])
+    members = _db.get_team_members(team['id'])
+    default_projects = _db.get_team_default_projects(team['id'])
+    user_team_role = 'guest'
+    for m in members:
+        if m['user_id'] == current_user.id:
+            user_team_role = m['team_role']
+            break
+    return jsonify({'success': True, 'team': team, 'join_code': join_code, 'members': members, 'default_projects': default_projects, 'user_team_role': user_team_role})
+
+@app.route('/api/teams/current', methods=['PUT'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('UPDATE_TEAM', 'team')
+def api_update_current_team():
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    _db = Database()
+    team = _db.get_or_create_team(owner_user_id=current_user.id)
+    ok = _db.update_team(team['id'], **({'name': name} if name else {}))
+    return jsonify({'success': ok})
+
+@app.route('/api/teams/current/join-code', methods=['POST'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('REFRESH_TEAM_JOIN_CODE', 'team')
+def api_refresh_team_join_code():
+    _db = Database()
+    team = _db.get_or_create_team(owner_user_id=current_user.id)
+    code = _db.generate_team_join_code(team['id'])
+    return jsonify({'success': True, 'join_code': code})
+
+@app.route('/api/teams/current/members', methods=['POST'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('ADD_TEAM_MEMBER', 'team')
+def api_add_team_member():
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    team_role = (data.get('team_role') or 'member').strip()
+    if not username:
+        return jsonify({'success': False, 'error': '用户名不能为空'}), 400
+    if team_role not in ('admin', 'member', 'guest'):
+        return jsonify({'success': False, 'error': '无效的团队角色'}), 400
+    _db = Database()
+    user = _db.get_user_by_username(username)
+    if not user:
+        return jsonify({'success': False, 'error': '用户不存在，请先注册'}), 404
+    team = _db.get_or_create_team(owner_user_id=current_user.id)
+    ok = _db.add_team_member(team['id'], user['id'], team_role)
+    if not ok:
+        return jsonify({'success': False, 'error': '该成员已在团队中'}), 409
+    return jsonify({'success': True})
+
+@app.route('/api/teams/current/members/<int:user_id>', methods=['PUT'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('UPDATE_TEAM_MEMBER', 'team')
+def api_update_team_member(user_id):
+    data = request.get_json(silent=True) or {}
+    team_role = (data.get('team_role') or '').strip()
+    if team_role not in ('admin', 'member', 'guest'):
+        return jsonify({'success': False, 'error': '无效的团队角色'}), 400
+    _db = Database()
+    team = _db.get_or_create_team(owner_user_id=current_user.id)
+    ok = _db.update_team_member_role(team['id'], user_id, team_role)
+    return jsonify({'success': ok})
+
+@app.route('/api/teams/current/members/<int:user_id>', methods=['DELETE'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('REMOVE_TEAM_MEMBER', 'team')
+def api_remove_team_member(user_id):
+    if user_id == current_user.id:
+        return jsonify({'success': False, 'error': '不能移除自己'}), 400
+    _db = Database()
+    team = _db.get_or_create_team(owner_user_id=current_user.id)
+    ok = _db.remove_team_member(team['id'], user_id)
+    return jsonify({'success': ok})
+
+@app.route('/api/teams/current/default-projects', methods=['POST'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('ADD_TEAM_DEFAULT_PROJECT', 'team')
+def api_add_team_default_project():
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    default_project_role = (data.get('default_project_role') or 'editor').strip()
+    if not project_id:
+        return jsonify({'success': False, 'error': '项目ID不能为空'}), 400
+    if default_project_role not in ('viewer', 'editor'):
+        return jsonify({'success': False, 'error': '无效的项目角色，仅支持 viewer 或 editor'}), 400
+    _db = Database()
+    team = _db.get_or_create_team(owner_user_id=current_user.id)
+    ok = _db.add_team_default_project(team['id'], int(project_id), default_project_role)
+    if not ok:
+        return jsonify({'success': False, 'error': '该项目已绑定到团队'}), 409
+    return jsonify({'success': True})
+
+@app.route('/api/teams/current/default-projects/<int:record_id>', methods=['PUT'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('UPDATE_TEAM_DEFAULT_PROJECT', 'team')
+def api_update_team_default_project(record_id):
+    data = request.get_json(silent=True) or {}
+    default_project_role = (data.get('default_project_role') or '').strip()
+    if default_project_role not in ('viewer', 'editor'):
+        return jsonify({'success': False, 'error': '无效的项目角色，仅支持 viewer 或 editor'}), 400
+    _db = Database()
+    ok = _db.update_team_default_project(record_id, default_project_role)
+    return jsonify({'success': ok})
+
+@app.route('/api/teams/current/default-projects/<int:record_id>', methods=['DELETE'])
+@login_required
+@team_admin_or_sys_admin
+@api_error_handler
+@log_api_request
+@audit_log('REMOVE_TEAM_DEFAULT_PROJECT', 'team')
+def api_remove_team_default_project(record_id):
+    _db = Database()
+    ok = _db.remove_team_default_project(record_id)
+    return jsonify({'success': ok})
+
+@app.route('/api/teams/join', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+@audit_log('JOIN_TEAM', 'team')
+def api_join_team():
+    data = request.get_json(silent=True) or {}
+    code = (data.get('code') or '').strip()
+    if not code:
+        return jsonify({'success': False, 'error': '请输入团队码'}), 400
+    _db = Database()
+    try:
+        result = _db.join_team_by_code(current_user.id, code)
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    return jsonify({'success': True, 'result': result})
 
 @app.route('/api/license/info', methods=['GET'])
 @login_required
@@ -18113,8 +18311,8 @@ def api_get_project_members(project_id):
     """获取项目成员列表"""
     _db = Database()
     members = _db.get_project_members(project_id)
-    return jsonify({'success': True, 'members': members})
-
+    my_effective_role = _db.get_project_effective_role(project_id, current_user.id) or 'viewer'
+    return jsonify({'success': True, 'members': members, 'my_effective_role': my_effective_role})
 
 @app.route('/api/projects/<int:project_id>/members', methods=['POST'])
 @login_required

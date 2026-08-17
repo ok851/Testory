@@ -1,0 +1,528 @@
+﻿{% extends "base.html" %}
+{% block title %}团队管理 - AI自动化测试平台{% endblock %}
+{% block head %}
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .tm-btn { @apply px-4 py-2 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 inline-flex items-center justify-center; }
+            .tm-btn-sm { @apply px-3 py-1.5 text-sm rounded-md; }
+            .tm-btn-primary { @apply bg-primary text-white hover:bg-blue-600 focus:ring-blue-500; }
+            .tm-btn-ghost { @apply bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 focus:ring-gray-400; }
+            .tm-btn-danger { @apply bg-red-500 text-white hover:bg-red-600 focus:ring-red-400; }
+            .tm-card { @apply bg-white dark:bg-gray-900 rounded-lg shadow-md border border-gray-200 dark:border-gray-800 p-6; }
+            .tm-input { @apply w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent; }
+            .tm-input-ro { @apply w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm cursor-default; }
+            .tm-select { @apply w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-primary; }
+            .tm-label { @apply block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5; }
+            .tm-badge { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold; }
+            .tm-badge-admin { @apply bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300; }
+            .tm-badge-member { @apply bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300; }
+            .tm-badge-guest { @apply bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300; }
+            .tm-th { @apply px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider bg-gray-50 dark:bg-gray-800/60; }
+            .tm-td { @apply px-4 py-3 text-sm text-gray-700 dark:text-gray-300 whitespace-nowrap; }
+            .tm-modal { @apply hidden fixed inset-0 z-50 items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm p-4; }
+            .tm-modal.show { display: flex; }
+            .tm-modal-box { @apply bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-800 w-full max-w-md; }
+        }
+    </style>
+{% endblock %}
+{% block body_class %}bg-gray-100 dark:bg-gray-950 min-h-screen{% endblock %}
+{% block content %}
+    <div class="max-w-5xl mx-auto px-4 py-8">
+        {# ── 页面标题 ── #}
+        <div class="mb-8">
+            <h2 class="text-3xl font-bold text-gray-800 dark:text-gray-100">
+                <i class="fas fa-people-group text-primary mr-3"></i>团队管理
+            </h2>
+            <p class="text-gray-500 dark:text-gray-400 mt-2">统一管理团队信息、成员身份与项目权限</p>
+        </div>
+
+        {# ── 团队信息卡片 ── #}
+        <div class="tm-card mb-6">
+            <h3 class="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-5 flex items-center">
+                <i class="fas fa-building text-primary mr-3"></i>团队信息
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-5 items-end">
+                <div class="md:col-span-2">
+                    <label class="tm-label">团队名称</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-tag"></i></span>
+                        <input type="text" id="tmTeamName" class="tm-input" placeholder="请输入团队名称">
+                    </div>
+                </div>
+                <div class="flex justify-start md:justify-end">
+                    <button type="button" class="tm-btn tm-btn-primary" onclick="saveTeamName()">
+                        <i class="fas fa-save mr-2"></i>保存
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        {# ── 团队加入设置卡片 ── #}
+        <div class="tm-card mb-6">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+                <h3 class="text-xl font-semibold text-gray-700 dark:text-gray-200 flex items-center">
+                    <i class="fas fa-key text-amber-500 mr-3"></i>团队加入码
+                </h3>
+                <div class="flex gap-2">
+                    <button type="button" class="tm-btn tm-btn-ghost tm-btn-sm" onclick="copyJoinCode()">
+                        <i class="fas fa-copy mr-1.5"></i>复制
+                    </button>
+                    <button type="button" id="tmRefreshCodeBtn" class="tm-btn tm-btn-primary tm-btn-sm" style="display:none;" onclick="refreshJoinCode()">
+                        <i class="fas fa-rotate mr-1.5"></i>刷新
+                    </button>
+                </div>
+            </div>
+            <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md p-4 mb-4">
+                <p class="text-sm text-amber-800 dark:text-amber-300">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    分享团队码给成员，对方在各自电脑登录后输入即可加入。团队码仅对当前服务有效。
+                </p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                <div class="md:col-span-2">
+                    <label class="tm-label">当前团队码</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-key"></i></span>
+                        <input type="text" id="tmJoinCode" class="tm-input-ro" readonly placeholder="尚未生成团队码">
+                    </div>
+                </div>
+                <div>
+                    <label class="tm-label">已使用次数</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-chart-line"></i></span>
+                        <input type="text" id="tmJoinCodeUsage" class="tm-input-ro" readonly placeholder="-">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ── 团队项目卡片 ── #}
+        <div class="tm-card mb-6">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+                <h3 class="text-xl font-semibold text-gray-700 dark:text-gray-200 flex items-center">
+                    <i class="fas fa-folder-tree text-emerald-500 mr-3"></i>团队项目
+                </h3>
+                <div class="flex gap-2">
+                    <a href="/project-members" class="tm-btn tm-btn-ghost tm-btn-sm">
+                        <i class="fas fa-user-gear mr-1.5"></i>项目成员管理
+                    </a>
+                    <button type="button" class="tm-btn tm-btn-primary tm-btn-sm" onclick="showTmProjectModal()">
+                        <i class="fas fa-plus mr-1.5"></i>绑定项目
+                    </button>
+                </div>
+            </div>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">团队成员加入后，默认以 <strong>viewer</strong> 身份查看以下项目。管理员可在「项目成员管理」中为个别成员提升权限。</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead><tr>
+                        <th class="tm-th rounded-tl-md">项目名称</th>
+                        <th class="tm-th">默认角色</th>
+                        <th class="tm-th">绑定时间</th>
+                        <th class="tm-th rounded-tr-md text-right">操作</th>
+                    </tr></thead>
+                    <tbody id="tmProjectBody"></tbody>
+                </table>
+            </div>
+            <div id="tmProjectEmpty" class="hidden text-center py-8 text-gray-400 dark:text-gray-500">
+                <i class="fas fa-folder-open text-3xl mb-2"></i>
+                <p class="text-sm">暂无绑定项目，点击上方「绑定项目」添加</p>
+            </div>
+        </div>
+
+        {# ── 团队成员卡片 ── #}
+        <div class="tm-card mb-6">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+                <h3 class="text-xl font-semibold text-gray-700 dark:text-gray-200 flex items-center">
+                    <i class="fas fa-users text-blue-500 mr-3"></i>团队成员
+                    <span id="tmMemberCount" class="ml-2 text-sm font-normal text-gray-400"></span>
+                </h3>
+                <button type="button" class="tm-btn tm-btn-primary tm-btn-sm" onclick="showTmAddModal()">
+                    <i class="fas fa-user-plus mr-1.5"></i>添加成员
+                </button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead><tr>
+                        <th class="tm-th rounded-tl-md">用户名</th>
+                        <th class="tm-th">邮箱</th>
+                        <th class="tm-th">团队角色</th>
+                        <th class="tm-th">加入时间</th>
+                        <th class="tm-th rounded-tr-md text-right">操作</th>
+                    </tr></thead>
+                    <tbody id="tmMemberBody"></tbody>
+                </table>
+            </div>
+            <div id="tmMemberEmpty" class="hidden text-center py-8 text-gray-400 dark:text-gray-500">
+                <i class="fas fa-user-plus text-3xl mb-2"></i>
+                <p class="text-sm">暂无成员</p>
+            </div>
+        </div>
+    </div>
+
+    {# ── 添加成员弹窗 ── #}
+    <div id="tmAddModal" class="tm-modal">
+        <div class="tm-modal-box p-6">
+            <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-5 flex items-center">
+                <i class="fas fa-user-plus text-primary mr-2"></i>添加团队成员
+            </h4>
+            <div class="space-y-4">
+                <div>
+                    <label class="tm-label">用户名 <span class="text-red-500">*</span></label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-user"></i></span>
+                        <input type="text" id="tmAddUsername" class="tm-input" placeholder="输入已注册的用户名">
+                    </div>
+                </div>
+                <div>
+                    <label class="tm-label">团队角色</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-shield-alt"></i></span>
+                        <select id="tmAddRole" class="tm-select">
+                            <option value="member">member（普通成员）</option>
+                            <option value="admin">admin（管理员）</option>
+                            <option value="guest">guest（访客）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button type="button" class="tm-btn tm-btn-ghost" onclick="closeTmModal('tmAddModal')">取消</button>
+                <button type="button" class="tm-btn tm-btn-primary" onclick="addTeamMember()">确认添加</button>
+            </div>
+        </div>
+    </div>
+
+    {# ── 编辑成员弹窗 ── #}
+    <div id="tmEditModal" class="tm-modal">
+        <div class="tm-modal-box p-6">
+            <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-5 flex items-center">
+                <i class="fas fa-user-pen text-primary mr-2"></i>编辑成员角色
+            </h4>
+            <input type="hidden" id="tmEditUserId">
+            <div class="space-y-4">
+                <div>
+                    <label class="tm-label">用户名</label>
+                    <input type="text" id="tmEditUsername" class="tm-input-ro" disabled>
+                </div>
+                <div>
+                    <label class="tm-label">团队角色</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-shield-alt"></i></span>
+                        <select id="tmEditRole" class="tm-select">
+                            <option value="member">member（普通成员）</option>
+                            <option value="admin">admin（管理员）</option>
+                            <option value="guest">guest（访客）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button type="button" class="tm-btn tm-btn-ghost" onclick="closeTmModal('tmEditModal')">取消</button>
+                <button type="button" class="tm-btn tm-btn-primary" onclick="updateTeamMember()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    {# ── 绑定项目弹窗 ── #}
+    <div id="tmProjectModal" class="tm-modal">
+        <div class="tm-modal-box p-6">
+            <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-5 flex items-center">
+                <i class="fas fa-link text-primary mr-2"></i>绑定项目到团队
+            </h4>
+            <div class="space-y-4">
+                <div>
+                    <label class="tm-label">选择项目 <span class="text-red-500">*</span></label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-folder"></i></span>
+                        <select id="tmProjectSelect" class="tm-select">
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="tm-label">默认角色</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-shield-alt"></i></span>
+                        <select id="tmProjectRole" class="tm-select">
+                            <option value="viewer">viewer（只读，推荐）</option>
+                            <option value="editor">editor（可编辑）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button type="button" class="tm-btn tm-btn-ghost" onclick="closeTmModal('tmProjectModal')">取消</button>
+                <button type="button" class="tm-btn tm-btn-primary" onclick="addDefaultProject()">确认绑定</button>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script>
+        var tmState = { team: null, joinCode: null, members: [], defaultProjects: [], userTeamRole: 'guest', loading: false };
+
+        function tmIsManager() {
+            return (window.__tmUserRole === 'admin') || (tmState.userTeamRole === 'admin');
+        }
+
+        function tmRoleBadge(role) {
+            if (role === 'admin') return '<span class="tm-badge tm-badge-admin">admin</span>';
+            if (role === 'guest') return '<span class="tm-badge tm-badge-guest">guest</span>';
+            return '<span class="tm-badge tm-badge-member">member</span>';
+        }
+
+        function closeTmModal(id) { var m = document.getElementById(id); if (m) m.classList.remove('show'); }
+        function showTmModal(id) { var m = document.getElementById(id); if (m) m.classList.add('show'); }
+
+        async function loadTeamManagement() {
+            if (tmState.loading) return;
+            tmState.loading = true;
+            try {
+                var meRes = await fetch('/api/auth/me', { credentials: 'same-origin' });
+                var meData = await meRes.json();
+                window.__tmUserRole = (meData && meData.user && meData.user.role) || 'viewer';
+                var res = await fetch('/api/teams/current', { credentials: 'same-origin' });
+                if (res.status === 401 || res.status === 403) { alert('无权限访问团队管理'); return; }
+                var data = await res.json();
+                if (!data.success) { alert('加载团队信息失败'); return; }
+                tmState.team = data.team;
+                tmState.joinCode = data.join_code;
+                tmState.members = data.members || [];
+                tmState.defaultProjects = data.default_projects || [];
+                tmState.userTeamRole = data.user_team_role || 'guest';
+                document.getElementById('tmTeamName').value = (tmState.team && tmState.team.name) || '';
+                renderJoinCode();
+                renderProjects();
+                renderMembers();
+            } catch (e) {
+                console.error('加载团队管理失败', e);
+                alert('网络异常，加载团队管理失败');
+            } finally {
+                tmState.loading = false;
+            }
+        }
+
+        function renderJoinCode() {
+            var codeInput = document.getElementById('tmJoinCode');
+            var usageInput = document.getElementById('tmJoinCodeUsage');
+            var refreshBtn = document.getElementById('tmRefreshCodeBtn');
+            if (tmState.joinCode) {
+                codeInput.value = tmState.joinCode.code || '';
+                var count = tmState.joinCode.use_count || 0;
+                var max = tmState.joinCode.max_uses || 0;
+                usageInput.value = max > 0 ? (count + ' / ' + max) : String(count);
+            } else {
+                codeInput.value = '';
+                usageInput.value = '-';
+            }
+            refreshBtn.style.display = tmIsManager() ? '' : 'none';
+        }
+
+        function renderProjects() {
+            var tbody = document.getElementById('tmProjectBody');
+            var empty = document.getElementById('tmProjectEmpty');
+            var list = tmState.defaultProjects;
+            if (!list.length) {
+                tbody.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            tbody.innerHTML = list.map(function(p) {
+                var actions = tmIsManager()
+                    ? '<div class="flex gap-1 justify-end">' +
+                      '<button class="tm-btn tm-btn-ghost tm-btn-sm" onclick="showEditProject(' + p.id + ',\'' + (p.default_project_role || 'viewer') + '\')"><i class="fas fa-pen text-xs"></i></button>' +
+                      '<button class="tm-btn tm-btn-danger tm-btn-sm" onclick="removeProject(' + p.id + ',\'' + (p.project_name || '') + '\')"><i class="fas fa-trash text-xs"></i></button></div>'
+                    : '<span class="text-xs text-gray-400">-</span>';
+                return '<tr class="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">' +
+                    '<td class="tm-td font-medium">' + (p.project_name || ('项目 #' + p.project_id)) + '</td>' +
+                    '<td class="tm-td">' + tmRoleBadge(p.default_project_role || 'viewer') + '</td>' +
+                    '<td class="tm-td text-gray-500 dark:text-gray-400">' + (p.created_at || '-') + '</td>' +
+                    '<td class="tm-td text-right">' + actions + '</td></tr>';
+            }).join('');
+        }
+
+        function renderMembers() {
+            var tbody = document.getElementById('tmMemberBody');
+            var empty = document.getElementById('tmMemberEmpty');
+            var countEl = document.getElementById('tmMemberCount');
+            var list = tmState.members;
+            countEl.textContent = '(' + list.length + ' 人)';
+            if (!list.length) {
+                tbody.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            tbody.innerHTML = list.map(function(m) {
+                var actions = '';
+                if (tmIsManager()) {
+                    if (m.user_id !== (tmState.team && tmState.team.owner_user_id)) {
+                        actions = '<div class="flex gap-1 justify-end">' +
+                            '<button class="tm-btn tm-btn-ghost tm-btn-sm tm-open-member-edit" data-user-id="' + m.user_id + '" data-username="' + (m.username || '') + '" data-role="' + (m.team_role || 'member') + '"><i class="fas fa-pen text-xs"></i></button>' +
+                            '<button class="tm-btn tm-btn-danger tm-btn-sm" onclick="removeTeamMember(' + m.user_id + ',\'' + (m.username || '') + '\')"><i class="fas fa-user-minus text-xs"></i></button></div>';
+                    } else {
+                        actions = '<span class="text-xs text-gray-400 dark:text-gray-500">创建者</span>';
+                    }
+                } else {
+                    actions = '<span class="text-xs text-gray-400">-</span>';
+                }
+                return '<tr class="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">' +
+                    '<td class="tm-td font-medium"><i class="fas fa-user-circle text-gray-400 mr-1.5"></i>' + (m.username || '-') + '</td>' +
+                    '<td class="tm-td text-gray-500">' + (m.email || '-') + '</td>' +
+                    '<td class="tm-td">' + tmRoleBadge(m.team_role || 'member') + '</td>' +
+                    '<td class="tm-td text-gray-500">' + (m.joined_at || '-') + '</td>' +
+                    '<td class="tm-td text-right">' + actions + '</td></tr>';
+            }).join('');
+        }
+
+        async function saveTeamName() {
+            var name = (document.getElementById('tmTeamName').value || '').trim();
+            if (!name) { alert('请输入团队名称'); return; }
+            try {
+                var res = await fetch('/api/teams/current', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ name: name }) });
+                var data = await res.json();
+                alert(data.success ? '团队名称已更新' : ('保存失败：' + (data.error || '')));
+            } catch (e) { alert('网络异常'); }
+        }
+
+        async function copyJoinCode() {
+            var code = (document.getElementById('tmJoinCode').value || '').trim();
+            if (!code) { alert('暂无团队码'); return; }
+            try { await navigator.clipboard.writeText(code); alert('已复制到剪贴板'); } catch (e) { alert('复制失败，请手动复制：' + code); }
+        }
+
+        async function refreshJoinCode() {
+            try {
+                var res = await fetch('/api/teams/current/join-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' });
+                var data = await res.json();
+                if (res.ok && data.success) { tmState.joinCode = data.join_code; renderJoinCode(); alert('团队码已刷新'); }
+                else { alert('刷新失败：' + (data.error || '')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        function showTmAddModal() {
+            document.getElementById('tmAddUsername').value = '';
+            document.getElementById('tmAddRole').value = 'member';
+            showTmModal('tmAddModal');
+        }
+
+        function showTmEditModal(userId, username, role) {
+            document.getElementById('tmEditUserId').value = userId;
+            document.getElementById('tmEditUsername').value = username;
+            document.getElementById('tmEditRole').value = role;
+            showTmModal('tmEditModal');
+        }
+
+        async function addTeamMember() {
+            var username = (document.getElementById('tmAddUsername').value || '').trim();
+            var teamRole = document.getElementById('tmAddRole').value;
+            if (!username) { alert('请输入用户名'); return; }
+            try {
+                var res = await fetch('/api/teams/current/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ username: username, team_role: teamRole }) });
+                var data = await res.json();
+                if (res.ok && data.success) { closeTmModal('tmAddModal'); await loadTeamManagement(); }
+                else { alert('添加失败：' + (data.error || '请确认用户名已注册')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        async function updateTeamMember() {
+            var userId = parseInt(document.getElementById('tmEditUserId').value || '0', 10);
+            var teamRole = document.getElementById('tmEditRole').value;
+            if (!userId) return;
+            try {
+                var res = await fetch('/api/teams/current/members/' + userId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ team_role: teamRole }) });
+                var data = await res.json();
+                if (res.ok && data.success) { closeTmModal('tmEditModal'); await loadTeamManagement(); }
+                else { alert('更新失败：' + (data.error || '')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        async function removeTeamMember(userId, username) {
+            if (!confirm('确认移除成员「' + (username || userId) + '」吗？')) return;
+            try {
+                var res = await fetch('/api/teams/current/members/' + userId, { method: 'DELETE', credentials: 'same-origin' });
+                var data = await res.json();
+                if (res.ok && data.success) { await loadTeamManagement(); }
+                else { alert('移除失败：' + (data.error || '')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        /* ── 团队项目管理 ── */
+        var tmAllProjects = [];
+
+        function showTmProjectModal() {
+            loadProjectOptions();
+            showTmModal('tmProjectModal');
+        }
+
+        async function loadProjectOptions() {
+            var sel = document.getElementById('tmProjectSelect');
+            sel.innerHTML = '<option value="">加载中...</option>';
+            try {
+                var res = await fetch('/api/projects', { credentials: 'same-origin' });
+                var data = await res.json();
+                tmAllProjects = (data && data.projects) ? data.projects : [];
+                var boundIds = tmState.defaultProjects.map(function(p) { return p.project_id; });
+                var available = tmAllProjects.filter(function(p) { return boundIds.indexOf(p.id) === -1; });
+                if (!available.length) {
+                    sel.innerHTML = '<option value="">所有项目均已绑定</option>';
+                    return;
+                }
+                sel.innerHTML = '<option value="">请选择项目</option>' + available.map(function(p) {
+                    return '<option value="' + p.id + '">' + (p.name || ('项目 #' + p.id)) + '</option>';
+                }).join('');
+            } catch (e) {
+                sel.innerHTML = '<option value="">加载失败</option>';
+            }
+        }
+
+        async function addDefaultProject() {
+            var projectId = document.getElementById('tmProjectSelect').value;
+            var role = document.getElementById('tmProjectRole').value;
+            if (!projectId) { alert('请选择项目'); return; }
+            try {
+                var res = await fetch('/api/teams/current/default-projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ project_id: parseInt(projectId), default_project_role: role }) });
+                var data = await res.json();
+                if (res.ok && data.success) { closeTmModal('tmProjectModal'); await loadTeamManagement(); }
+                else { alert('绑定失败：' + (data.error || '')); }
+            } catch (e) { alert('网络异常'); }
+        }
+
+        function showEditProject(recordId, currentRole) {
+            var newRole = prompt('修改默认角色（viewer / editor）：', currentRole || 'viewer');
+            if (!newRole || newRole === currentRole) return;
+            if (newRole !== 'viewer' && newRole !== 'editor') { alert('仅支持 viewer 或 editor'); return; }
+            fetch('/api/teams/current/default-projects/' + recordId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ default_project_role: newRole }) })
+                .then(function(r) { return r.json(); })
+                .then(function(d) { if (d.success) loadTeamManagement(); else alert('更新失败'); })
+                .catch(function() { alert('网络异常'); });
+        }
+
+        function removeProject(recordId, name) {
+            if (!confirm('确认解绑项目「' + (name || recordId) + '」吗？解绑后成员将无法通过团队访问该项目。')) return;
+            fetch('/api/teams/current/default-projects/' + recordId, { method: 'DELETE', credentials: 'same-origin' })
+                .then(function(r) { return r.json(); })
+                .then(function(d) { if (d.success) loadTeamManagement(); else alert('移除失败'); })
+                .catch(function() { alert('网络异常'); });
+        }
+
+        /* ── 事件委托 ── */
+        document.addEventListener('click', function(e) {
+            if (e.target.closest && e.target.closest('.tm-modal') && e.target.classList.contains('tm-modal')) {
+                e.target.classList.remove('show');
+            }
+            var editBtn = e.target.closest && e.target.closest('.tm-open-member-edit');
+            if (editBtn) {
+                showTmEditModal(
+                    parseInt(editBtn.getAttribute('data-user-id') || '0', 10),
+                    editBtn.getAttribute('data-username') || '',
+                    editBtn.getAttribute('data-role') || 'member'
+                );
+            }
+        });
+
+        /* ── 初始化 ── */
+        loadTeamManagement();
+    </script>
+{% endblock %}
