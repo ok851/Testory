@@ -1,0 +1,84 @@
+{
+  "audit_id": "cea-3c0e34a2686f",
+  "created_at": "2026-08-17T08:47:32.298798+00:00",
+  "status": "success",
+  "duration": 0.0,
+  "error": "",
+  "flow_name": "未命名场景",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"y6ok\", \"scenario\": \"未命名场景\", \"test_type\": \"cross_end\", \"user_id\": \"\", \"project_id\": null, \"trigger_source\": \"ui\", \"agent_run_id\": \"\", \"error_code\": null, \"gate_passed\": true, \"success\": true, \"lock\": \"skipped\", \"assertion_passed\": 1, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"bal_api\": \"100.0\", \"bal_web\": \"100.005\"}, \"stage_count\": 1, \"risk\": [{\"stage_id\": \"stage-1\", \"level\": \"L0\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 2, \"ok_assert\": true}]}",
+  "expected_text": "{\"plan_id\": \"y6ok\", \"project_id\": null, \"agent_run_id\": \"\", \"audit_id\": \"cea-3c0e34a2686f\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": true,
+      "status_code": 200,
+      "stage_id": "stage-1",
+      "layer": "api",
+      "risk_level": "L0",
+      "risk_decision": "allow",
+      "risk_events": [
+        {
+          "at": 1786956452.255316,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L0",
+          "stage_id": "stage-1",
+          "detail": {
+            "auto": true
+          }
+        },
+        {
+          "at": 1786956452.2957966,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L0",
+          "stage_id": "stage-1",
+          "detail": {
+            "auto": true
+          }
+        }
+      ],
+      "error_message": null,
+      "error_code": null,
+      "extracted": {},
+      "warnings": [],
+      "evidence": [],
+      "schema": "testory.stage_result/v1"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "y6ok",
+    "scenario": "未命名场景",
+    "test_type": "cross_end",
+    "user_id": "",
+    "project_id": null,
+    "trigger_source": "ui",
+    "agent_run_id": "",
+    "error_code": null,
+    "gate_passed": true,
+    "success": true,
+    "lock": "skipped",
+    "assertion_passed": 1,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "bal_api": "100.0",
+      "bal_web": "100.005"
+    },
+    "stage_count": 1,
+    "risk": [
+      {
+        "stage_id": "stage-1",
+        "level": "L0",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 2,
+        "ok_assert": true
+      }
+    ]
+  }
+}

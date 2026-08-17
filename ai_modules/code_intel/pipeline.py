@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """CodeChange 编排：信号 → 影响分析 → 匹配 → 可选生成/触发 runs → 自愈提案。"""
 
 from __future__ import annotations
@@ -130,6 +130,7 @@ def process_code_change(
     )
     from ai_modules.code_intel.heal_bridge import (
         build_heal_proposals_from_run,
+        build_heal_proposals_from_run_audited,
         mark_cases_at_risk_meta,
     )
     from ai_modules.code_intel.review import filter_ci_case_ids
@@ -328,7 +329,7 @@ def process_code_change(
 
             run_rec = get_run(str(ci_run_id))
             if run_rec and is_terminal_status(run_rec.get("status")):
-                heal_proposals = build_heal_proposals_from_run(
+                heal_proposals = build_heal_proposals_from_run_audited(
                     task_id=task_id,
                     git_sha=str(rec.get("git_sha") or ""),
                     at_risk_case_ids=at_risk,
@@ -366,7 +367,7 @@ def attach_heal_proposals_for_run(
     db_factory: Optional[Callable[[], Any]] = None,
 ) -> Dict[str, Any]:
     """在 CI run 终态后补建 heal 提案（供轮询或自动钩子）。"""
-    from ai_modules.code_intel.heal_bridge import build_heal_proposals_from_run
+    from ai_modules.code_intel.heal_bridge import build_heal_proposals_from_run_audited
     from ci_adapter import get_run, is_terminal_status
 
     rec = get_task(task_id)
@@ -382,7 +383,7 @@ def attach_heal_proposals_for_run(
         return {"ok": True, "pending": True, "message": "ci run 尚未终态"}
 
     db = db_factory() if db_factory else None
-    proposals = build_heal_proposals_from_run(
+    proposals = build_heal_proposals_from_run_audited(
         task_id=task_id,
         git_sha=str(rec.get("git_sha") or ""),
         at_risk_case_ids=list(rec.get("at_risk_case_ids") or []),
@@ -442,3 +443,4 @@ def _maybe_callback(rec: Optional[Dict[str, Any]]) -> None:
         urllib.request.urlopen(req, timeout=8)
     except Exception as e:
         uat_logger.warning("[CODE_INTEL] callback failed: %s", e)
+

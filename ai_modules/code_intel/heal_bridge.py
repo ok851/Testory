@@ -77,7 +77,38 @@ def build_heal_proposals_from_run(
             "applied": False,
             "marketing_claim_allowed": False,
         })
+
+    try:
+        from execution_events import ExecutionEventCollector, HEAL_ATTEMPT
+        collector = ExecutionEventCollector()
+        collector.emit(
+            HEAL_ATTEMPT,
+            task_id=task_id,
+            git_sha=git_sha,
+            proposal_count=len(proposals),
+            at_risk_case_ids=list(at_risk_case_ids),
+        )
+    except Exception:
+        pass
+
     return proposals
+
+
+def build_heal_proposals_from_run_audited(
+    *,
+    task_id: str,
+    git_sha: str,
+    at_risk_case_ids: List[int],
+    ci_run: Optional[Dict[str, Any]],
+    db: Any = None,
+) -> List[Dict[str, Any]]:
+    return build_heal_proposals_from_run(
+        task_id=task_id,
+        git_sha=git_sha,
+        at_risk_case_ids=at_risk_case_ids,
+        ci_run=ci_run,
+        db=db,
+    )
 
 
 def mark_cases_at_risk_meta(

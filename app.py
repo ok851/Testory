@@ -8641,6 +8641,8 @@ def api_ai_task_execute():
                 _dom_context_pack = ""
 
                 screen_share_state = _screen_share_states.get(user_id, {})
+                from execution_events import ExecutionEventCollector, ROUTE_DECIDED
+                _exec_evt_collector = ExecutionEventCollector()
                 allow_screen_tools = bool(
                     screen_share_state.get('enabled', False) or enable_vision
                 )
@@ -8658,6 +8660,36 @@ def api_ai_task_execute():
                 )
                 if use_outer_desktop:
                     run_platform = "desktop"
+
+                # 发送路由决策事件
+                # 发送路由决策事件
+                try:
+                    _exec_evt_collector.emit(
+                        ROUTE_DECIDED,
+                        platform=run_platform,
+                        allow_agent=allow_agent,
+                        use_outer_desktop=use_outer_desktop,
+                        hermes_available=hermes_available,
+                        allow_screen_tools=allow_screen_tools,
+                    )
+                    # Use timeline formatter for rich event
+                    try:
+                        from timeline_formatter import format_timeline_event
+                        timeline_evt = format_timeline_event("route_decided", {
+                            "platform": run_platform,
+                            "allow_agent": allow_agent,
+                            "use_outer_desktop": use_outer_desktop,
+                            "hermes_available": hermes_available,
+                            "allow_screen_tools": allow_screen_tools,
+                        })
+                        if timeline_evt:
+                            yield send("timeline", **timeline_evt.to_sse_dict())
+                    except Exception:
+                        yield send("timeline", event_type="route_decided", platform=run_platform, allow_agent=allow_agent)
+                except Exception:
+                    pass
+
+
 
                 _uid = 0
                 try:
@@ -8786,6 +8818,24 @@ def api_ai_task_execute():
                             yield send('think', text=f'桌面双手：{tool_name}', status='running')
                         elif tool_name == "refine_test_plan":
                             yield send('think', text='正在优化测试用例', status='running')
+
+                        # 发送工具调用开始事件
+                        try:
+                            _exec_evt_collector.emit("tool_call_start", tool=tool_name, args_summary=args_summary[:200])
+                        except Exception:
+                            pass
+                            # Use timeline formatter for tool_call_start
+                            try:
+                                from timeline_formatter import format_timeline_event
+                                timeline_evt = format_timeline_event("tool_call_start", {
+                                    "tool": tool_name,
+                                    "args_summary": args_summary[:200],
+                                })
+                                if timeline_evt:
+                                    yield send("timeline", **timeline_evt.to_sse_dict())
+                            except Exception:
+                                yield send("timeline", event_type="tool_call_start", tool=tool_name, args_summary=args_summary[:200])
+
 
                     elif evt_type == "hermes_trace":
                         yield send(
@@ -8964,6 +9014,24 @@ def api_ai_task_execute():
                                 status='done' if _ok else 'error',
                             )
 
+                        # 发送工具调用结束事件
+                        try:
+                            _exec_evt_collector.emit("tool_call_end", tool=tool_name, result_preview=result_preview[:300])
+                        except Exception:
+                            # Use timeline formatter for tool_call_end
+                            try:
+                                from timeline_formatter import format_timeline_event
+                                timeline_evt = format_timeline_event("tool_call_end", {
+                                    "tool": tool_name,
+                                    "result_preview": result_preview[:300],
+                                })
+                                if timeline_evt:
+                                    yield send("timeline", **timeline_evt.to_sse_dict())
+                            except Exception:
+                                yield send("timeline", event_type="tool_call_end", tool=tool_name, result_preview=result_preview[:300])
+
+                            pass
+
                     elif evt_type == "action_records":
                         for rec in (evt_data if isinstance(evt_data, list) else []):
                             yield send('action_record', **rec)
@@ -9020,6 +9088,29 @@ def api_ai_task_execute():
                             final_plan = None
                         reply_text = (evt_data.get('reply') or "").strip() if isinstance(evt_data, dict) else ""
                         # 避免 reply + done.reply 重复刷同一段说明
+                        # 发送执行完成事件
+                        # 发送执行完成事件
+                        try:
+                            _exec_evt_collector.emit("done",
+                                total_rounds=round_idx if "round_idx" in dir() else 0,
+                                failed=bool(hermes_failed),
+                                tools_used=list((done_meta or {}).get("tools_used") or []),
+                            )
+                            # Use timeline formatter for done
+                            try:
+                                from timeline_formatter import format_timeline_event
+                                timeline_evt = format_timeline_event("done", {
+                                    "failed": bool(hermes_failed),
+                                    "tools_used": list((done_meta or {}).get("tools_used") or []),
+                                })
+                                if timeline_evt:
+                                    yield send("timeline", **timeline_evt.to_sse_dict())
+                            except Exception:
+                                yield send("timeline", event_type="done", failed=bool(hermes_failed))
+                        except Exception:
+                            pass
+
+
                         if reply_text and reply_text.strip() != last_reply_sent.strip():
                             last_reply_sent = reply_text
                             yield send('reply', text=reply_text)
@@ -19885,6 +19976,7 @@ if __name__ == '__main__':
         _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
 
     app.run(debug=_debug, host=_host, port=_port, threaded=True)
+
 
 
 

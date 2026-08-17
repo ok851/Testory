@@ -1,4 +1,4 @@
-"""
+﻿"""
 Multi-turn AI test chat with OpenAI-style tool calling: hermes_execute + refine_test_plan.
 
 Enable with environment variable AI_CHAT_TOOLS_ENABLE=1.
@@ -1354,6 +1354,35 @@ def prefer_outer_desktop_tools(*, platform_type: str = "", message: str = "") ->
     """桌面任务是否走外层 windows_*（禁止再包一层 hermes_execute 空转）。"""
     return _should_enable_desktop_windows_tools(platform_type, message)
 
+def _emit_tool_registry_audit_event() -> None:
+    try:
+        from execution_events import ExecutionEventCollector, TOOL_REGISTERED
+        from agent_tool_registry import describe_registry
+        collector = ExecutionEventCollector()
+        collector.emit(TOOL_REGISTERED, registry=describe_registry())
+    except Exception:
+        pass
+
+
+def _api_execution_tool_schema() -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "api_call",
+            "description": "以 API 通道执行请求或验证（与 UI 执行并列）。适用于可靠接口调用、前置校验、结果核对或 UI 失败后的降级执行。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spec": {"type": "string", "description": "API 请求说明或 spec 引用"},
+                    "method": {"type": "string", "description": "GET/POST/PUT/DELETE 等"},
+                    "url": {"type": "string", "description": "请求地址"},
+                    "expected_status": {"type": "integer", "description": "期望状态码"},
+                    "expected_body": {"type": "string", "description": "期望响应片段"},
+                },
+                "required": ["spec"],
+            },
+        },
+    }
 
 def chat_tool_schemas(
     *,
@@ -1430,10 +1459,14 @@ def chat_tool_schemas(
                             }
                         },
                         "required": ["adjustment"],
-                    },
                 },
-            }
-        )
+                "required": ["adjustment"],
+            },
+        },
+    )
+    import os as _os
+    if (_os.getenv("AGENT_API_EXECUTION_ENABLE") or "").strip().lower() in ("1", "true", "yes", "on"):
+        schemas.append(_api_execution_tool_schema())
     return schemas
 
 
@@ -3022,6 +3055,25 @@ def run_ai_chat_with_tools(
                     pass
                 if name.startswith("mobile_"):
                     _record_mobile_tool_outcome(meta, name, result_text)
+            elif name == "api_call":
+                # api_call: API执行通道，与UI执行并列
+                try:
+                    from agent_api_runner import run_temp_http, run_api_case, summarize_for_agent
+                    _case_id = (args or {}).get("case_id") or (call_args or {}).get("case_id")
+                    if _case_id:
+                        api_result = run_api_case(int(_case_id))
+                    else:
+                        api_result = run_temp_http(
+                            method=str((args or {}).get("method") or "GET"),
+                            url=str((args or {}).get("url") or ""),
+                            headers=(args or {}).get("headers") if isinstance((args or {}).get("headers"), dict) else None,
+                            body=(args or {}).get("body"),
+                            timeout_sec=float((args or {}).get("timeout_sec") or 30.0),
+                        )
+                    result_text = summarize_for_agent(api_result)
+                except Exception as _api_ex:
+                    result_text = json.dumps({"ok": False, "error": f"api_call执行失败: {_api_ex}"}, ensure_ascii=False)
+                meta["tools_used"].append("api_call")
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 
@@ -3923,6 +3975,25 @@ def run_ai_chat_with_tools_stream(
                     pass
                 if name.startswith("mobile_"):
                     _record_mobile_tool_outcome(meta, name, result_text)
+            elif name == "api_call":
+                # api_call: API执行通道（流式路径）
+                try:
+                    from agent_api_runner import run_temp_http, run_api_case, summarize_for_agent
+                    _case_id = (args or {}).get("case_id") or (call_args or {}).get("case_id")
+                    if _case_id:
+                        api_result = run_api_case(int(_case_id))
+                    else:
+                        api_result = run_temp_http(
+                            method=str((args or {}).get("method") or "GET"),
+                            url=str((args or {}).get("url") or ""),
+                            headers=(args or {}).get("headers") if isinstance((args or {}).get("headers"), dict) else None,
+                            body=(args or {}).get("body"),
+                            timeout_sec=float((args or {}).get("timeout_sec") or 30.0),
+                        )
+                    result_text = summarize_for_agent(api_result)
+                except Exception as _api_ex:
+                    result_text = json.dumps({"ok": False, "error": f"api_call执行失败: {_api_ex}"}, ensure_ascii=False)
+                meta["tools_used"].append("api_call")
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 
@@ -4400,3 +4471,4 @@ def run_ai_chat_with_tools_stream(
             return
 
     yield ("error", f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务")
+

@@ -1,0 +1,41 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-0b6a6896",
+    "content_hash": "65edd920a998",
+    "created_at": "2026-08-17T08:27:24.882304+00:00",
+    "message": "??????? (run y6)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "y6",
+      "stages": [
+        {
+          "id": "stage-1",
+          "layer": "api",
+          "sync_point": "done",
+          "request": {
+            "method": "GET",
+            "url": "http://example.test/ok"
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "field": "balance",
+          "sources": {
+            "api": "bal_api",
+            "web": "bal_web"
+          }
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "api"
+    ]
+  }
+]

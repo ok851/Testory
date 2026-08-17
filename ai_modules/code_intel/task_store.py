@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """异步 CodeChange 任务持久化（data/ci_code_change/）。"""
 
 from __future__ import annotations
@@ -240,5 +240,11 @@ def create_queued_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         "rollback_hint": None,
         "warnings": [],
         "error": None,
+        "review_gate": {
+            "enabled": True,
+            "reason": "default_review_before_regression_or_auto_trigger",
+            "auto_approve_allowed": False,
+        },
     }
     return save_task(rec)
+

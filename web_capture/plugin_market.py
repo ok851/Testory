@@ -184,6 +184,7 @@ _MOBILE_RUNTIME_PLUGIN_IDS = frozenset(
     {
         "mobile-android-platform-tools",
         "mobile-testory-assistant",
+        "mobile-scrcpy",
     }
 )
 
@@ -210,6 +211,9 @@ def _mobile_runtime_installed(plugin_id: str) -> bool:
             prepared = is_assistant_prepared()
             on_device = assistant_installed_on_device(udid) if udid else False
             return prepared or on_device
+        if pid == "mobile-scrcpy":
+            from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+            return bool(get_installed_scrcpy_exe())
     except Exception:
         return False
     return False
@@ -396,6 +400,11 @@ def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
         from mobile_assistant_bundles import get_testory_assistant_catalog_entry
 
         items.append(get_testory_assistant_catalog_entry())
+    except Exception:
+        pass
+    try:
+        from mobile_scrcpy_bundles import get_scrcpy_catalog_entry
+        items.append(get_scrcpy_catalog_entry())
     except Exception:
         pass
     # 运行组件（Chromium、OpenCV 等）
@@ -681,6 +690,12 @@ def install_plugin_sync(
                     }
                     _save_state(state)
                 return result
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+        if pid == "mobile-scrcpy":
+            try:
+                from mobile_scrcpy_bundles import install_mobile_scrcpy
+                return install_mobile_scrcpy(progress_cb=progress_cb)
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
         return {"success": False, "error": "未知的运行时插件"}

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """插件市场后台安装任务（切换页面不中断）。"""
 
 from __future__ import annotations

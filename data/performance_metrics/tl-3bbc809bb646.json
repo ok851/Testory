@@ -1,0 +1,49 @@
+{
+  "run_id": "tl-3bbc809bb646",
+  "plan_id": "y6",
+  "scenario": "未命名场景",
+  "started_at": "2026-08-17T08:34:03.143943+00:00",
+  "finished_at": "2026-08-17T08:34:03.149058+00:00",
+  "total_ms": 2.0,
+  "success": false,
+  "stage_metrics": [
+    {
+      "stage_id": "stage-1",
+      "layer": "api",
+      "elapsed_ms": 0.0,
+      "ok": true,
+      "steps_executed": 0,
+      "executor": "",
+      "sync_wait_ms": 0
+    }
+  ],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 2.0,
+  "bottleneck": {
+    "type": "distributed",
+    "detail": {
+      "stage_id": "stage-1",
+      "layer": "api",
+      "elapsed_ms": 0.0,
+      "percentage": 0.0
+    }
+  },
+  "summary": {
+    "stage_count": 1,
+    "total_stage_ms": 0.0,
+    "avg_stage_ms": 0.0,
+    "max_stage_ms": 0.0,
+    "min_stage_ms": 0.0,
+    "layer_summary": {
+      "api": {
+        "count": 1,
+        "total_ms": 0.0,
+        "avg_ms": 0.0,
+        "max_ms": 0.0
+      }
+    }
+  }
+}

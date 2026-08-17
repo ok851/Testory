@@ -1,0 +1,57 @@
+﻿[
+  {
+    "case_id": "wechat_search_box",
+    "description": "微信搜索框定位",
+    "app": "WeChat",
+    "uia_locator": "搜索",
+    "expected_text": "搜索",
+    "ocr_hint": "搜索",
+    "screenshot": "wechat_home.png",
+    "platform": "desktop",
+    "difficulty": "medium"
+  },
+  {
+    "case_id": "browser_address_bar",
+    "description": "浏览器地址栏定位",
+    "app": "Chrome",
+    "uia_locator": "地址和搜索栏",
+    "expected_text": "地址",
+    "ocr_hint": "地址",
+    "screenshot": "chrome_address.png",
+    "platform": "desktop",
+    "difficulty": "easy"
+  },
+  {
+    "case_id": "erp_save_button",
+    "description": "ERP保存按钮定位",
+    "app": "ERP",
+    "uia_locator": "保存",
+    "expected_text": "保存",
+    "ocr_hint": "保存",
+    "screenshot": "erp_form.png",
+    "platform": "desktop",
+    "difficulty": "hard"
+  },
+  {
+    "case_id": "dialog_close_button",
+    "description": "弹窗关闭按钮定位",
+    "app": "System",
+    "uia_locator": "关闭",
+    "expected_text": "关闭",
+    "ocr_hint": "X",
+    "screenshot": "dialog.png",
+    "platform": "desktop",
+    "difficulty": "easy"
+  },
+  {
+    "case_id": "custom_drawn_control",
+    "description": "自绘控件定位",
+    "app": "Custom",
+    "uia_locator": null,
+    "expected_text": null,
+    "ocr_hint": "自绘",
+    "screenshot": "custom_control.png",
+    "platform": "desktop",
+    "difficulty": "hard"
+  }
+]

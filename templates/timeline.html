@@ -1,0 +1,445 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>执行时间线</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .timeline {
+            position: relative;
+            padding: 20px 0;
+        }
+        
+        .timeline-event {
+            display: flex;
+            align-items: flex-start;
+            padding: 16px 0;
+            border-left: 3px solid #e0e0e0;
+            margin-left: 30px;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        
+        .timeline-event:hover {
+            background: #f9f9f9;
+            border-radius: 8px;
+        }
+        
+        .timeline-event::before {
+            content: '';
+            position: absolute;
+            left: -8px;
+            top: 20px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--event-color, #2196F3);
+            border: 3px solid white;
+            box-shadow: 0 0 0 2px var(--event-color, #2196F3);
+        }
+        
+        .timeline-event:last-child {
+            border-left-color: transparent;
+        }
+        
+        .timeline-icon {
+            font-size: 24px;
+            margin-right: 16px;
+            min-width: 40px;
+            text-align: center;
+        }
+        
+        .timeline-content {
+            flex: 1;
+        }
+        
+        .timeline-title {
+            font-weight: 600;
+            font-size: 15px;
+            margin-bottom: 6px;
+            color: #333;
+        }
+        
+        .timeline-description {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.5;
+        }
+        
+        .timeline-time {
+            font-size: 12px;
+            color: #999;
+            margin-top: 6px;
+        }
+        
+        .timeline-data {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #666;
+            display: none;
+        }
+        
+        .timeline-event.expanded .timeline-data {
+            display: block;
+        }
+        
+        .severity-success .timeline-title { color: #2E7D32; }
+        .severity-error .timeline-title { color: #C62828; }
+        .severity-warning .timeline-title { color: #EF6C00; }
+        .severity-info .timeline-title { color: #1565C0; }
+        
+        .category-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-right: 8px;
+        }
+        
+        .category-route { background: #E3F2FD; color: #1565C0; }
+        .category-tool { background: #F3E5F5; color: #7B1FA2; }
+        .category-assertion { background: #E8F5E9; color: #2E7D32; }
+        .category-heal { background: #FFF3E0; color: #EF6C00; }
+        .category-risk { background: #FFEBEE; color: #C62828; }
+        .category-system { background: #F5F5F5; color: #616161; }
+        
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: #2196F3;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #1976D2;
+        }
+        
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        
+        .btn-danger {
+            background: #F44336;
+            color: white;
+        }
+        
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+        }
+        
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+        
+        .status-count {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .status-label {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 执行时间线</h1>
+        
+        <div class="controls">
+            <button class="btn btn-primary" onclick="loadMockData()">加载示例数据</button>
+            <button class="btn btn-secondary" onclick="clearTimeline()">清空时间线</button>
+            <button class="btn btn-secondary" onclick="toggleAllData()">展开/收起数据</button>
+        </div>
+        
+        <div class="status-bar" id="statusBar">
+            <div class="status-item">
+                <div class="status-dot" style="background: #4CAF50"></div>
+                <div>
+                    <div class="status-count" id="successCount">0</div>
+                    <div class="status-label">成功</div>
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-dot" style="background: #F44336"></div>
+                <div>
+                    <div class="status-count" id="errorCount">0</div>
+                    <div class="status-label">失败</div>
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-dot" style="background: #FF9800"></div>
+                <div>
+                    <div class="status-count" id="warningCount">0</div>
+                    <div class="status-label">警告</div>
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-dot" style="background: #2196F3"></div>
+                <div>
+                    <div class="status-count" id="infoCount">0</div>
+                    <div class="status-label">信息</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="timeline" id="timeline">
+            <div class="empty-state">
+                <div class="empty-state-icon">📭</div>
+                <div>暂无执行事件</div>
+                <div style="font-size: 13px; margin-top: 8px;">点击"加载示例数据"查看效果</div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let events = [];
+        let allExpanded = false;
+        
+        function formatTime(timestamp) {
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit' 
+            });
+        }
+        
+        function addEvent(event) {
+            events.push(event);
+            renderTimeline();
+            updateStatus();
+        }
+        
+        function renderTimeline() {
+            const container = document.getElementById('timeline');
+            
+            if (events.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <div>暂无执行事件</div>
+                        <div style="font-size: 13px; margin-top: 8px;">点击"加载示例数据"查看效果</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = events.map((event, index) => `
+                <div class="timeline-event severity-${event.severity}" 
+                     style="--event-color: ${event.color}"
+                     onclick="toggleEvent(${index})">
+                    <div class="timeline-icon">${event.icon}</div>
+                    <div class="timeline-content">
+                        <div class="timeline-title">
+                            <span class="category-badge category-${event.category}">${event.category}</span>
+                            ${event.title}
+                        </div>
+                        <div class="timeline-description">${event.description}</div>
+                        <div class="timeline-time">${formatTime(event.timestamp)}</div>
+                        ${event.data ? `
+                            <div class="timeline-data">
+                                <pre>${JSON.stringify(event.data, null, 2)}</pre>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function toggleEvent(index) {
+            const eventElements = document.querySelectorAll('.timeline-event');
+            eventElements[index].classList.toggle('expanded');
+        }
+        
+        function toggleAllData() {
+            allExpanded = !allExpanded;
+            const eventElements = document.querySelectorAll('.timeline-event');
+            eventElements.forEach(el => {
+                if (allExpanded) {
+                    el.classList.add('expanded');
+                } else {
+                    el.classList.remove('expanded');
+                }
+            });
+        }
+        
+        function updateStatus() {
+            const successCount = events.filter(e => e.severity === 'success').length;
+            const errorCount = events.filter(e => e.severity === 'error').length;
+            const warningCount = events.filter(e => e.severity === 'warning').length;
+            const infoCount = events.filter(e => e.severity === 'info').length;
+            
+            document.getElementById('successCount').textContent = successCount;
+            document.getElementById('errorCount').textContent = errorCount;
+            document.getElementById('warningCount').textContent = warningCount;
+            document.getElementById('infoCount').textContent = infoCount;
+        }
+        
+        function clearTimeline() {
+            events = [];
+            renderTimeline();
+            updateStatus();
+        }
+        
+        async function loadMockData() {
+            try {
+                const response = await fetch('/api/timeline/mock');
+                const data = await response.json();
+                if (data.ok) {
+                    events = data.events;
+                    renderTimeline();
+                    updateStatus();
+                }
+            } catch (error) {
+                console.error('Failed to load mock data:', error);
+                // Fallback to local mock data
+                events = [
+                    {
+                        event_type: "route_decided",
+                        category: "route",
+                        severity: "info",
+                        title: "桌面快路径激活",
+                        description: "平台: desktop, 外层工具直接调用",
+                        timestamp: Date.now() / 1000 - 10,
+                        icon: "🖥️",
+                        color: "#4CAF50",
+                    },
+                    {
+                        event_type: "tool_call_start",
+                        category: "tool",
+                        severity: "info",
+                        title: "桌面操作: windows_click_element",
+                        description: "目标: 搜索按钮",
+                        timestamp: Date.now() / 1000 - 8,
+                        icon: "🖱️",
+                        color: "#FF5722",
+                    },
+                    {
+                        event_type: "tool_call_end",
+                        category: "tool",
+                        severity: "success",
+                        title: "工具完成: windows_click_element",
+                        description: "点击成功",
+                        timestamp: Date.now() / 1000 - 6,
+                        icon: "✅",
+                        color: "#4CAF50",
+                    },
+                    {
+                        event_type: "assertion_start",
+                        category: "assertion",
+                        severity: "info",
+                        title: "开始断言: db_scalar",
+                        description: "检查用户状态",
+                        timestamp: Date.now() / 1000 - 4,
+                        icon: "🔍",
+                        color: "#9C27B0",
+                    },
+                    {
+                        event_type: "assertion_end",
+                        category: "assertion",
+                        severity: "success",
+                        title: "断言通过: db_scalar",
+                        description: "用户状态正确",
+                        timestamp: Date.now() / 1000 - 2,
+                        icon: "✅",
+                        color: "#4CAF50",
+                    },
+                    {
+                        event_type: "done",
+                        category: "system",
+                        severity: "success",
+                        title: "执行完成",
+                        description: "使用了 3 个工具",
+                        timestamp: Date.now() / 1000,
+                        icon: "✅",
+                        color: "#4CAF50",
+                    },
+                ];
+                renderTimeline();
+                updateStatus();
+            }
+        }
+        
+        // Auto-load mock data for demo
+        // loadMockData();
+    </script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+{
+  "audit_id": "cea-8d14a9a707e6",
+  "created_at": "2026-08-17T09:17:20.810307+00:00",
+  "status": "failed",
+  "duration": 0.0,
+  "error": "CROSS_END_ASSERT_FAILED | 跨端断言失败 1 条",
+  "flow_name": "未命名场景",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"y6\", \"scenario\": \"未命名场景\", \"test_type\": \"cross_end\", \"user_id\": \"\", \"project_id\": null, \"trigger_source\": \"ui\", \"agent_run_id\": \"\", \"error_code\": \"CROSS_END_ASSERT_FAILED\", \"gate_passed\": false, \"success\": false, \"lock\": \"skipped\", \"assertion_passed\": 0, \"assertion_failed\": 1, \"skipped_failure_stages\": [], \"variables\": {\"bal_api\": \"100\", \"bal_web\": \"200\", \"stage-1.bal_api\": \"100\"}, \"stage_count\": 1, \"risk\": [{\"stage_id\": \"stage-1\", \"level\": \"L0\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 1, \"ok_assert\": true}]}",
+  "expected_text": "{\"plan_id\": \"y6\", \"project_id\": null, \"agent_run_id\": \"\", \"audit_id\": \"cea-8d14a9a707e6\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": true,
+      "status_code": 200,
+      "stage_id": "stage-1",
+      "layer": "api",
+      "risk_level": "L0",
+      "risk_decision": "allow",
+      "risk_events": [
+        {
+          "at": 1786958240.810307,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L0",
+          "stage_id": "stage-1",
+          "detail": {
+            "auto": true
+          }
+        }
+      ],
+      "error_message": null,
+      "error_code": null,
+      "extracted": {},
+      "warnings": [],
+      "evidence": [],
+      "schema": "testory.stage_result/v1"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "y6",
+    "scenario": "未命名场景",
+    "test_type": "cross_end",
+    "user_id": "",
+    "project_id": null,
+    "trigger_source": "ui",
+    "agent_run_id": "",
+    "error_code": "CROSS_END_ASSERT_FAILED",
+    "gate_passed": false,
+    "success": false,
+    "lock": "skipped",
+    "assertion_passed": 0,
+    "assertion_failed": 1,
+    "skipped_failure_stages": [],
+    "variables": {
+      "bal_api": "100",
+      "bal_web": "200",
+      "stage-1.bal_api": "100"
+    },
+    "stage_count": 1,
+    "risk": [
+      {
+        "stage_id": "stage-1",
+        "level": "L0",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 1,
+        "ok_assert": true
+      }
+    ]
+  }
+}

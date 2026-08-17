@@ -116,6 +116,75 @@ def adb_path_source() -> str:
     return "default"
 
 
+# =====================================================================
+# scrcpy 投屏 + 反控
+# =====================================================================
+
+def scrcpy_path() -> str:
+    """
+    解析 scrcpy 可执行文件路径。优先级：
+    1) 插件市场已安装的 scrcpy
+    2) 环境变量 SCRCPY_PATH
+    3) client_config.mobile_defaults.scrcpy_path
+    4) 回退字符串 scrcpy（依赖系统 PATH）
+    """
+    try:
+        from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+
+        bundled = get_installed_scrcpy_exe()
+        if bundled:
+            return bundled
+    except Exception:
+        pass
+    env_path = (os.environ.get("SCRCPY_PATH") or "").strip()
+    if env_path and Path(env_path).is_file():
+        return env_path
+    cfg = _load_mobile_defaults()
+    cfg_path = (cfg.get("scrcpy_path") or "").strip()
+    if cfg_path and Path(cfg_path).is_file():
+        return cfg_path
+    return env_path or "scrcpy"
+
+
+def scrcpy_available() -> bool:
+    """scrcpy 是否已通过插件市场安装。"""
+    try:
+        from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+
+        return bool(get_installed_scrcpy_exe())
+    except Exception:
+        return False
+
+
+def scrcpy_mirror_fps() -> int:
+    """scrcpy 投屏帧率（默认 30）。"""
+    try:
+        return max(1, min(120, int(os.environ.get("SCRCPY_MIRROR_FPS", "30"))))
+    except ValueError:
+        return 30
+
+
+def scrcpy_max_size() -> int:
+    """scrcpy 投屏最大分辨率（0=不限制）。"""
+    try:
+        return max(0, min(3840, int(os.environ.get("SCRCPY_MAX_SIZE", "0"))))
+    except ValueError:
+        return 0
+
+
+def scrcpy_bridge_port() -> int:
+    """scrcpy WebSocket 桥接端口（默认 8767，避免与桌面网关 8766 冲突）。"""
+    try:
+        return max(1024, min(65535, int(os.environ.get("MOBILE_SCRCPY_BRIDGE_PORT") or os.environ.get("SCRCPY_BRIDGE_PORT") or "8767")))
+    except ValueError:
+        return 8767
+
+
+def scrcpy_bridge_url(client_host: str = "127.0.0.1") -> str:
+    """scrcpy WebSocket 桥接 URL。"""
+    return f"ws://{client_host}:{scrcpy_bridge_port()}/scrcpy"
+
+
 def mobile_screenshot_shrink_factor() -> float:
     """VLM 截图缩小倍数（Midscene screenshotShrinkFactor 对标，默认 2）。"""
     raw = (
@@ -170,14 +239,14 @@ def mirror_format() -> str:
 
 
 def mirror_backend() -> str:
-    """投屏后端（scrcpy 已下线，仅保留 screencap）。"""
-    return "screencap"
+    """投屏后端：若 scrcpy 可用则使用 WebSocket 推流，否则 none。"""
+    return resolve_mirror_backend()
 
 
 def resolve_mirror_backend(udid: str = "") -> str:
-    """[投屏已下线] 统一使用截图模式。"""
+    """根据 scrcpy 可用性决定投屏后端。"""
     del udid
-    return "screencap"
+    return "scrcpy_ws" if scrcpy_available() else "none"
 
 
 def default_device_name() -> str:
@@ -327,9 +396,15 @@ def public_config() -> Dict[str, Any]:
         "agent_ws_url": _mobile_agent_ws_public(),
         "mirror_backend": mirror_backend(),
         "mirror_fps": mirror_fps(),
+        "scrcpy_available": scrcpy_available(),
+        "scrcpy_path": scrcpy_path() if scrcpy_available() else "",
+        "scrcpy_bridge_port": scrcpy_bridge_port(),
+        "mirror_ws_url": scrcpy_bridge_url() if scrcpy_available() else "",
+        "mirror_stream_url": "",
         "hint": (
             "连接真机 USB、无线调试或模拟器后点击「连接设备」。"
             "录制请使用手机端助手 APK。"
+            "安装 scrcpy 插件后启用投屏+反控。"
         ),
         "auto_start_appium": False,
     }
@@ -478,3 +553,6 @@ def maestro_report_retention_days() -> int:
         return max(1, min(90, int(raw)))
     except ValueError:
         return 7
+
+
+

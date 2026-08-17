@@ -90,6 +90,18 @@
 
         <aside class="ms-panel ms-panel--right">
             <div class="ms-panel-scroll">
+            <section class="ms-section" id="msMirrorSection">
+                <h2 class="ms-section-title"><i class="fas fa-tv text-emerald-500"></i> 投屏区域 <span id="msMirrorMode" class="ms-mirror-mode ms-mirror-mode--idle" title="投屏方式">未连接</span></h2>
+                <div class="ms-mirror-wrap" style="position:relative;width:100%;max-width:360px;margin:0 auto;">
+                    <canvas id="msMirrorCanvas" class="ms-mirror-canvas" aria-label="设备画面" style="display:none;width:100%;border-radius:8px;background:#000;"></canvas>
+                    <div id="msMirrorPlaceholder" class="ms-mirror-placeholder" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:220px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;color:#94a3b8;text-align:center;padding:1rem;">
+                        <i class="fas fa-mobile-alt fa-2x mb-3 opacity-40"></i>
+                        <p>请在插件市场安装 scrcpy 以启用投屏+反控</p>
+                        <p class="ms-muted" style="font-size:12px;">连接设备后此处显示实时画面</p>
+                    </div>
+                </div>
+            </section>
+
             <section class="ms-section">
                 <h2 class="ms-section-title"><i class="fas fa-info-circle text-emerald-500"></i> 使用说明</h2>
                 <div class="ms-sync-hint">
@@ -126,5 +138,65 @@
 {% else %}
 <script id="__mobileStudioCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=openclaw_gateway_configured)|tojson }}</script>
 {% endif %}
+            <script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}?v=20260626b"></script>
 <script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260728d"></script>
+
+<!-- scrcpy mirror status check + init -->
+<script>
+(function(){
+    function escHtml(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+    function initMirror(){
+        var canvas = document.getElementById('msMirrorCanvas');
+        var placeholder = document.getElementById('msMirrorPlaceholder');
+        var modeBadge = document.getElementById('msMirrorMode');
+        if(!canvas || !placeholder) return;
+
+        fetch('/api/mobile/mirror/status')
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+            if(!data.success || !data.scrcpy_available){
+                canvas.style.display='none';
+                placeholder.style.display='flex';
+                if(modeBadge){ modeBadge.textContent='未安装'; modeBadge.className='ms-mirror-mode ms-mirror-mode--idle'; }
+                return;
+            }
+            placeholder.style.display='none';
+            canvas.style.display='block';
+            if(modeBadge){
+                var backend=data.mirror_backend||'scrcpy_ws';
+                modeBadge.textContent=backend==='scrcpy_ws'?'scrcpy 高帧+反控':'投屏异常';
+                modeBadge.className='ms-mirror-mode ms-mirror-mode--'+(backend==='scrcpy_ws'?'connected':'idle');
+            }
+            if(typeof ScrcpyMirrorPlayer==='undefined') return;
+            var wsUrl=data.bridge && data.bridge.ws_url ? data.bridge.ws_url : null;
+            var streamUrl=data.mirror_stream_url||'';
+            if(!wsUrl && !streamUrl) return;
+            var player=new ScrcpyMirrorPlayer({canvas:canvas, wsUrl:wsUrl||'', streamUrl:streamUrl});
+            player.start().catch(function(err){ canvas.style.display='none'; placeholder.style.display='flex'; placeholder.innerHTML='<p style="color:#dc2626;">'+(err&&err.message?escHtml(err.message):'scrcpy 投屏启动失败')+'</p>'; if(modeBadge){modeBadge.textContent='投屏异常';modeBadge.className='ms-mirror-mode ms-mirror-mode--idle';} });
+            // MVP pointer → tap/swipe
+            var dragging=false, sx=0, sy=0;
+            canvas.addEventListener('pointerdown',function(e){
+                dragging=true; sx=e.offsetX; sy=e.offsetY;
+            });
+            canvas.addEventListener('pointerup',function(e){
+                if(!dragging){return;}
+                dragging=false;
+                var dx=e.offsetX-sx, dy=e.offsetY-sy;
+                var w=canvas.width||1, h=canvas.height||1;
+                if(Math.abs(dx)<8 && Math.abs(dy)<8){
+                    player.sendTap(e.offsetX,e.offsetY,w,h);
+                } else {
+                    player.sendSwipe(sx,sy,e.offsetX,e.offsetY,w,h);
+                }
+            });
+            canvas.addEventListener('pointermove',function(e){});
+        }).catch(function(){});
+    }
+    if(document.readyState==='loading'){
+        document.addEventListener('DOMContentLoaded',initMirror);
+    } else {
+        initMirror();
+    }
+})();
+</script>
 {% endblock %}
