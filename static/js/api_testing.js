@@ -250,6 +250,7 @@
     let addCaseUiMode = false;
     let allCases = [];
     let importApiPreviewItems = null;
+    let importApiVariables = null;
 
     function qs(name) {
         return new URL(window.location.href).searchParams.get(name);
@@ -552,6 +553,7 @@
             return;
         }
         importApiPreviewItems = null;
+        importApiVariables = null;
         document.getElementById('importApiPreviewBox').style.display = 'none';
         document.getElementById('importApiPreviewTable').innerHTML = '';
         document.getElementById('importApiPreviewHint').textContent = '';
@@ -594,7 +596,9 @@
                 return;
             }
             importApiPreviewItems = d.items || [];
-            hint.textContent = '共 ' + importApiPreviewItems.length + ' 条（' + (d.kind || '') + '）';
+            importApiVariables = d.variables || null;
+            var varCount = importApiVariables ? Object.keys(importApiVariables).filter(function(k) { return k !== 'baseUrl'; }).length : 0;
+            hint.textContent = '共 ' + importApiPreviewItems.length + ' 条（' + (d.kind || '') + '）' + (varCount > 0 ? '，含 ' + varCount + ' 个变量' : '');
             document.getElementById('importApiPreviewBox').style.display = 'block';
             let html = '<thead><tr><th>方法</th><th>名称</th><th>URL</th></tr></thead><tbody>';
             importApiPreviewItems.slice(0, 80).forEach(function (it) {
@@ -621,7 +625,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             ...cred,
-            body: JSON.stringify({ project_id: projectId, case_name: name, items: importApiPreviewItems }),
+            body: JSON.stringify({ project_id: projectId, case_name: name, items: importApiPreviewItems, variables: importApiVariables }),
         });
         const { ok, data: d } = await parseJsonResponse(r);
         if (!ok || !d.success) {
@@ -630,7 +634,11 @@
         }
         closeImportApiModal();
         loadApiCases();
-        toastOk('已创建用例 #' + d.case_id + '，共 ' + (d.steps_created || 0) + ' 个请求');
+        var msg = '已创建用例 #' + d.case_id + '，共 ' + (d.steps_created || 0) + ' 个请求';
+        if (d.variables_created > 0) {
+            msg += '，已导入 ' + d.variables_created + ' 个变量';
+        }
+        toastOk(msg);
     }
 
     document.addEventListener('DOMContentLoaded', function () {

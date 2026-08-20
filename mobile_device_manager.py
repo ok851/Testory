@@ -478,7 +478,7 @@ def pick_default_device() -> Optional[Dict[str, Any]]:
 
 
 def capture_screenshot_png(udid: str = "") -> Optional[bytes]:
-    """通过 adb screencap 获取 PNG 字节（用于 canvas 投屏）。"""
+    """通过 adb screencap 获取 PNG 字节（供 AI 视觉定位、步骤诊断等使用，非投屏降级）。"""
     ok, _ = check_adb_available()
     if not ok:
         return None

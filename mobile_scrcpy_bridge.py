@@ -3,7 +3,7 @@
 scrcpy 视频 WebSocket 桥接（真机高帧率画布投屏）。
 
 将 scrcpy-server H.264 帧通过 WebSocket 推送到浏览器 WebCodecs 解码。
-未安装 scrcpy 时由 adb screencap 降级。
+未安装 scrcpy 或内嵌画布不可用时，由前端启动手机画面投屏（不再降级为 adb screencap）。
 """
 
 from __future__ import annotations
@@ -91,14 +91,14 @@ def _bridge_host() -> str:
 def _stable_serial_port(serial: str) -> int:
     """跨进程稳定的 adb forward 端口（勿用 hash()，Python 会随机盐）。"""
     key = (serial or "emulator-5554").strip() or "emulator-5554"
-    bucket = zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF
+    bucket = zlib.crc32(key.encode("utf-8")) & 0x7FFFFFFF  # must fit in Java int
     return 27183 + (bucket % 500)
 
 
 def _stable_serial_scid(serial: str) -> str:
     """scrcpy 3.x 会话 ID（8 位 hex，按 serial 稳定生成）。"""
     key = (serial or "emulator-5554").strip() or "emulator-5554"
-    bucket = zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF
+    bucket = zlib.crc32(key.encode("utf-8")) & 0x7FFFFFFF
     return f"{bucket:08x}"
 
 
@@ -138,7 +138,7 @@ def read_forward_handshake(sock: socket.socket) -> bytes:
 
 
 def _scrcpy_control_enabled() -> bool:
-    raw = (os.environ.get("MOBILE_SCRCPY_CONTROL") or "0").strip().lower()
+    raw = (os.environ.get("MOBILE_SCRCPY_CONTROL") or "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -227,7 +227,7 @@ def _vendor_scrcpy_dir() -> Path:
 
 
 def _sync_scrcpy_server_to_vendor() -> None:
-    """将插件目录中的 scrcpy-server 同步到 static/vendor，便于打包与降级检测。"""
+    """将插件目录中的 scrcpy-server 同步到 static/vendor，便于打包与可用性检测。"""
     vendor = _vendor_scrcpy_dir()
     if list(vendor.glob("scrcpy-server*")):
         return
@@ -253,6 +253,22 @@ def _sync_scrcpy_server_to_vendor() -> None:
                 uat_logger.debug("同步 scrcpy-server 失败: %s", exc)
             return
 
+
+
+def _kill_stale_scrcpy_servers(serial: str) -> None:
+    """清理设备上残留的 scrcpy-server 进程，避免 abstract socket 被占用。"""
+    try:
+        r = _run_adb(serial, "shell", "pkill -f com.genymobile.scrcpy.Server", timeout=8)
+        if r.returncode == 0:
+            uat_logger.info("已清理残留 scrcpy-server 进程 serial=%s", serial)
+            time.sleep(0.5)
+    except Exception:
+        pass
+    # also try kill -9
+    try:
+        _run_adb(serial, "shell", "pkill -9 -f com.genymobile.scrcpy.Server", timeout=8)
+    except Exception:
+        pass
 
 def find_scrcpy_server_jar() -> Optional[str]:
     """定位 scrcpy-server（与 scrcpy 可执行文件同目录或 vendor）。"""
@@ -335,50 +351,9 @@ def _scrcpy_server_version() -> str:
 
 
 def _version_candidates() -> list[str]:
-    """返回版本候选列表（按优先级从高到低），基于实际 jar 文件名和可执行文件版本。"""
+    """返回版本候选列表。只返回检测到的真实版本，避免版本不匹配导致 server 崩溃。"""
     primary = _scrcpy_server_version()
-    out: list[str] = []
-
-    # 核心候选（基于主版本）
-    base = re.match(r"(\d+)\.(\d+)", primary)
-    if base:
-        major, minor = int(base.group(1)), int(base.group(2))
-        # 按主版本添加候选
-        if major >= 3:
-            # 3.x: 精确版本 → 3.1 → 3.0 → 2.7 → 2.4
-            out.append(primary)
-            if primary not in ("3.1", "3.0"):
-                out.append("3.1")
-                out.append("3.0")
-            out.append("2.7")
-            out.append("2.4")
-        elif major == 2:
-            # 2.x: 精确版本 → 2.7 → 2.4 → 2.1
-            out.append(primary)
-            if minor < 7 and "2.7" not in out:
-                out.append("2.7")
-            if "2.4" not in out:
-                out.append("2.4")
-            if "2.1" not in out:
-                out.append("2.1")
-        else:
-            out.append(primary)
-            out.append("2.4")
-            out.append("2.1")
-    else:
-        out.append(primary)
-        if primary != "2.4":
-            out.append("2.4")
-        if "2.1" not in out:
-            out.append("2.1")
-
-    # 去重
-    deduped: list[str] = []
-    for v in out:
-        if v and v not in deduped:
-            deduped.append(v)
-    return deduped
-
+    return [primary] if primary else ["2.4"]
 
 def scrcpy_warm_timeout() -> float:
     raw = (os.environ.get("MOBILE_SCRCPY_WARM_TIMEOUT") or "20").strip()
@@ -410,8 +385,8 @@ def _check_device_screen_on(serial: str) -> Tuple[bool, str]:
     # 方法1：dumpsys power 检查屏幕亮灭
     code, out, err = _adb_exec(serial, "dumpsys power", timeout=10)
     text = (out + err).lower()
-    screen_on = ("mWakefulness=Awake" in text or
-                 "mWakefulness=1" in text or
+    screen_on = ("mwakefulness=awake" in text or
+                 "mwakefulness=1" in text or
                  "displaypowerstate=on" in text or
                  "mscreenon=true" in text or
                  "mscreenonearly=true" in text or
@@ -445,11 +420,35 @@ def _check_device_screen_on(serial: str) -> Tuple[bool, str]:
 
 
 def _try_wake_screen(serial: str) -> bool:
-    """尝试通过电源键唤醒屏幕。"""
+    """尝试唤醒屏幕并解锁（多种方法组合）。仅在屏幕未点亮时按电源键。"""
     try:
-        _run_adb(serial, "shell", "input keyevent 26", timeout=5)
-        _run_adb(serial, "shell", "input keyevent 82", timeout=5)  # 解锁键（大部分设备）
+        # 先检查当前屏幕状态
+        screen_on, _ = _check_device_screen_on(serial)
+        if screen_on:
+            uat_logger.info("scrcpy 屏幕已点亮 serial=%s，跳过唤醒", serial)
+            return True
+
+        # 屏幕灭了，才按电源键唤醒
+        _run_adb(serial, "shell", "input keyevent 224", timeout=5)  # KEYCODE_WAKEUP
         time.sleep(0.5)
+        # 如果 WAKEUP 不够，再试 POWER
+        screen_on2, _ = _check_device_screen_on(serial)
+        if not screen_on2:
+            _run_adb(serial, "shell", "input keyevent 26", timeout=5)  # KEYCODE_POWER
+            time.sleep(0.8)
+
+        # 上滑解锁（大部分 Android 设备）
+        _run_adb(serial, "shell", "input swipe 540 1800 540 600 300", timeout=5)
+        time.sleep(0.3)
+        # MENU key 解锁
+        _run_adb(serial, "shell", "input keyevent 82", timeout=5)   # KEYCODE_MENU
+        time.sleep(0.3)
+        # dismiss keyguard (Android 8+)
+        _run_adb(serial, "shell", "wm dismiss-keyguard", timeout=5)
+        time.sleep(0.5)
+        # 保持屏幕常亮
+        _run_adb(serial, "shell", "svc power stayon true", timeout=5)
+        time.sleep(0.3)
         ok, msg = _check_device_screen_on(serial)
         if ok:
             uat_logger.info("scrcpy 唤醒屏幕成功 serial=%s", serial)
@@ -873,7 +872,7 @@ def scrcpy_mirror_diagnostics(udid: str = "") -> Dict[str, Any]:
             diag["mirror_fallback_reason"] = "scrcpy 不可用（未找到 scrcpy.exe 或 scrcpy-server）"
         return diag
     if not jar:
-        diag["mirror_fallback_reason"] = "未找到 scrcpy-server，已降级为截图投屏"
+        diag["mirror_fallback_reason"] = "未找到 scrcpy-server，内嵌投屏不可用，可启动独立 scrcpy 窗口"
     return diag
 
 
@@ -966,6 +965,41 @@ class ScrcpyDeviceSession:
         )
         self._stderr_thread.start()
 
+    def _wait_tcp_connect(self, deadline: float) -> socket.socket:
+        """仅建立 TCP 连接（不读握手），供控制通道先建立。"""
+        last_err = None
+        while time.time() < deadline:
+            proc = self._shell_proc
+            if proc and proc.poll() is not None:
+                hint = self._stderr_hint()
+                msg = "scrcpy-server 进程已退出"
+                if hint:
+                    msg += f"：{hint}"
+                raise RuntimeError(msg)
+            try:
+                sock = socket.create_connection(("127.0.0.1", self.local_port), timeout=2)
+                sock.settimeout(20.0)
+                return sock
+            except OSError as exc:
+                last_err = exc
+            time.sleep(0.35)
+        raise RuntimeError(f"scrcpy TCP 连接超时（{last_err}）")
+
+    def _read_video_handshake(self, sock: socket.socket, deadline: float) -> bytes:
+        """从已建立的视频 socket 读取握手数据。"""
+        remaining = max(5.0, deadline - time.time())
+        sock.settimeout(remaining)
+        try:
+            device_name = read_forward_handshake(sock)
+            return device_name
+        except Exception as exc:
+            proc_alive = self._shell_proc and self._shell_proc.poll() is None
+            hint = self._stderr_hint()
+            msg = f"scrcpy 握手读取失败 ({type(exc).__name__}: {exc}, proc_alive={proc_alive})"
+            if hint:
+                msg += f" stderr={hint[:200]}"
+            raise RuntimeError(msg) from exc
+
     def _wait_tcp_handshake(self, deadline: float) -> Tuple[socket.socket, bytes]:
         last_err: Optional[Exception] = None
         while time.time() < deadline:
@@ -999,7 +1033,10 @@ class ScrcpyDeviceSession:
         serial = self.serial
         remote = "/data/local/tmp/scrcpy-server.jar"
 
-        # ① 推送 jar
+        # ① 清理残留进程（每次尝试前都清理，避免 abstract socket 被占用）
+        _kill_stale_scrcpy_servers(serial)
+
+        # ② 推送 jar
         push = _run_adb(serial, "push", self._server_jar, remote, timeout=60)
         if push.returncode != 0:
             err = (push.stderr or push.stdout or b"").decode("utf-8", errors="replace")
@@ -1039,6 +1076,7 @@ class ScrcpyDeviceSession:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
         )
         self._start_stderr_drain()
+        time.sleep(1.0)  # 等待 server 进程启动并绑定 abstract socket
 
         uat_logger.info(
             "scrcpy 尝试启动: serial=%s version=%s profile=%s fps=%d bitrate=%d max_size=%d",
@@ -1046,16 +1084,14 @@ class ScrcpyDeviceSession:
             params.max_fps, params.video_bit_rate, params.max_size,
         )
 
-        # ⑤ TCP 握手
-        sock, device_name = self._wait_tcp_handshake(time.time() + 15.0)
-        uat_logger.info(
-            "scrcpy 已连接: serial=%s version=%s profile=%s device=%s",
-            serial, self._version, params.profile_name,
-            device_name.split(b"\x00")[0].decode("utf-8", errors="replace"),
-        )
+        # ⑤ 建立 TCP 连接（视频 + 控制）
+        # scrcpy-server 在 control=true 时等待两条 TCP 连接都建立后才发送握手
+        # 必须先连控制通道，再读视频握手
+        deadline = time.time() + 15.0
+        sock = self._wait_tcp_connect(deadline)
         self._socket = sock
 
-        # ⑥ 控制通道
+        # ⑥ 控制通道（在读握手前建立，否则 server 会超时退出）
         if _scrcpy_control_enabled():
             try:
                 ctrl = socket.create_connection(("127.0.0.1", self.local_port), timeout=8)
@@ -1064,6 +1100,16 @@ class ScrcpyDeviceSession:
             except Exception as exc:
                 uat_logger.warning("scrcpy 控制通道未连接 serial=%s: %s", serial, exc)
                 self._control_socket = None
+
+        # ⑦ 读取视频握手（此时两条连接已建立，server 会发送握手）
+        time.sleep(0.3)  # 给 server 时间初始化两条连接
+        device_name = self._read_video_handshake(sock, deadline)
+        uat_logger.info(
+            "scrcpy 已连接: serial=%s version=%s profile=%s device=%s control=%s",
+            serial, self._version, params.profile_name,
+            device_name.split(b"\x00")[0].decode("utf-8", errors="replace"),
+            bool(self._control_socket),
+        )
         self._current_params = params
         self.running = True
 
@@ -1103,6 +1149,9 @@ class ScrcpyDeviceSession:
             uat_logger.info(
                 "scrcpy 唤醒后屏幕状态 serial=%s: %s", self.serial, screen_msg
             )
+
+        # ── 阶段0.6：清理残留 scrcpy-server 进程和 stale socket ──
+        _kill_stale_scrcpy_servers(self.serial)
 
         # ── 生成参数档位 ──
         param_profiles = _generate_param_profiles(self._device_diag)

@@ -733,6 +733,93 @@
         });
     }
 
+    /* ---- Variable Management ---- */
+    function addVarRow(name, value, varId) {
+        var tbody = $('varTbody');
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+            '<td><input type="text" class="k" placeholder="变量名" style="width:100%"></td>' +
+            '<td><input type="text" class="v" placeholder="变量值" style="width:100%"></td>' +
+            '<td><button type="button" class="text-red-600 text-sm px-1 var-rm" title="删除">×</button></td>';
+        tr.querySelector('.k').value = name || '';
+        tr.querySelector('.v').value = value || '';
+        if (varId) tr.setAttribute('data-var-id', varId);
+        tr.querySelector('.var-rm').addEventListener('click', function () {
+            var vid = tr.getAttribute('data-var-id');
+            if (vid) {
+                fetch('/api/variables/' + vid, { method: 'DELETE', ...cred })
+                    .then(function (r) { return r.json(); })
+                    .then(function () { tr.remove(); toastOk('已删除变量'); })
+                    .catch(function () { tr.remove(); });
+            } else {
+                tr.remove();
+            }
+        });
+        tbody.appendChild(tr);
+    }
+
+    async function loadVariables() {
+        var tbody = $('varTbody');
+        tbody.innerHTML = '';
+        var r = await fetch('/api/variables?scope=case&case_id=' + CASE_ID, { ...cred });
+        var res = await parseJsonResponse(r);
+        if (!res.ok || !res.data.variables) return;
+        res.data.variables.forEach(function (v) {
+            if (v.scope === 'case') {
+                addVarRow(v.name, v.value, v.id);
+            }
+        });
+    }
+
+    async function saveVariable(tr) {
+        var name = (tr.querySelector('.k').value || '').trim();
+        var value = tr.querySelector('.v').value || '';
+        if (!name) { toastErr('变量名不能为空'); return false; }
+        var vid = tr.getAttribute('data-var-id');
+        var body = { name: name, value: value, scope: 'case', case_id: CASE_ID };
+        if (PROJECT_ID) body.project_id = PROJECT_ID;
+        if (vid) {
+            var r = await fetch('/api/variables/' + vid, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                ...cred,
+                body: JSON.stringify({ name: name, value: value }),
+            });
+            var res = await parseJsonResponse(r);
+            if (!res.ok) { toastErr(res.data.error || '保存失败'); return false; }
+        } else {
+            var r2 = await fetch('/api/variables', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                ...cred,
+                body: JSON.stringify(body),
+            });
+            var res2 = await parseJsonResponse(r2);
+            if (!res2.ok || !res2.data.success) { toastErr(res2.data.error || '创建失败'); return false; }
+            tr.setAttribute('data-var-id', res2.data.var_id);
+        }
+        return true;
+    }
+
+    async function saveAllVariables() {
+        var rows = $('varTbody').querySelectorAll('tr');
+        var ok = true;
+        for (var i = 0; i < rows.length; i++) {
+            var saved = await saveVariable(rows[i]);
+            if (!saved) ok = false;
+        }
+        if (ok) toastOk('变量已保存');
+    }
+
+    function openVarModal() {
+        loadVariables();
+        UatApi.showModal($('varModal'));
+    }
+
+    function closeVarModal() {
+        UatApi.hideModal($('varModal'));
+    }
+
     /* ---- Init ---- */
     document.addEventListener('DOMContentLoaded', function () {
         $('nrBodyType').addEventListener('change', syncBodyPanels);
@@ -750,6 +837,16 @@
         $('btnRunCaseAll').addEventListener('click', function () { runSteps(null); });
         $('btnDeleteCase').addEventListener('click', deleteCase);
         $('btnRefreshReq').addEventListener('click', loadSteps);
+        $('btnVariables').addEventListener('click', openVarModal);
+        $('varModalClose').addEventListener('click', closeVarModal);
+        $('varModal').addEventListener('click', function (e) {
+            if (e.target.id === 'varModal') closeVarModal();
+        });
+        $('varAddBtn').addEventListener('click', function () { addVarRow('', '', null); });
+        $('varTbody').addEventListener('change', function (e) {
+            var tr = e.target.closest('tr');
+            if (tr) void saveVariable(tr);
+        });
         $('btnCopyBody').addEventListener('click', function () {
             navigator.clipboard.writeText($('apiRespBody').value || '').then(function () { toastOk('已复制'); });
         });

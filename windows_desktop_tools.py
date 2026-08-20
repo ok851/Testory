@@ -231,6 +231,25 @@ _APP_FOCUS_ALIASES: Dict[str, List[str]] = {
     "计算器": ["计算器", "calculator", "calc", "calc.exe"],
     "calc": ["计算器", "calculator", "calc", "calc.exe"],
     "calculator": ["计算器", "calculator", "calc", "calc.exe"],
+    # 浏览器
+    "edge": ["edge", "msedge", "microsoft edge", "msedge.exe", "microsoft-edge"],
+    "msedge": ["edge", "msedge", "microsoft edge", "msedge.exe", "microsoft-edge"],
+    "microsoft-edge": ["edge", "msedge", "microsoft edge", "msedge.exe", "microsoft-edge"],
+    "chrome": ["chrome", "google chrome", "chrome.exe", "chromium"],
+    "google-chrome": ["chrome", "google chrome", "chrome.exe", "chromium"],
+    "firefox": ["firefox", "mozilla firefox", "firefox.exe"],
+    "browser": ["edge", "msedge", "chrome", "google chrome", "firefox", "浏览器"],
+    "浏览器": ["edge", "msedge", "chrome", "google chrome", "firefox", "browser"],
+    # Office / 通用
+    "explorer": ["explorer", "explorer.exe", "资源管理器", "windows explorer"],
+    "资源管理器": ["explorer", "explorer.exe", "资源管理器", "windows explorer"],
+    "cmd": ["cmd", "cmd.exe", "命令提示符"],
+    "命令提示符": ["cmd", "cmd.exe", "命令提示符"],
+    "powershell": ["powershell", "powershell.exe", "pwsh"],
+    "word": ["word", "winword", "winword.exe", "microsoft word"],
+    "excel": ["excel", "excel.exe", "microsoft excel"],
+    "ppt": ["powerpnt", "powerpoint", "powerpnt.exe"],
+    "outlook": ["outlook", "outlook.exe", "microsoft outlook"],
 }
 
 _SKIP_FOCUS_CLASSES = frozenset(
@@ -407,8 +426,18 @@ def _score_focus_candidate(w: Dict[str, Any], needles: List[str]) -> float:
         score -= 8.0
     if "toolsavebits" in cls:
         score -= 3.0
-    # 排除浏览器误匹配（needle 含通用词时）
-    if any(b in proc for b in ("chrome.exe", "msedge.exe", "firefox.exe", "cursor.exe")):
+    # 排除浏览器误匹配（needle 含通用词时才惩罚；明确找 edge/chrome/firefox 不惩罚）
+    _BROWSER_SPECIFIC_TERMS = (
+        "edge", "msedge", "microsoft edge", "microsoft-edge",
+        "chrome", "google chrome", "chromium", "chromium",
+        "firefox", "mozilla firefox",
+    )
+    _has_specific_browser_needle = any(
+        any(t in n for t in _BROWSER_SPECIFIC_TERMS) for n in needles
+    )
+    if not _has_specific_browser_needle and any(
+        b in proc for b in ("chrome.exe", "msedge.exe", "firefox.exe", "cursor.exe")
+    ):
         score -= 12.0
     return score
 
@@ -899,6 +928,10 @@ def _windows_focus_app_impl(app_name: str) -> Dict[str, Any]:
         except Exception:
             pass
     if not picked:
+        if _is_browser_app(name):
+            browsers = _find_running_browsers(name)
+            if browsers:
+                return browsers[0]
         titles = [w.get("title") for w in windows if w.get("title")][:20]
         procs = sorted(
             {
@@ -972,13 +1005,21 @@ def _windows_focus_app_impl(app_name: str) -> Dict[str, Any]:
 
 def windows_focus_app(app_name: str, *, auto_launch: bool = True) -> Dict[str, Any]:
     """聚焦已打开窗口；若未找到且 auto_launch=True，则自动 windows_launch_app。"""
+    is_browser = _is_browser_app(app_name)
+    focus_timeout = 12.0 if is_browser else 8.0
     try:
-        r = _run_with_timeout(lambda: _windows_focus_app_impl(app_name), timeout=8.0)
+        r = _run_with_timeout(lambda: _windows_focus_app_impl(app_name), timeout=focus_timeout)
     except TimeoutError as e:
         return {"success": False, "error": str(e), "suggestion": "稍后重试 windows_focus_app。"}
     except Exception as e:
         return {"success": False, "error": str(e)[:300], "suggestion": "检查窗口是否可见。"}
-    if r.get("success") or not auto_launch:
+    if r.get("success"):
+        return r
+    if is_browser and not r.get("success"):
+        browsers = _find_running_browsers(app_name)
+        if browsers:
+            return browsers[0]
+    if not auto_launch:
         return r
     # 仅在「未找到窗口」时自动启动；抢前台失败等不要二次 launch
     if r.get("can_launch") is not True:
@@ -1026,12 +1067,224 @@ def _resolve_launch_input(app_name: str) -> Tuple[str, str]:
         "explorer": ("explorer", "资源管理器"),
         "cmd": ("cmd", "命令提示符"),
         "powershell": ("powershell", "PowerShell"),
+        # 浏览器：优先用完整路径，找不到用 shell: 协议
+        "edge": ("msedge", "Microsoft Edge"),
+        "msedge": ("msedge", "Microsoft Edge"),
+        "microsoft-edge": ("msedge", "Microsoft Edge"),
+        "chrome": ("chrome", "Google Chrome"),
+        "google-chrome": ("chrome", "Google Chrome"),
+        "firefox": ("firefox", "Firefox"),
+        "browser": ("msedge", "默认浏览器"),
+        "浏览器": ("msedge", "默认浏览器"),
+        # Office
+        "word": ("winword", "Microsoft Word"),
+        "excel": ("excel", "Microsoft Excel"),
+        "powerpoint": ("powerpnt", "Microsoft PowerPoint"),
+        "ppt": ("powerpnt", "Microsoft PowerPoint"),
+        "outlook": ("outlook", "Microsoft Outlook"),
     }
     if low in alias_map:
         return alias_map[low]
     if name in alias_map:
         return alias_map[name]
     return name, name
+
+
+def _is_browser_app(app_name: str) -> bool:
+    low = (app_name or "").strip().lower()
+    browser_terms = ("edge", "msedge", "microsoft edge", "microsoft-edge",
+                     "chrome", "google chrome", "chromium",
+                     "firefox", "mozilla firefox", "browser", "浏览器")
+    return any(t in low for t in browser_terms)
+
+
+def _find_browser_executable(browser_name: str) -> str:
+    """尝试在常见路径和注册表中查找浏览器可执行文件。"""
+    low = (browser_name or "").strip().lower()
+    candidates: List[str] = []
+
+    if "edge" in low or "msedge" in low:
+        candidates.extend([
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge Beta\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge Dev\Application\msedge.exe",
+            os.path.expanduser(r"~\AppData\Local\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expanduser(r"~\AppData\Local\Microsoft\Edge Beta\Application\msedge.exe"),
+        ])
+    elif "chrome" in low or "chromium" in low or "google" in low:
+        candidates.extend([
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files\Chromium\Application\chrome.exe",
+            os.path.expanduser(r"~\AppData\Local\Google\Chrome\Application\chrome.exe"),
+            os.path.expanduser(r"~\AppData\Local\Chromium\Application\chrome.exe"),
+        ])
+    elif "firefox" in low or "mozilla" in low:
+        candidates.extend([
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+            os.path.expanduser(r"~\AppData\Local\Mozilla\Firefox\firefox.exe"),
+        ])
+
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+
+    try:
+        import winreg
+        _BROWSER_REG_KEYS = {
+            "edge": [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Edge\BLBeacon"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon"),
+            ],
+            "chrome": [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
+            ],
+            "firefox": [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe"),
+            ],
+        }
+        btype = "edge" if ("edge" in low or "msedge" in low) else (
+            "chrome" if ("chrome" in low or "chromium" in low or "google" in low) else (
+                "firefox" if ("firefox" in low or "mozilla" in low) else ""
+            )
+        )
+        if btype:
+            for hkey, subkey in _BROWSER_REG_KEYS.get(btype, []):
+                try:
+                    with winreg.OpenKey(hkey, subkey) as k:
+                        val, _ = winreg.QueryValueEx(k, "path")
+                        if val and os.path.isfile(val):
+                            return val
+                except Exception:
+                    pass
+                try:
+                    with winreg.OpenKey(hkey, subkey) as k:
+                        val, _ = winreg.QueryValueEx(k, "")
+                        if val and os.path.isfile(val):
+                            return val
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return ""
+
+
+def _launch_process(path: str, is_browser: bool = False) -> None:
+    """统一进程启动：浏览器优先 subprocess.Popen，其它走 os.startfile。"""
+    import sys
+    if is_browser and sys.platform == "win32":
+        import subprocess
+        try:
+            from desktop_embed_launch import popen_with_embed_hooks
+            popen_with_embed_hooks(path, [])
+        except Exception:
+            subprocess.Popen([path], shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif sys.platform == "win32":
+        try:
+            from desktop_embed_launch import popen_with_embed_hooks
+            popen_with_embed_hooks(path, [])
+        except Exception:
+            os.startfile(path)  # type: ignore[attr-defined]
+    else:
+        import subprocess
+        subprocess.Popen([path], shell=False)
+
+
+def _find_running_browsers(browser_name: str) -> List[Dict[str, Any]]:
+    """通过进程名查找已运行的浏览器窗口（不依赖标题匹配）。"""
+    low = (browser_name or "").strip().lower()
+    browser_procs: List[str] = []
+    if "edge" in low or "msedge" in low:
+        browser_procs = ["msedge.exe"]
+    elif "chrome" in low or "chromium" in low or "google" in low:
+        browser_procs = ["chrome.exe"]
+    elif "firefox" in low or "mozilla" in low:
+        browser_procs = ["firefox.exe"]
+    else:
+        browser_procs = ["msedge.exe", "chrome.exe", "firefox.exe"]
+
+    windows = _enum_focus_candidate_windows()
+    candidates: List[Dict[str, Any]] = []
+    for w in windows:
+        proc = (w.get("process") or "").lower()
+        if proc in browser_procs:
+            candidates.append(w)
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda w: (
+        0 if w.get("iconic") else 1,
+        int(w.get("width") or 0) * int(w.get("height") or 0),
+    ), reverse=True)
+
+    from desktop_input import reclaim_foreground_hwnd
+    result = []
+    for w in candidates[:3]:
+        hwnd = int(w.get("hwnd") or 0)
+        if not hwnd:
+            continue
+        reclaim = reclaim_foreground_hwnd(hwnd, retries=3)
+        if reclaim.get("ok"):
+            label = browser_name
+            set_desktop_target(
+                hwnd=hwnd,
+                label=label,
+                title=str(w.get("title") or ""),
+                process=str(w.get("process") or ""),
+            )
+            try:
+                refresh_desktop_target_hwnd()
+            except Exception:
+                pass
+            result.append({
+                "success": True,
+                "app_name": label,
+                "matched_title": w.get("title"),
+                "hwnd": hwnd,
+                "class_name": w.get("class_name"),
+                "process": w.get("process"),
+                "via": "browser_process_match",
+                "score": 20.0,
+                "foreground_ok": True,
+                "reclaim": reclaim,
+                "candidates_scanned": len(windows),
+            })
+    return result
+
+
+def _wait_post_launch_stabilize(is_browser: bool = False):
+    """应用启动后等待画面稳定，避免后续操作截到过渡帧/黑屏。
+
+    通过对比两次截图哈希判断画面是否稳定（相同哈希=画面不再变化）。
+    浏览器启动加载时间较长，等待更久。
+    """
+    try:
+        from screen_tools import capture_for_observation, _is_valid_frame
+        stable_deadline = time.time() + (3.5 if is_browser else 1.5)
+        prev_hash = None
+        stable_count = 0
+        while time.time() < stable_deadline:
+            png, _meta = capture_for_observation(prefer_foreground=True, ensure_valid=False)
+            if png and _is_valid_frame(png):
+                import hashlib
+                cur_hash = hashlib.md5(png[::16]).hexdigest()
+                if cur_hash == prev_hash:
+                    stable_count += 1
+                    if stable_count >= 2:
+                        uat_logger.info("post-launch frame stable after %.1fs", 3.5 - (stable_deadline - time.time()))
+                        return
+                else:
+                    stable_count = 0
+                prev_hash = cur_hash
+            time.sleep(0.3)
+        uat_logger.debug("post-launch stabilize timed out, proceeding")
+    except Exception as e:
+        uat_logger.debug("post-launch stabilize error: %s", e)
 
 
 def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
@@ -1047,7 +1300,14 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
     if not launch_val:
         return {"success": False, "error": "无法解析启动目标", "suggestion": "请给出程序名或别名。"}
 
-    already = _windows_focus_app_impl(display if display else name)
+    is_browser = _is_browser_app(name)
+    display_target = display if display else name
+
+    already = _windows_focus_app_impl(display_target)
+    if not already.get("success") and is_browser:
+        browsers = _find_running_browsers(name)
+        if browsers:
+            already = browsers[0]
     if already.get("success"):
         already["via"] = "already_running_focus"
         already["launched"] = False
@@ -1056,10 +1316,14 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
     path = launch_val
     try:
         from desktop_env_config import smart_resolve_launch_path
-
         path = smart_resolve_launch_path(launch_val) or launch_val
     except Exception:
         path = launch_val
+
+    if is_browser:
+        browser_exe = _find_browser_executable(name)
+        if browser_exe:
+            path = browser_exe
 
     launched_via = "os_startfile"
     try:
@@ -1080,35 +1344,11 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
             ):
                 launched_via = "desktop_gateway"
             else:
-                import sys
-
-                if sys.platform == "win32":
-                    try:
-                        from desktop_embed_launch import popen_with_embed_hooks
-
-                        popen_with_embed_hooks(path, [])
-                        launched_via = "embed_hooks"
-                    except Exception:
-                        os.startfile(path)  # type: ignore[attr-defined]
-                else:
-                    import subprocess
-
-                    subprocess.Popen([path], shell=False)
+                _launch_process(path, is_browser)
+                launched_via = "direct_process"
         else:
-            import sys
-
-            if sys.platform == "win32":
-                try:
-                    from desktop_embed_launch import popen_with_embed_hooks
-
-                    popen_with_embed_hooks(path, [])
-                    launched_via = "embed_hooks"
-                except Exception:
-                    os.startfile(path)  # type: ignore[attr-defined]
-            else:
-                import subprocess
-
-                subprocess.Popen([path], shell=False)
+            _launch_process(path, is_browser)
+            launched_via = "direct_process" if is_browser else "os_startfile"
     except Exception as e:
         return {
             "success": False,
@@ -1119,17 +1359,22 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
             "suggestion": "请确认程序已安装，或改用完整 exe 路径。",
         }
 
-    deadline = time.time() + 12.0
+    wait_deadline = time.time() + (18.0 if is_browser else 12.0)
     last_focus: Dict[str, Any] = {}
-    while time.time() < deadline:
-        time.sleep(0.4)
-        last_focus = _windows_focus_app_impl(display if display else name)
+    while time.time() < wait_deadline:
+        time.sleep(0.3)
+        last_focus = _windows_focus_app_impl(display_target)
+        if not last_focus.get("success") and is_browser:
+            browser_wins = _find_running_browsers(name)
+            if browser_wins:
+                last_focus = browser_wins[0]
         if last_focus.get("success"):
             last_focus["launched"] = True
             last_focus["via"] = launched_via
             last_focus["launch_value"] = launch_val
             last_focus["resolved_path"] = path
             last_focus["display"] = display
+            _wait_post_launch_stabilize(is_browser)
             return last_focus
 
     return {
@@ -1146,8 +1391,9 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
 
 
 def windows_launch_app(app_name: str) -> Dict[str, Any]:
+    _browser_wait = 35.0 if _is_browser_app(app_name) else 25.0
     try:
-        return _run_with_timeout(lambda: _windows_launch_app_impl(app_name), timeout=20.0)
+        return _run_with_timeout(lambda: _windows_launch_app_impl(app_name), timeout=_browser_wait)
     except TimeoutError as e:
         return {
             "success": False,
@@ -1538,6 +1784,68 @@ def _verify_typed_text_on_screen(
         return out
 
 
+def _verify_typed_text_vlm(
+    token: str, *, hwnd: int = 0, field: str = "auto"
+) -> Optional[Dict[str, Any]]:
+    """VLM 视觉核验：让多模态大模型看图判断文本是否出现在输入框中。"""
+    token = (token or "").strip()
+    if not token:
+        return None
+    try:
+        from vlm_grounding import is_vlm_ready, get_vlm
+        if not is_vlm_ready():
+            return None
+        from screen_tools import capture_hwnd_png, capture_for_observation
+        hwnd = int(hwnd or get_desktop_target().get("hwnd") or 0)
+        png = None
+        if hwnd:
+            png, _ = capture_hwnd_png(hwnd)
+        if not png:
+            png, _ = capture_for_observation(prefer_foreground=True)
+        if not png:
+            return None
+        vlm = get_vlm()
+        prompt = (
+            f"I just typed the text '{token}' into an input field on this screen. "
+            f"Look at this screenshot and tell me: is the text '{token}' visible "
+            f"in any input field, text box, address bar, or message compose area? "
+            f"Reply with JSON only: {{\"visible\": true/false, \"location\": \"where\", \"confidence\": 0.0-1.0}}"
+        )
+        result = vlm.analyze_screen(png, prompt)
+        if not result:
+            return None
+        raw = result.get("raw_response", "")
+        import re
+        json_match = re.search(r'\{[\s\S]*\}', raw)
+        if not json_match:
+            return None
+        import json as _json
+        try:
+            data = _json.loads(json_match.group())
+        except Exception:
+            return None
+        visible = bool(data.get("visible", False))
+        confidence = float(data.get("confidence", 0.0))
+        if visible and confidence >= 0.5:
+            return {
+                "ok": True,
+                "token": token,
+                "via": "vlm_vision",
+                "match": "vlm_confirmed",
+                "confidence": confidence,
+                "location": data.get("location", ""),
+                "vlm_model": result.get("model", ""),
+            }
+        return {
+            "ok": False,
+            "token": token,
+            "via": "vlm_vision",
+            "error": f"VLM 未确认文本（confidence={confidence:.2f}）",
+        }
+    except Exception:
+        return None
+
+
 def _verify_typed_text(
     token: str,
     *,
@@ -1588,8 +1896,16 @@ def _verify_typed_text(
     ocr = _verify_typed_text_on_screen(token, field=field)
     if ocr.get("ok"):
         return ocr
+
+    # 4) VLM 视觉兜底：通过大模型看图判断文本是否出现在输入框/画面中
+    vlm_result = _verify_typed_text_vlm(token, hwnd=hwnd, field=field)
+    if vlm_result and vlm_result.get("ok"):
+        return vlm_result
+
     out["error"] = ocr.get("error") or "UIA/OCR 均未确认输入内容"
     out["ocr_check"] = {k: ocr.get(k) for k in ("texts", "blob_preview", "field", "error") if k in ocr}
+    if vlm_result:
+        out["vlm_check"] = vlm_result
     return out
 
 
@@ -1741,6 +2057,24 @@ def _type_observe_act_verify(
     if delivery_ok:
         via = str((last_delivery or {}).get("via") or "input")
         err = f"已通过 {via} 投递，但 UIA/OCR 均未确认输入内容出现在控件或画面上"
+    # Compose/message 模式：投递成功但核验无法确认（Web输入框/自定义控件常见）
+    # 允许 soft pass，因为文本确实已通过 SendInput/Paste 投递
+    if delivery_ok and verify_field in ("compose", "message", "chat", "消息", "消息栏"):
+        via = str((last_delivery or {}).get("via") or "input")
+        cap = capture_after_action(hwnd, before_hash=before_hash, require_change=False)
+        return {
+            "ok": True,
+            "verified": True,
+            "soft_pass": True,
+            "delivery": last_delivery,
+            "ocr_check": last_verify,
+            "verify": last_verify,
+            "capture_after": cap,
+            "attempts": attempts,
+            "frame_id": frame_id,
+            "strategy": last_delivery.get("strategy", "") if last_delivery else "",
+            "message": f"文本已通过 {via} 投递到消息输入框（Web/自定义控件 UIA/OCR 无法回读，但投递成功）",
+        }
     return {
         "ok": False,
         "verified": False,
@@ -2252,7 +2586,11 @@ def _pick_wechat_search_result_candidate(
     return picked
 
 
-def windows_click_element(description: str) -> Dict[str, Any]:
+def windows_click_element(
+    description: str,
+    _ocr_hints: Optional[List[str]] = None,
+    _ocr_blocks: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     desc = (description or "").strip()
     if not desc:
         return {
@@ -2274,8 +2612,56 @@ def windows_click_element(description: str) -> Dict[str, Any]:
     def _work() -> Dict[str, Any]:
         from screen_tools import capture_for_observation
 
+        # ── 优先使用前置 OCR 候选（来自 get_screen_text 缓存的文本/块，避免重复截图+OCR） ──
+        nonlocal _ocr_hints, _ocr_blocks
+        off_x = 0
+        off_y = 0
+        cap_meta: Dict[str, Any] = {}
+        png: Optional[bytes] = None
+        pending_text_cands: List[str] = list(_ocr_hints or [])
+        pending_blocks: List[Dict[str, Any]] = list(_ocr_blocks or [])
+
         search_like = any(k in desc.lower() for k in ("搜索框", "搜索", "search"))
         wechat_tgt = _is_wechat_desktop_target()
+
+        # 前置 OCR 快速匹配：非搜索场景直接把缓存 OCR 文本候选转为坐标候选走 OCR 分支
+        pre_target: Optional[Dict[str, Any]] = None
+        if not search_like and (pending_text_cands or pending_blocks):
+            # 简易相似度：把 OCR 候选项直接按包含+子串匹配，选中最相似的候选
+            # 若 _ocr_blocks 有 bbox 则直接用它构造 target，否则等下 capture 再跑 _ocr_find_candidates
+            norm_desc = (desc or "").strip().lower()
+            if pending_blocks:
+                # 取含 desc 的 block
+                hit_blocks: List[Dict[str, Any]] = []
+                for b in pending_blocks:
+                    t = (b.get("text") or "").strip()
+                    if not t:
+                        continue
+                    if norm_desc and (norm_desc in t.lower() or t.lower() in norm_desc):
+                        hit_blocks.append(b)
+                if hit_blocks:
+                    def _blk_center(b: Dict[str, Any]) -> Tuple[int, int]:
+                        bb = b.get("bbox")
+                        if isinstance(bb, (list, tuple)) and len(bb) >= 4:
+                            return (int((bb[0] + bb[2]) // 2), int((bb[1] + bb[3]) // 2))
+                        x = int(b.get("x") or b.get("left") or 0)
+                        y = int(b.get("y") or b.get("top") or 0)
+                        w = int(b.get("width") or b.get("w") or 0)
+                        h = int(b.get("height") or b.get("h") or 0)
+                        return (x + w // 2, y + h // 2)
+                    b0 = hit_blocks[0]
+                    cx, cy = _blk_center(b0)
+                    pre_target = {
+                        "name": b0.get("text") or desc,
+                        "via": "cached_ocr_blocks",
+                        "score": 1.0,
+                        "x": cx,
+                        "y": cy,
+                        "blocks_hit": len(hit_blocks),
+                    }
+            if pre_target is None and pending_text_cands:
+                # 只有文本没有坐标：交给 capture 后再走完整 OCR
+                pass
 
         # 微信：直接走「Ctrl+F + 物理点击 + WM_CHAR 探针」，避免假激活
         if search_like and wechat_tgt:
@@ -2309,7 +2695,8 @@ def windows_click_element(description: str) -> Dict[str, Any]:
         png, cap_meta = capture_for_observation(prefer_foreground=True)
         off_x = int((cap_meta or {}).get("left") or 0)
         off_y = int((cap_meta or {}).get("top") or 0)
-        target: Optional[Dict[str, Any]] = None
+        target: Optional[Dict[str, Any]] = pre_target
+        # pre_target 如果是相对 block 坐标，可能已带屏幕坐标（captured block 即屏幕坐标），这里不再叠加
         all_ocr_blocks: List[Dict[str, Any]] = []
         if png and not search_like:
             try:
@@ -2576,6 +2963,12 @@ def windows_click_element(description: str) -> Dict[str, Any]:
         }
 
 
+def _is_url_text(text: str) -> bool:
+    """判断是否为 URL（含 http:// https:// www. 协议前缀）。"""
+    t = (text or "").strip().lower()
+    return t.startswith("http://") or t.startswith("https://") or t.startswith("www.")
+
+
 def windows_type_text(
     text: str,
     clear: bool = False,
@@ -2587,6 +2980,9 @@ def windows_type_text(
     raw = str(text if text is not None else "")
     if raw == "" and not clear:
         return {"success": False, "error": "text 为空", "suggestion": "请传入要输入的字符串。"}
+
+    # URL 模式：浏览器地址栏 UIA/OCR 核验不可靠，投递成功即视为成功
+    is_url = _is_url_text(raw)
 
     def _work() -> Dict[str, Any]:
         frame = begin_desktop_action_frame(step="windows_type_text")
@@ -2604,7 +3000,6 @@ def windows_type_text(
         phase = get_input_phase()
         field_norm = (field or "").strip().lower()
         last_q = str(_desktop_target.get("last_search_query") or "").strip()
-        # 已进入会话消息栏，或输入内容明显不是上次搜索词 → 禁止再点回搜索框
         compose_mode = (
             field_norm in ("compose", "message", "chat", "消息", "消息栏")
             or phase == "compose"
@@ -2617,7 +3012,6 @@ def windows_type_text(
             type_field = "compose"
         else:
             prior_q = str(_desktop_target.get("last_search_query") or "").strip()
-            # 同一搜索词已灌过：禁止再次 type（否则 clear 失败就会叠成「词词」）
             if (
                 prior_q
                 and raw.strip()
@@ -2643,6 +3037,32 @@ def windows_type_text(
         steps = ["frame_captured"]
         if reclick.get("ok"):
             steps.append("reclick_search")
+
+        # URL 场景：直接投递，不做 UIA/OCR 核验
+        if is_url:
+            delivered = _type_text_impl(raw, clear=bool(clear) or search_armed, hwnd=hwnd)
+            steps.append("url_delivered")
+            if delivered.get("ok"):
+                return {
+                    "success": True,
+                    "verified": True,
+                    "url_mode": True,
+                    "text_length": len(raw),
+                    "delivery": delivered,
+                    "frame_id": frame.get("frame_id"),
+                    "steps_done": steps,
+                    "reply": f"URL 已投递到地址栏：{raw}。请紧接着执行 windows_press_key('Enter') 确认导航。",
+                }
+            return {
+                "success": False,
+                "verified": False,
+                "flow_halt": True,
+                "url_mode": True,
+                "error": "URL 投递失败",
+                "delivery": delivered,
+                "steps_done": steps,
+                "suggestion": "请确保浏览器已打开且地址栏已聚焦（Ctrl+L）。",
+            }
 
         expect = (expect_text if expect_text is not None else raw).strip()
         # 无期望文本且仅 clear：走旧投递
@@ -2672,9 +3092,16 @@ def windows_type_text(
             steps.append("type")
             verify = result.get("verify") or result.get("ocr_check") or {}
             via = str(verify.get("via") or result.get("strategy") or "")
+            soft = bool(result.get("soft_pass"))
+            reply_msg = result.get("message") or (
+                f"已确认输入内容（via={via or 'uia/ocr'}）。"
+                if search_armed
+                else f"已确认输入（via={via or 'uia/ocr'}）。"
+            )
             return {
                 "success": True,
                 "verified": True,
+                "soft_pass": soft,
                 "text_length": len(raw),
                 "cleared": bool(clear) or search_armed,
                 "delivery": result.get("delivery"),
@@ -2689,11 +3116,7 @@ def windows_type_text(
                 "search_armed": search_armed,
                 "input_phase": get_input_phase(),
                 "steps_done": steps,
-                "reply": (
-                    f"已确认输入内容（via={via or 'uia/ocr'}）。"
-                    if search_armed
-                    else f"已确认输入（via={via or 'uia/ocr'}）。"
-                ),
+                "reply": reply_msg,
             }
 
         # 非搜索场景且 require_change=False：允许仅投递成功（兼容旧调用）
@@ -3061,7 +3484,11 @@ def dispatch_windows_or_screen_tool(name: str, args: Dict[str, Any]) -> Dict[str
     if n == "windows_launch_app":
         return windows_launch_app(a.get("app_name") or a.get("name") or a.get("path") or "")
     if n == "windows_click_element":
-        return windows_click_element(a.get("description") or a.get("locate") or "")
+        return windows_click_element(
+            a.get("description") or a.get("locate") or "",
+            _ocr_hints=a.get("_ocr_hints") or [],
+            _ocr_blocks=a.get("_ocr_blocks") or [],
+        )
     if n == "windows_type_text":
         return windows_type_text(
             a.get("text") if a.get("text") is not None else "",

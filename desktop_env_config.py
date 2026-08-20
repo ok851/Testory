@@ -581,3 +581,165 @@ def validate_launch_app_ready(step: Dict[str, Any]) -> Optional[str]:
     if meta.found:
         return None
     return format_resolve_error(meta)
+
+
+def _vlm_config_path() -> Path:
+    """VLM 配置文件路径（data/vlm_config.json）。"""
+    return _uat_data_root() / "vlm_config.json"
+
+
+def load_vlm_config() -> Optional[Dict[str, Any]]:
+    """从本地配置文件读取 VLM 配置（由用户界面保存）。"""
+    p = _vlm_config_path()
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not data.get("enabled"):
+        return None
+    if not (data.get("api_key") or "").strip():
+        return None
+    return {
+        "backend": (data.get("backend") or "openai").strip(),
+        "api_key": (data.get("api_key") or "").strip(),
+        "base_url": (data.get("base_url") or "").strip(),
+        "model": (data.get("model") or "gpt-4o").strip(),
+        "enabled": True,
+    }
+
+
+def save_vlm_config(config: Dict[str, Any]) -> bool:
+    """保存 VLM 配置到本地文件（供用户界面调用）。
+
+    Args:
+        config: 配置字典，需包含 api_key，可选 backend/base_url/model/enabled
+    Returns:
+        是否保存成功
+    """
+    if not isinstance(config, dict):
+        return False
+    api_key = (config.get("api_key") or "").strip()
+    enabled = config.get("enabled", True)
+    payload = {
+        "backend": (config.get("backend") or "openai").strip(),
+        "api_key": api_key,
+        "base_url": (config.get("base_url") or "").strip(),
+        "model": (config.get("model") or "gpt-4o").strip(),
+        "enabled": bool(enabled and api_key),
+    }
+    try:
+        p = _vlm_config_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def clear_vlm_config() -> bool:
+    """清除本地 VLM 配置文件。"""
+    p = _vlm_config_path()
+    try:
+        if p.is_file():
+            p.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def setup_vlm(config: Dict[str, Any], *, persist: bool = True) -> Dict[str, Any]:
+    """一站式配置 VLM：运行时生效 + 可选持久化到本地文件。
+
+    供用户界面的「设置」页面调用，用户只需填一次 API Key。
+
+    Args:
+        config: {backend, api_key, base_url, model}
+        persist: 是否保存到本地文件（下次启动自动加载）
+
+    Returns:
+        {"success": bool, "message": str, "config": dict(脱敏回显)}
+    """
+    from vlm_grounding import configure_vlm, get_runtime_vlm_config
+    required_keys = ["api_key"]
+    missing = [k for k in required_keys if not (config.get(k) or "").strip()]
+    if missing:
+        return {"success": False, "message": f"缺少必填项: {missing}", "config": None}
+    backend = (config.get("backend") or "openai").strip().lower()
+    valid_backends = {"openai", "openai_compatible", "anthropic", "qwen_vl", "ollama", "auto"}
+    if backend not in valid_backends:
+        return {
+            "success": False,
+            "message": f"不支持的 backend: {backend}，支持: {sorted(valid_backends)}",
+            "config": None,
+        }
+    normalized = {
+        "backend": backend,
+        "api_key": config["api_key"].strip(),
+        "base_url": (config.get("base_url") or "").strip(),
+        "model": (config.get("model") or "gpt-4o").strip(),
+        "enabled": True,
+    }
+    configure_vlm(normalized)
+    if persist:
+        save_vlm_config(normalized)
+    safe = get_runtime_vlm_config()
+    return {
+        "success": True,
+        "message": f"VLM 已配置: backend={backend}, model={normalized['model']}",
+        "config": safe,
+    }
+
+
+def reset_vlm(*, clear_file: bool = True) -> Dict[str, Any]:
+    """清除 VLM 配置（运行时 + 可选文件）。"""
+    from vlm_grounding import configure_vlm
+    configure_vlm(None)
+    if clear_file:
+        clear_vlm_config()
+    return {"success": True, "message": "VLM 配置已清除"}
+
+
+def get_vlm_config() -> Optional[Dict[str, Any]]:
+    """读取 VLM（视觉语言模型）配置。
+
+    优先级：
+    1. VLM_ENABLED=0 显式关闭
+    2. 本地配置文件 data/vlm_config.json（由用户界面保存）
+    3. 环境变量 VLM_BACKEND / VLM_API_KEY 等（单独配置）
+    4. 环境变量 CLOUD_VISION_*（复用 ai_vision_local 配置）
+
+    Returns:
+        配置字典 或 None（未配置）
+    """
+    if (os.environ.get("VLM_ENABLED") or "1").strip().lower() in ("0", "false", "off", "no"):
+        return None
+    file_cfg = load_vlm_config()
+    if file_cfg:
+        return file_cfg
+    explicit_backend = (os.environ.get("VLM_BACKEND") or "").strip()
+    explicit_api_key = (os.environ.get("VLM_API_KEY") or "").strip()
+    explicit_base_url = (os.environ.get("VLM_BASE_URL") or "").strip()
+    explicit_model = (os.environ.get("VLM_MODEL") or "").strip()
+    if explicit_backend or explicit_api_key:
+        return {
+            "backend": explicit_backend or "auto",
+            "api_key": explicit_api_key,
+            "base_url": explicit_base_url,
+            "model": explicit_model or "gpt-4o",
+            "enabled": True,
+        }
+    cloud_provider = (os.environ.get("CLOUD_VISION_PROVIDER") or "").strip()
+    cloud_api_key = (os.environ.get("CLOUD_VISION_API_KEY") or "").strip()
+    if cloud_provider and cloud_api_key:
+        return {
+            "backend": cloud_provider,
+            "api_key": cloud_api_key,
+            "base_url": (os.environ.get("CLOUD_VISION_BASE_URL") or "").strip(),
+            "model": (os.environ.get("CLOUD_VISION_MODEL") or "gpt-4o").strip(),
+            "enabled": True,
+        }
+    return None

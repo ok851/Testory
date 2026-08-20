@@ -19,6 +19,8 @@ _DESC_TIMEOUT_SEC = 6.0
 _HASH_SIMILARITY_THRESHOLD = 0.95
 _DESC_MAX_CHARS = 300
 _MIN_OCR_CONFIDENCE = 0.45
+_MIN_FRAME_EDGE_DIFF = 1.5
+_BLACK_FRAME_MAX_VARIANCE = 8.0
 
 _PRIVACY_PATTERNS = [
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"), "[EMAIL]"),
@@ -42,6 +44,68 @@ def filter_privacy(text: str) -> str:
     for pattern, replacement in _PRIVACY_PATTERNS:
         out = pattern.sub(replacement, out)
     return out
+
+
+def _is_valid_frame(png_bytes: bytes, min_edge_diff: float = _MIN_FRAME_EDGE_DIFF) -> bool:
+    """检测截图是否为有效画面（非黑屏/纯色/过渡帧）。
+
+    使用方差+差分双重检测：
+    1. 计算像素方差（低方差=纯色/黑屏）
+    2. 计算相邻行/列像素差异均值（低差异=渐变过渡帧）
+    """
+    if not png_bytes or len(png_bytes) < 100:
+        return False
+    try:
+        import numpy as np
+        from PIL import Image
+        img = Image.open(__import__("io").BytesIO(png_bytes)).convert("L")
+        arr = np.array(img, dtype=np.float32)
+        variance = float(np.var(arr))
+        if variance < _BLACK_FRAME_MAX_VARIANCE:
+            uat_logger.debug("frame invalid: variance=%.2f < %.1f", variance, _BLACK_FRAME_MAX_VARIANCE)
+            return False
+        row_diff = np.abs(np.diff(arr, axis=0)).mean()
+        col_diff = np.abs(np.diff(arr, axis=1)).mean()
+        edge_diff = float(row_diff + col_diff) / 2.0
+        if edge_diff < min_edge_diff:
+            uat_logger.debug("frame invalid: edge_diff=%.2f < %.1f", edge_diff, min_edge_diff)
+            return False
+        return True
+    except Exception as e:
+        uat_logger.debug("frame validity check failed: %s", e)
+        return True
+
+
+def _wait_stable_frame(
+    capture_fn,
+    max_attempts: int = 3,
+    stable_wait: float = 0.4,
+) -> Tuple[Optional[bytes], Dict[str, Any]]:
+    """等待画面稳定：连续捕获有效帧才返回。
+
+    Args:
+        capture_fn: 无参数的捕获函数，返回 (png_bytes, meta_dict)
+        max_attempts: 最大重试次数
+        stable_wait: 每次重试间隔（秒）
+
+    Returns:
+        (png_bytes, meta_dict): 有效帧的PNG字节和元数据
+    """
+    last_png = None
+    last_meta: Dict[str, Any] = {}
+    for attempt in range(max_attempts):
+        try:
+            png, meta = capture_fn()
+            if png and _is_valid_frame(png):
+                return png, meta
+            last_png, last_meta = png or b"", meta or {}
+        except Exception:
+            pass
+        if attempt < max_attempts - 1:
+            time.sleep(stable_wait)
+    if last_png and _is_valid_frame(last_png):
+        return last_png, {**last_meta, "low_confidence": True}
+    return last_png, {**last_meta, "low_confidence": True, "frame_invalid": True}
 
 
 def capture_primary_monitor_png(region: Optional[Dict[str, int]] = None) -> Optional[bytes]:
@@ -79,8 +143,47 @@ def _is_testory_title(title: str) -> bool:
             "自动化测试平台",
             "ai test",
             "newuitestplatform",
+            "ai自主测试",
         )
     )
+
+
+_EXCLUDED_WINDOW_KEYWORDS = (
+    "testory",
+    "ai 自动化",
+    "自动化测试平台",
+    "设置",
+    "控制面板",
+    "计算器",
+)
+
+_PREFERRED_WINDOW_KEYWORDS = (
+    "edge", "chrome", "firefox", "浏览器",
+    "微信", "wechat", "weixin",
+    "word", "excel", "powerpoint",
+    "notepad", "记事本",
+    "资源管理器",
+    "intellij", "visual studio",
+    "terminal", "cmd", "powershell",
+)
+
+
+def _score_window_for_capture(title: str, process: str = "") -> float:
+    """为窗口打分，决定截图优先级。分数越高越可能是用户实际操作的窗口。"""
+    t = (title or "").lower()
+    p = (process or "").lower()
+    score = 0.0
+    if not title:
+        return -10.0
+    if any(k in t for k in _EXCLUDED_WINDOW_KEYWORDS):
+        score -= 20.0
+    if any(k in t or k in p for k in _PREFERRED_WINDOW_KEYWORDS):
+        score += 10.0
+    if len(title) > 3:
+        score += 3.0
+    if any(s in t for s in ("-", "—", "|")):
+        score += 2.0
+    return score
 
 
 def capture_hwnd_png(hwnd: int) -> Tuple[Optional[bytes], Dict[str, Any]]:
@@ -146,21 +249,94 @@ def capture_foreground_window_png() -> Tuple[Optional[bytes], Dict[str, Any]]:
                 png, meta_h = capture_hwnd_png(hwnd)
                 if png:
                     meta_h["surface"] = "foreground_window"
+                    meta_h["window_title"] = title
                     return png, meta_h
+        best = _find_best_window_candidate()
+        if best:
+            png, meta_h = capture_hwnd_png(best["hwnd"])
+            if png:
+                meta_h["surface"] = "foreground_window"
+                meta_h["window_title"] = best.get("title", "")
+                return png, meta_h
     except Exception as e:
         uat_logger.debug("foreground capture failed: %s", e)
     return capture_primary_monitor_png(), meta
+
+
+def _find_best_window_candidate() -> Optional[Dict[str, Any]]:
+    """枚举顶层窗口，打分选出最可能为用户操作目标的窗口。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        results: List[Dict[str, Any]] = []
+        MAX_CANDIDATES = 30
+        EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def _enum_cb(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            if len(results) >= MAX_CANDIDATES:
+                return False
+            try:
+                buf = ctypes.create_unicode_buffer(512)
+                user32.GetWindowTextW(hwnd, buf, 512)
+                title = (buf.value or "").strip()
+                if not title or _is_testory_title(title):
+                    return True
+                if user32.IsIconic(hwnd):
+                    return True
+                if not user32.IsWindowEnabled(hwnd):
+                    return True
+                score = _score_window_for_capture(title)
+                if score > 0:
+                    results.append({"hwnd": int(hwnd), "title": title, "score": score})
+            except Exception:
+                pass
+            return True
+
+        user32.EnumWindows(EnumWindowsProc(_enum_cb), 0)
+        if results:
+            results.sort(key=lambda x: x["score"], reverse=True)
+            return results[0]
+    except Exception as e:
+        uat_logger.debug("window enum failed: %s", e)
+    return None
 
 
 def capture_for_observation(
     region: Optional[Dict[str, int]] = None,
     *,
     prefer_foreground: bool = True,
+    ensure_valid: bool = True,
 ) -> Tuple[Optional[bytes], Dict[str, Any]]:
+    """截取屏幕用于观察。ensure_valid=True 时自动重试黑屏/过渡帧。"""
     if region:
-        return capture_primary_monitor_png(region), {"surface": "region", "region": region}
+        png = capture_primary_monitor_png(region)
+        meta: Dict[str, Any] = {"surface": "region", "region": region}
+        if ensure_valid and png:
+            if not _is_valid_frame(png):
+                png, meta = _wait_stable_frame(
+                    lambda: (capture_primary_monitor_png(region), {"surface": "region", "region": region}),
+                    max_attempts=3,
+                    stable_wait=0.4,
+                )
+        return png, meta
     if prefer_foreground:
+        if ensure_valid:
+            return _wait_stable_frame(
+                capture_foreground_window_png,
+                max_attempts=3,
+                stable_wait=0.4,
+            )
         return capture_foreground_window_png()
+    if ensure_valid:
+        return _wait_stable_frame(
+            lambda: (capture_primary_monitor_png(), {"surface": "primary_monitor"}),
+            max_attempts=3,
+            stable_wait=0.4,
+        )
     return capture_primary_monitor_png(), {"surface": "primary_monitor"}
 
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Multi-turn AI test chat with OpenAI-style tool calling: hermes_execute + refine_test_plan.
 
 Enable with environment variable AI_CHAT_TOOLS_ENABLE=1.
@@ -18,6 +18,32 @@ from logger import uat_logger
 from embedded_browser_client import embedded_gateway_enabled
 from agent_gateway_client import agent_tool_result_max_chars, get_agent_gateway_client
 from hermes_config import hermes_cdp_attached
+
+
+# ──────── session 级运行时上下文：每个 user_id 独立一份 ────────
+_runtime_ctx_lock = threading.Lock()
+_runtime_chat_ctx: Dict[str, Dict[str, Any]] = {}
+
+
+def _runtime_ctx_key(user_id: Any) -> str:
+    return f"u_{int(user_id or 0)}"
+
+
+def clear_runtime_chat_context(*, user_id: Any = 0) -> None:
+    """用户清空会话时：丢弃该用户累积的 typed_texts / succeeded_action_fps / obs_count / cross_vars 等 meta。"""
+    k = _runtime_ctx_key(user_id)
+    with _runtime_ctx_lock:
+        _runtime_chat_ctx.pop(k, None)
+
+
+def get_runtime_chat_context(*, user_id: Any = 0) -> Dict[str, Any]:
+    k = _runtime_ctx_key(user_id)
+    with _runtime_ctx_lock:
+        ctx = _runtime_chat_ctx.get(k)
+        if ctx is None:
+            ctx = {}
+            _runtime_chat_ctx[k] = ctx
+        return ctx
 
 
 def ai_chat_tools_enabled() -> bool:
@@ -182,6 +208,25 @@ def _web_hermes_system_prompt() -> str:
         "正确顺序：读 DOM → browser_click/type/fill → 必要时再 snapshot 核验。"
         "同一工具连续两次无进展则输出 NEED_USER_ACTION 并停止。"
         "需要人工验证码时输出 NEED_USER_ACTION:<原因>。"
+    )
+
+
+def _desktop_hermes_system_prompt() -> str:
+    return (
+        "【桌面自动化：UIA + OCR + VLM 三模融合定位】\n"
+        "1. windows_click_element 支持 UIA 树、OCR 文本、视觉模型三种定位方式自动融合，系统会自动选择最佳策略；\n"
+        "2. description 仅写短控件名（如「登录」「确定」「搜索」），禁止把用户整句当目标；\n"
+        "3. 点击失败时系统自动：触发屏幕观察 → 从 OCR/VLM 候选取最相似文本 → 重试；仍失败再返回详细错误信息；\n"
+        "4. 对 Electron / DirectUI / 微信 / QQ 等应用：系统自动降级为 OCR + VLM 视觉定位，无需特殊配置；\n"
+        "5. 连续两次同类工具无进展 → 输出 NEED_USER_ACTION 并停止，禁止死循环；\n"
+        "6. 任务涉及手机验证码 → PC 回填：先调 mobile_extract_otp（等待短信/通知），再用 windows_type_text 填 text='{{sms_otp}}'；\n"
+        "7. 【浏览器导航流程】启动 → Ctrl+L 聚焦地址栏 → 输入 URL → Enter 确认 → 等待 1-2 秒加载 → 操作页面内元素；\n"
+        "8. 输入 URL 后可能提示「未核验内容」，这是正常现象——直接紧跟 windows_press_key('Enter') 即可；\n"
+        "9. 表单填写流程：windows_click_element('用户名/账号输入框') → windows_type_text('账号') → windows_click_element('密码输入框') → windows_type_text('密码') → windows_click_element('登录')。\n"
+        "10. 元素描述建议：\n"
+        "    ✅ 好: '登录' '确定' '搜索' '保存' '删除'\n"
+        "    ✅ 好: '用户名输入框' '密码输入框' '搜索框'\n"
+        "    ❌ 差: '点击页面上的登录按钮' '那个蓝色的按钮' '页面右上角的东西'\n"
     )
 
 
@@ -369,10 +414,11 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_click_element",
                 "description": (
-                    "按短控件名点击（UIA→OCR）。description 只写「确定」「保存」「文件」等标签；"
+                    "按短控件名点击元素（UIA→OCR→VLM 三模融合定位）。"
+                    "系统自动通过 UIA 树、OCR 文本识别和视觉模型三种方式找到元素并点击。"
+                    "description 只写「确定」「保存」「登录」「搜索」等控件标签；"
                     "禁止把「编辑内容为…」整句当点击目标——那是 windows_type_text。"
-                    "勿默认点菜单「编辑」；仅当任务明确需要应用内搜索时才用「搜索」。"
-                    "失败则 get_screen_text 观察后重试；勿先单独按 Ctrl。"
+                    "失败时系统自动触发屏幕观察并从重试描述，无需手动重试。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -641,6 +687,122 @@ def _desktop_tool_succeeded(result_text: str) -> bool:
     if data.get("success") is True or data.get("ok") is True:
         return True
     return False
+
+
+def _prepare_element_context(
+    params: "ChatToolLoopParams",
+    name: str,
+    args: Dict[str, Any],
+    meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    """为元素操作准备多模态上下文（智能路由）。
+
+    检查屏幕观察者缓存的 OCR 结果，注入 _ocr_hints / _ocr_blocks。
+    这是连接屏幕观察者与元素定位器的关键桥梁。
+    """
+    call_args = dict(args or {})
+    if name not in ("windows_click_element", "windows_type_text"):
+        return call_args
+    observer = getattr(params, "screen_observer", None)
+    if observer is not None and observer.is_running:
+        try:
+            obs = observer.get_latest_analysis(force_refresh=False)
+            if obs and isinstance(obs, dict):
+                texts = obs.get("texts", [])
+                blocks = obs.get("blocks", [])
+                if texts:
+                    call_args["_ocr_hints"] = texts
+                if blocks:
+                    call_args["_ocr_blocks"] = blocks
+                call_args["_screen_frame_hash"] = obs.get("frame_hash", "")
+        except Exception:
+            pass
+    pending_hints = (meta or {}).get("pending_ocr_hints") or []
+    pending_blocks = (meta or {}).get("pending_ocr_blocks") or []
+    if pending_hints and not call_args.get("_ocr_hints"):
+        call_args["_ocr_hints"] = pending_hints
+    if pending_blocks and not call_args.get("_ocr_blocks"):
+        call_args["_ocr_blocks"] = pending_blocks
+    return call_args
+
+
+def _retry_failed_element_operation(
+    params: "ChatToolLoopParams",
+    name: str,
+    args: Dict[str, Any],
+    meta: Dict[str, Any],
+    original_result: str,
+) -> str:
+    """元素操作失败后的自恢复：触发屏幕观察 → 生成替代描述 → 重试。
+
+    Returns:
+        重试后的结果 JSON 字符串（如果重试成功），或原始失败结果
+    """
+    original_ok = _desktop_tool_succeeded(original_result)
+    if original_ok:
+        return original_result
+    observer = getattr(params, "screen_observer", None)
+    if observer is None:
+        return original_result
+    try:
+        failure_ctx = observer.on_tool_failure(name, original_result[:300])
+        obs_texts = failure_ctx.get("texts", [])
+        if not obs_texts:
+            return original_result
+        original_desc = str(args.get("description") or args.get("target") or "")
+        if not original_desc:
+            return original_result
+        new_desc = _generate_retry_description(original_desc, obs_texts)
+        if new_desc == original_desc:
+            return original_result
+        uat_logger.info("element_retry: desc %r -> %r based on OCR candidates", original_desc, new_desc)
+        retry_args = dict(args)
+        retry_args["description"] = new_desc
+        retry_args["_ocr_hints"] = obs_texts
+        retry_args["_ocr_blocks"] = failure_ctx.get("blocks", [])
+        retry_result = _dispatch_desktop_or_screen_tool(name, retry_args)
+        if _desktop_tool_succeeded(retry_result):
+            observer.on_tool_success()
+            return retry_result
+        combined = {
+            "success": False,
+            "error": f"重试失败: 原始描述='{original_desc}', 重试描述='{new_desc}'",
+            "original_result": json.loads(original_result) if original_result.startswith("{") else original_result,
+            "retry_result": json.loads(retry_result) if retry_result.startswith("{") else retry_result,
+            "retry_description": new_desc,
+        }
+        observer._consecutive_failures = max(observer._consecutive_failures, 0)
+        return json.dumps(combined, ensure_ascii=False)
+    except Exception as e:
+        uat_logger.warning("element_retry error: %s", e)
+        return original_result
+
+
+def _generate_retry_description(original: str, ocr_texts: List[Dict[str, Any]]) -> str:
+    """从 OCR 候选中生成替代描述。"""
+    if not ocr_texts:
+        return original
+    from element_confidence import ElementConfidence
+    best_score = 0.0
+    best_text = ""
+    for item in ocr_texts:
+        text = str(item.get("text", "")).strip()
+        if not text or len(text) < 1:
+            continue
+        score = ElementConfidence.score_candidate_match(original, text, partial=True)
+        if score > best_score:
+            best_score = score
+            best_text = text
+    if best_text and best_score >= 0.4:
+        return best_text
+    expanded = ElementConfidence.semantic_expand(original)
+    if len(expanded) > 1:
+        for alias in expanded:
+            for item in ocr_texts:
+                text = str(item.get("text", "")).strip()
+                if alias.lower() in text.lower():
+                    return text
+    return original
 
 
 def _desktop_type_delivery_ok(result_text: str) -> bool:
@@ -985,6 +1147,49 @@ def _record_mobile_tool_outcome(meta: Dict[str, Any], name: str, result_text: st
     if streak >= 2:
         meta["mobile_flow_halted"] = True
         meta["halt_reply"] = _mobile_halt_user_facing(name, result_text)
+
+
+def _record_cross_end_or_api_to_recorder(
+    params: Any,
+    tool_name: str,
+    args: Optional[Dict[str, Any]],
+    result_text: str,
+) -> None:
+    """把跨端工具（mobile_extract_otp/desktop_type_text）和 api_call 记录到 ActionRecorder。
+    这些工具不经 Hermes SSE，需在此单独记录，否则生成用例时步骤缺失。"""
+    rec = getattr(params, "recorder", None)
+    if rec is None:
+        return
+    try:
+        ok = True
+        verified = None
+        try:
+            parsed = json.loads(result_text or "")
+            if isinstance(parsed, dict):
+                if parsed.get("success") is False or parsed.get("ok") is False:
+                    ok = False
+                if parsed.get("sms_otp"):
+                    verified = True
+        except Exception:
+            ok = True
+        # 构造 target：api_call 用 url，mobile_extract_otp 用 sender_hint，desktop_type_text 用 text 前 40 字
+        a = args or {}
+        if tool_name == "api_call":
+            target = str(a.get("url") or a.get("method") or "api_call")[:80]
+        elif tool_name == "mobile_extract_otp":
+            target = str(a.get("sender_hint") or "短信验证码")[:80]
+        elif tool_name == "desktop_type_text":
+            target = str(a.get("text") or "")[:80] or "desktop_input"
+        else:
+            target = str(tool_name)[:80]
+        rec.capture_from_tool_event(
+            name=tool_name,
+            args=a,
+            result=result_text,
+            status="ok" if ok else "error",
+        )
+    except Exception:
+        pass
 
 
 def _desktop_halt_user_facing(tool_name: str, result_text: str) -> str:
@@ -1459,11 +1664,10 @@ def chat_tool_schemas(
                             }
                         },
                         "required": ["adjustment"],
+                    },
                 },
-                "required": ["adjustment"],
             },
-        },
-    )
+        )
     import os as _os
     if (_os.getenv("AGENT_API_EXECUTION_ENABLE") or "").strip().lower() in ("1", "true", "yes", "on"):
         schemas.append(_api_execution_tool_schema())
@@ -1982,6 +2186,8 @@ class ChatToolLoopParams:
     agent_session_id: Optional[str] = None
     # 已连接双手快照；None=不按连接裁剪（兼容旧调用）
     connected_hands: Optional[Dict[str, Any]] = None
+    # 屏幕观察者 V2（用于失败时自动分析屏幕）
+    screen_observer: Any = None
 
 
 def _remaining_deadline_sec(params: "ChatToolLoopParams") -> Optional[float]:
@@ -2159,20 +2365,41 @@ def _handle_agent_execute(
     except Exception:
         pass
     # 桥接页状态为空时，从 CDP /json/list 取最佳 http 页，避免误判「未到达」而反复 navigate
+    # 优先匹配 start_url 所在 host 页面，其次取第一个非空白页
     if not cur_url or cur_url.lower() in ("about:blank", "chrome://newtab/", "edge://newtab/"):
         try:
             from web_capture.cdp_browser import fetch_cdp_pages, _snap as _cdp_snap, _is_blank_page_url
+            from urllib.parse import urlparse as _urlparse
 
             port = int((_cdp_snap() or {}).get("debug_port") or 0)
-            for item in fetch_cdp_pages(port):
+            _pages = fetch_cdp_pages(port)
+            _best_any = None
+            _best_match = None
+            _target_netloc = ""
+            if start_url:
+                try:
+                    _target_netloc = (_urlparse(start_url).netloc or "").lower()
+                except Exception:
+                    pass
+            for item in _pages:
                 u = str(item.get("url") or "").strip()
-                if u and not _is_blank_page_url(u) and u.lower().startswith(("http://", "https://")):
-                    cur_url = u
-                    cur_title = str(item.get("title") or cur_title or "").strip()
-                    break
+                if not u or _is_blank_page_url(u) or not u.lower().startswith(("http://", "https://")):
+                    continue
+                if _best_any is None:
+                    _best_any = item
+                if _target_netloc:
+                    try:
+                        if (_urlparse(u).netloc or "").lower() == _target_netloc:
+                            _best_match = item
+                            break
+                    except Exception:
+                        pass
+            _chosen = _best_match or _best_any
+            if _chosen:
+                cur_url = str(_chosen.get("url") or "").strip()
+                cur_title = str(_chosen.get("title") or cur_title or "").strip()
         except Exception:
             pass
-
     def _url_looks_on_target(current: str, target: str) -> bool:
         if not current or not target:
             return False
@@ -2312,6 +2539,14 @@ def _handle_agent_execute(
     hermes_system = ""
     if explore_plat == "web":
         hermes_system = _web_hermes_system_prompt()
+    elif explore_plat in ("desktop", "windows", "pc") or bool(meta.get("desktop_mode")):
+        hermes_system = _desktop_hermes_system_prompt()
+        # 桌面模式：默认打开 hermes_cdp_attached 判断，这里仅兜底
+        try:
+            if meta:
+                meta.setdefault("obs_count", int((meta or {}).get("obs_count") or 0))
+        except Exception:
+            pass
 
     try:
         result_text = None
@@ -2788,6 +3023,22 @@ def run_ai_chat_with_tools(
     max_result = agent_tool_result_max_chars()
     _abort = abort_event or params.abort_event
 
+    _last_profile_sig = ""
+
+    def _refresh_profile_if_changed():
+        nonlocal prof, _last_profile_sig
+        try:
+            from ai_multi_provider import get_active_llm_profile
+            latest = get_active_llm_profile()
+            if not latest:
+                return
+            sig = f"{latest.get('id')}|{latest.get('model_id')}"
+            if sig != _last_profile_sig:
+                prof = latest
+                _last_profile_sig = sig
+        except Exception:
+            pass
+
     from windows_desktop_tools import SCREEN_TOOL_NAMES, WINDOWS_TOOL_NAMES
 
     for round_idx in range(_max_tool_rounds()):
@@ -2817,6 +3068,7 @@ def run_ai_chat_with_tools(
             meta["halt_reply"] = reply
             _persist_unified_agent_session(params, meta, reply)
             return {}, [], meta
+        _refresh_profile_if_changed()
         if prof:
             assistant_msg = dispatch_chat_completion_messages(
                 messages,
@@ -3004,6 +3256,34 @@ def run_ai_chat_with_tools(
                         )[: min(96000, max_result)]
                     meta["tools_used"].append("refine_test_plan")
             elif name in WINDOWS_TOOL_NAMES or name in SCREEN_TOOL_NAMES:
+                # OBS 观察计数：get_screen_text / get_screen_description 把 obs_count 置 1
+                if name in SCREEN_TOOL_NAMES:
+                    meta["obs_count"] = int((meta or {}).get("obs_count") or 0) + 1
+                    try:
+                        from ai_screen_observer import (
+                            ensure_screen_observation_cached,
+                            invalidate_screen_observation_cache,
+                        )
+                        invalidate_screen_observation_cache()
+                        meta["last_screen_obs"] = ensure_screen_observation_cached(meta)
+                    except Exception:
+                        pass
+                elif name in ("windows_click_element", "windows_type_text"):
+                    obs_count = int((meta or {}).get("obs_count") or 0)
+                    if obs_count == 0:
+                        try:
+                            from ai_screen_observer import ensure_screen_observation_cached
+                            meta["last_screen_obs"] = ensure_screen_observation_cached(meta)
+                            meta["obs_count"] = 1
+                        except Exception:
+                            pass
+                    try:
+                        cached = meta.get("last_screen_obs") or {}
+                        if isinstance(cached, dict) and (cached.get("text_hints") or cached.get("blocks")):
+                            meta["pending_ocr_hints"] = cached.get("text_hints") or []
+                            meta["pending_ocr_blocks"] = cached.get("blocks") or []
+                    except Exception:
+                        pass
                 skip_json = _should_skip_replay_desktop_tool(name, args or {}, meta)
                 if skip_json:
                     result_text = skip_json
@@ -3018,7 +3298,14 @@ def run_ai_chat_with_tools(
                         in ("item_selected", "compose", "body_typed", "chat_open")
                     ):
                         call_args.setdefault("field", "compose")
+                    if name in ("windows_click_element", "windows_type_text"):
+                        call_args = _prepare_element_context(params, name, call_args, meta)
                     result_text = _dispatch_desktop_or_screen_tool(name, call_args)
+                    if name in ("windows_click_element", "windows_type_text"):
+                        if not _desktop_tool_succeeded(result_text):
+                            result_text = _retry_failed_element_operation(
+                                params, name, call_args, meta, result_text
+                            )
                     meta["tools_used"].append(name)
                     _record_succeeded_desktop_action(meta, name, call_args, result_text)
             elif _is_cross_end_agent_tool(name):
@@ -3055,6 +3342,8 @@ def run_ai_chat_with_tools(
                     pass
                 if name.startswith("mobile_"):
                     _record_mobile_tool_outcome(meta, name, result_text)
+                # 把跨端工具调用记录到 ActionRecorder（供生成用例）
+                _record_cross_end_or_api_to_recorder(params, name, call_args, result_text)
             elif name == "api_call":
                 # api_call: API执行通道，与UI执行并列
                 try:
@@ -3074,6 +3363,7 @@ def run_ai_chat_with_tools(
                 except Exception as _api_ex:
                     result_text = json.dumps({"ok": False, "error": f"api_call执行失败: {_api_ex}"}, ensure_ascii=False)
                 meta["tools_used"].append("api_call")
+                _record_cross_end_or_api_to_recorder(params, name, args or {}, result_text)
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 
@@ -3342,6 +3632,22 @@ def run_ai_chat_with_tools_stream(
     max_result = agent_tool_result_max_chars()
     _abort = abort_event or params.abort_event
 
+    _last_profile_sig = ""
+
+    def _refresh_profile_if_changed_stream():
+        nonlocal prof, _last_profile_sig
+        try:
+            from ai_multi_provider import get_active_llm_profile
+            latest = get_active_llm_profile()
+            if not latest:
+                return
+            sig = f"{latest.get('id')}|{latest.get('model_id')}"
+            if sig != _last_profile_sig:
+                prof = latest
+                _last_profile_sig = sig
+        except Exception:
+            pass
+
     from windows_desktop_tools import SCREEN_TOOL_NAMES, WINDOWS_TOOL_NAMES
 
     # 立刻给前端反馈，避免用户空等首轮 LLM 十几秒
@@ -3430,6 +3736,7 @@ def run_ai_chat_with_tools_stream(
         last_think_len = 0
         announced_tools: set = set()
         last_args_think = 0
+        _refresh_profile_if_changed_stream()
         try:
             for evt_type, evt_data in dispatch_chat_stream(
                 messages, tools, prof, local_ai_service,
@@ -3852,6 +4159,34 @@ def run_ai_chat_with_tools_stream(
                             result_text = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
                     meta["tools_used"].append("refine_test_plan")
             elif name in WINDOWS_TOOL_NAMES or name in SCREEN_TOOL_NAMES:
+                # OBS 观察计数 + 前置 OCR（与 stream 分支保持一致）
+                if name in SCREEN_TOOL_NAMES:
+                    meta["obs_count"] = int((meta or {}).get("obs_count") or 0) + 1
+                    try:
+                        from ai_screen_observer import (
+                            ensure_screen_observation_cached,
+                            invalidate_screen_observation_cache,
+                        )
+                        invalidate_screen_observation_cache()
+                        meta["last_screen_obs"] = ensure_screen_observation_cached(meta)
+                    except Exception:
+                        pass
+                elif name in ("windows_click_element", "windows_type_text"):
+                    obs_count = int((meta or {}).get("obs_count") or 0)
+                    if obs_count == 0:
+                        try:
+                            from ai_screen_observer import ensure_screen_observation_cached
+                            meta["last_screen_obs"] = ensure_screen_observation_cached(meta)
+                            meta["obs_count"] = 1
+                        except Exception:
+                            pass
+                    try:
+                        cached = meta.get("last_screen_obs") or {}
+                        if isinstance(cached, dict) and (cached.get("text_hints") or cached.get("blocks")):
+                            meta["pending_ocr_hints"] = cached.get("text_hints") or []
+                            meta["pending_ocr_blocks"] = cached.get("blocks") or []
+                    except Exception:
+                        pass
                 skip_json = _should_skip_replay_desktop_tool(name, args or {}, meta)
                 if skip_json:
                     result_text = skip_json
@@ -3866,7 +4201,14 @@ def run_ai_chat_with_tools_stream(
                         in ("item_selected", "compose", "body_typed", "chat_open")
                     ):
                         call_args.setdefault("field", "compose")
+                    if name in ("windows_click_element", "windows_type_text"):
+                        call_args = _prepare_element_context(params, name, call_args, meta)
                     result_text = _dispatch_desktop_or_screen_tool(name, call_args)
+                    if name in ("windows_click_element", "windows_type_text"):
+                        if not _desktop_tool_succeeded(result_text):
+                            result_text = _retry_failed_element_operation(
+                                params, name, call_args, meta, result_text
+                            )
                     meta["tools_used"].append(name)
                     _record_succeeded_desktop_action(meta, name, call_args, result_text)
                 if name in SCREEN_TOOL_NAMES:
@@ -3975,6 +4317,7 @@ def run_ai_chat_with_tools_stream(
                     pass
                 if name.startswith("mobile_"):
                     _record_mobile_tool_outcome(meta, name, result_text)
+                _record_cross_end_or_api_to_recorder(params, name, call_args, result_text)
             elif name == "api_call":
                 # api_call: API执行通道（流式路径）
                 try:
@@ -3994,6 +4337,7 @@ def run_ai_chat_with_tools_stream(
                 except Exception as _api_ex:
                     result_text = json.dumps({"ok": False, "error": f"api_call执行失败: {_api_ex}"}, ensure_ascii=False)
                 meta["tools_used"].append("api_call")
+                _record_cross_end_or_api_to_recorder(params, name, args or {}, result_text)
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 

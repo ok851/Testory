@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """AI 用例设计：从需求一次生成多条测试草案（预览，不落库）。"""
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ DESIGN_SCHEMA_HINT = """{
   "cases": [
     {
       "case_name": "string",
-      "case_role": "login_feature|business|auth_fixture",
+      "case_role": "string (根据需求自行归纳，如 business / smoke / regression / edge_case / security 等；仅当需求明确提到登录/认证时才使用 login_feature)",
       "design_method": "string (e.g. 等价类划分, 边界值, 场景法, 错误推测)",
       "case_url": "string (Web 可选；Desktop/Android/OS 可留空)",
       "description": "string",
@@ -25,10 +25,11 @@ DESIGN_SCHEMA_HINT = """{
         {
           "action": "navigate|click|input|wait|verify|assert|extract_text|api_request|open_app|tap|input_text|launch_app|type_keys",
           "selector_type": "css|xpath|text|accessibility_id|id|name|automation_id|...",
-          "selector_value": "string",
-          "input_value": "string",
+          "selector_value": "string (必须使用页面控件清单中的真实值，禁止编造)",
+          "input_value": "string (assert时为预期值，navigate时为URL，input时为输入内容)",
           "description": "string",
-          "compare_type": "string (assert only)",
+          "compare_type": "string (assert 必填：text_contains|text_equals|url_contains|url_equals|element_visible|element_exists)",
+          "probe_index": "integer (页面控件清单中 [n] 的 n 值；无对应控件时留空)",
           "automation_layer": "web|android|desktop (optional)",
           "desktop_spec": { "path": "", "alias": "", "args": [] },
           "mobile_spec": { "package": "", "activity": "" },
@@ -42,10 +43,10 @@ DESIGN_SCHEMA_HINT = """{
 
 def design_max_cases() -> int:
     try:
-        n = int(os.environ.get("AI_DESIGN_MAX_CASES", "10") or "10")
+        n = int(os.environ.get("AI_DESIGN_MAX_CASES", "120") or "120")
     except ValueError:
         n = 10
-    return max(3, min(n, 15))
+    return max(5, min(n, 120))
 
 
 def design_requirements_max_chars() -> int:
@@ -63,6 +64,7 @@ def build_design_preview_prompt(
     project_name: str = "",
     extra_context: str = "",
     entry_target: str = "",
+    page_snapshot: str = "",
 ) -> str:
     from ai_modules.generate.input_classify import normalize_platform
 
@@ -81,18 +83,18 @@ def build_design_preview_prompt(
             "入口：仅当用户提供了目标 URL / 路由时才写 navigate；**不要编造 URL**；无 URL 时从业务操作步骤开始，"
             "在 precondition 写明「已打开目标页」。\n"
             "定位优先 data-testid / role+name / aria-label，禁止脆弱 XPath 与随机 class。\n"
-            "login_feature：完整登录；business：从已登录后业务开始；auth_fixture：短登录前置。\n"
+            "case_role 根据需求自行归纳；仅当需求明确提到登录/认证时才生成 login_feature 类用例，否则一律从 business 角度设计。\n"
         ),
         "api": (
             "平台：接口测试。每条用例 steps 仅含 action=api_request，api_spec 含 method/url/headers/body/assertions。\n"
             "若用户给了 API Base，相对路径可拼接；**禁止编造未出现的域名**。\n"
-            "login_feature：登录接口；business：业务接口用 {{auth_token}} 占位。\n"
+            "case_role 根据需求自行归纳；仅当需求明确提到登录接口时才生成 login_feature 类用例。\n"
         ),
         "android": (
             "平台：Android / 移动端。步骤 automation_layer=android；action 使用 open_app/tap/input_text/wait/assert。\n"
             "**不要使用 Web 的 navigate/URL**。入口用 open_app + mobile_spec.package（若用户提供了包名）。\n"
             "定位优先 accessibility_id / resource-id / content-desc / 可见文案；禁止臆造控件 id。\n"
-            "login_feature 保留完整登录；business 从已登录状态开始。\n"
+            "case_role 根据需求自行归纳；仅当需求明确提到登录/认证时才生成 login_feature 类用例，否则从 business 角度设计。\n"
         ),
         "desktop": (
             "平台：Windows 桌面应用（UIA）。步骤 automation_layer=desktop；\n"
@@ -145,10 +147,22 @@ def build_design_preview_prompt(
     return (
         "你是资深测试设计师。根据需求从多种测试设计方法生成可执行的测试用例草案。\n"
         "方法包括但不限于：等价类划分、边界值分析、判断表法、场景法、错误推测法。\n"
-        f"产出 {max_cases} 条左右 cases（可略少，但至少 3 条），每条标注 design_method 与 case_role。\n"
+        f"充分覆盖需求中的功能点、边界条件与异常场景，产出尽量详尽的 cases（目标不少于 {max_cases} 条，至少 5 条），每条标注 design_method 与 case_role。\n"
         f"{rules}"
         f"{entry_block}"
-        "数据规则：账号、密码、入口标识仅使用需求正文或用户指定入口中明确给出的值，禁止编造。\n"
+        + (f"\n\n【页面实际控件清单】\n以下是目标页面的真实可交互控件，每行 [n] 为 n_index：\n{page_snapshot.strip()[:12000]}\n\nsteps 中的 selector_type/selector_value 必须使用上述清单中的真实值，禁止自行编造。若清单中无法找到对应控件，在 precondition 中说明。\n\n" if (page_snapshot or "").strip() else "")
+        + "Steps 字段规则：\n"
+        + "- navigate：input_value 必须填写完整 URL；selector_type 和 selector_value 必须为空字符串。\n"
+        + "- click：selector_value 必须是控件清单中的真实值；input_value 通常为空。\n"
+        + "- input：input_value 必须填写要输入的内容（留空时也必须填 \"\"）。\n"
+        + "- assert：compare_type 必须填写（text_contains / text_equals / url_contains / element_visible 等）；input_value 必须填写预期值（如预期包含的文本），禁止为空。\n"
+        + "- 每条 Web 用例应以 navigate 开头（如有 URL），确保执行时在正确页面。\n"
+        + "\n"
+        + "严格约束：\n"
+        "- 仅生成需求正文中明确提到或可合理推导的功能场景，禁止捏造需求未提及的功能（如需求无登录则不得生成登录用例）。\n"
+        "- case_role 根据实际场景归纳，不得默认套用 login_feature；仅当需求明确提到登录/认证时才使用。\n"
+        "- 每条用例的 steps 必须可执行、可验证；禁止空洞描述或与需求无关的步骤。\n"
+        "- 数据规则：账号、密码、入口标识仅使用需求正文或用户指定入口中明确给出的值，禁止编造。\n"
         "输出：ONLY 一个 JSON 对象，不要 markdown，结构：\n"
         + DESIGN_SCHEMA_HINT
         + f"\n\n项目：{project_name or 'unknown'}\n\n需求正文：\n"
@@ -197,6 +211,9 @@ def _normalize_case_role(raw: Any) -> str:
         return "login_feature"
     if r in ("auth_fixture", "fixture", "auth_setup", "setup"):
         return "auth_fixture"
+    if r in ("business", "smoke", "regression", "edge_case", "security",
+             "boundary", "negative", "exploratory", "integration", "e2e"):
+        return r
     return "business"
 
 
@@ -230,6 +247,12 @@ def _normalize_draft(
             "input_value": str(st.get("input_value") or ""),
             "description": str(st.get("description") or ""),
         }
+        pi_raw = st.get("probe_index")
+        if pi_raw not in (None, "", 0, "0"):
+            try:
+                row["probe_index"] = int(pi_raw)
+            except (ValueError, TypeError):
+                pass
         if st.get("compare_type"):
             row["compare_type"] = str(st.get("compare_type"))
         layer = str(st.get("automation_layer") or "").strip().lower()
@@ -346,6 +369,23 @@ def generate_design_drafts(
         return [], warns, "requirements_text 为空"
 
     entry = (entry_target or base_url or "").strip()
+    platform = normalize_platform(platform_type)
+
+    # 探测目标页面，获取真实 DOM 数据（仅 web 平台有 URL 时）
+    page_snapshot = ""
+    probe_registry: list = []
+    if entry and platform == "web":
+        try:
+            from ai_page_probe import collect_page_controls
+            uat_logger.info("[AI_DESIGN] Probing page: %s", entry)
+            page_snapshot, probe_err, probe_registry = collect_page_controls(entry)
+            if probe_err:
+                warns.append(f"页面探测警告：{probe_err}")
+            elif page_snapshot:
+                uat_logger.info("[AI_DESIGN] Page probed OK, %d controls found", len(probe_registry))
+        except Exception as e:
+            warns.append(f"页面探测失败：{e}")
+
     prompt = build_design_preview_prompt(
         text,
         platform_type,
@@ -353,6 +393,7 @@ def generate_design_drafts(
         project_name=project_name,
         extra_context=extra_context,
         entry_target=entry,
+        page_snapshot=page_snapshot,
     )
     from ai_selector_recovery import _extract_json_obj
     from ai_local_inference import local_ai_service
@@ -383,6 +424,21 @@ def generate_design_drafts(
     if not drafts:
         return [], warns, "未能解析出有效用例草案"
 
+    # 解析 probe_index → 真实 selector（仅 web 有探测数据时）
+    if probe_registry and platform == "web":
+        try:
+            from ai_local_inference import clamp_plan_steps_to_probe_registry
+            _tech_warns = []
+            for d in drafts:
+                steps = d.get("steps") or []
+                if steps:
+                    clamp_warnings = clamp_plan_steps_to_probe_registry(steps, probe_registry)
+                    _tech_warns.extend(clamp_warnings)
+            if _tech_warns:
+                uat_logger.info("[AI_DESIGN] probe_index clamp: %d warnings suppressed", len(_tech_warns))
+        except Exception as e:
+            uat_logger.warning("[AI_DESIGN] probe_index resolution failed: %s", e)
+
     if len(drafts) > design_max_cases():
         warns.append(f"草案超过上限，已截断至 {design_max_cases()} 条")
         drafts = drafts[: design_max_cases()]
@@ -411,6 +467,40 @@ def save_design_drafts_to_project(
     created_ids: List[int] = []
     warnings: List[str] = []
     prefix = f"[AI-DESIGN:{batch_id}] " if batch_id else "[AI-DESIGN] "
+
+    # 对 web 平台草案做断言回放修正（填充交互后才出现的文本）
+    if platform == "web":
+        try:
+            from ai_page_probe import ground_plan_assertions_with_replay
+            _has_assert = any(
+                isinstance(d, dict) and any(
+                    isinstance(s, dict) and str(s.get("action") or "").strip().lower() == "assert"
+                    for s in (d.get("steps") or [])
+                )
+                for d in drafts
+            )
+            if _has_assert:
+                _url = ""
+                for d in drafts:
+                    if isinstance(d, dict) and d.get("case_url"):
+                        _url = str(d["case_url"]).strip()
+                        break
+                if _url:
+                    uat_logger.info("[AI_DESIGN] Grounding assertions for %d drafts via replay", len(drafts))
+                    for d in drafts:
+                        if not isinstance(d, dict):
+                            continue
+                        steps = d.get("steps") or []
+                        if steps:
+                            grounded_steps, gw, gerr = ground_plan_assertions_with_replay(_url, steps)
+                            if grounded_steps:
+                                d["steps"] = grounded_steps
+                            if gw:
+                                warnings.extend(gw)
+                            if gerr:
+                                uat_logger.warning("[AI_DESIGN] Assert grounding error: %s", gerr)
+        except Exception as e:
+            uat_logger.warning("[AI_DESIGN] Assert grounding skipped: %s", e)
 
     for draft in drafts:
         if not isinstance(draft, dict):

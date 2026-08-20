@@ -1652,6 +1652,13 @@ _EFFECT_TITLE_ALIASES: dict[str, list[str]] = {
     "回收站": ["回收站", "Recycle Bin", "$Recycle.Bin"],
     "此电脑": ["此电脑", "This PC", "Computer"],
     "计算机": ["此电脑", "This PC", "Computer", "计算机"],
+    # 浏览器别名（窗口标题通常含 "Microsoft Edge" / "Google Chrome" 等）
+    "edge": ["Microsoft Edge", "Edge", "msedge"],
+    "msedge": ["Microsoft Edge", "Edge", "msedge"],
+    "chrome": ["Google Chrome", "Chrome"],
+    "google chrome": ["Google Chrome", "Chrome"],
+    "firefox": ["Mozilla Firefox", "Firefox"],
+    "浏览器": ["Microsoft Edge", "Google Chrome", "Chrome", "Edge", "Firefox"],
 }
 
 
@@ -1670,8 +1677,9 @@ def _effect_keywords(keyword: str) -> List[str]:
 def _title_matches(keyword: str, titles: List[str]) -> bool:
     keys = _effect_keywords(keyword)
     for title in titles:
+        title_lower = title.lower() if title else ""
         for key in keys:
-            if key in title:
+            if key.lower() in title_lower:
                 return True
     return False
 

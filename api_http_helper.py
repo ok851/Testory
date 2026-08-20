@@ -216,7 +216,14 @@ def execute_api_spec_sync(
                     "error": str(e),
                 }
         elif isinstance(jb, (dict, list)):
-            json_body = jb
+            # Serialize → resolve {{var}} → parse back, so placeholders inside
+            # nested object values are substituted at runtime too.
+            jb_str = json.dumps(jb, ensure_ascii=False)
+            jb_str = rt(jb_str)
+            try:
+                json_body = json.loads(jb_str)
+            except json.JSONDecodeError:
+                json_body = jb
         else:
             json_body = None
     elif body_type == "form":
@@ -296,6 +303,16 @@ def execute_api_spec_sync(
 
     if "expected_json_value" in spec:
         expected_json_value = spec.get("expected_json_value")
+        # Resolve {{var}} in expected value (str or nested object/array).
+        if isinstance(expected_json_value, str):
+            expected_json_value = rt(expected_json_value)
+        elif isinstance(expected_json_value, (dict, list)):
+            try:
+                ev_str = json.dumps(expected_json_value, ensure_ascii=False)
+                ev_str = rt(ev_str)
+                expected_json_value = json.loads(ev_str)
+            except (json.JSONDecodeError, TypeError):
+                pass
         json_path = (spec.get("json_path") or "").strip()
         if parsed_json is None:
             ok = False

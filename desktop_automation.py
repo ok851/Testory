@@ -35,6 +35,14 @@ from desktop_runtime import (
     desktop_runtime_unavailable_reason,
     parse_desktop_spec,
 )
+
+
+def _is_url_text(text: str) -> bool:
+    """判断是否为 URL（含 http:// https:// www. 协议前缀）。"""
+    t = (text or "").strip().lower()
+    return t.startswith("http://") or t.startswith("https://") or t.startswith("www.")
+
+
 from desktop_visual_engine import (
     VisualMatchFailed,
     assert_visual_desktop_step,
@@ -65,6 +73,8 @@ _DESKTOP_ACTIONS = frozenset({
     "screenshot",
     "assert",
     "verify",
+    "extract_otp",  # 跨端：提取手机短信验证码
+    "api_call",     # 跨端：HTTP 接口调用
 })
 
 _WEB_ONLY_ACTIONS = frozenset({
@@ -101,12 +111,18 @@ def normalize_automation_layer(step: Dict[str, Any]) -> str:
     action = (step.get("action") or "").strip().lower()
     if action in _DESKTOP_ONLY_ACTIONS:
         return "desktop"
+    # 跨端桥接步骤：extract_otp / api_call 始终走 desktop 执行器
+    # （从 DesktopAutomation._execute_extract_otp / _execute_api_call 中调 mobile_cross_end_tools / agent_api_runner）
+    if action in ("extract_otp", "api_call"):
+        return "desktop"
     st = (step.get("selector_type") or "").strip().lower()
     if st == "visual":
         return "desktop"
     layer = (step.get("automation_layer") or "").strip().lower()
     if layer in ("web", "desktop", "android"):
         return layer
+    if layer == "cross_end":
+        return "desktop"
     try:
         from mobile_automation import _MOBILE_ONLY_ACTIONS, normalize_mobile_action
 
@@ -139,6 +155,8 @@ def validate_step_for_layer(action: str, layer: str) -> Optional[str]:
             return f"不支持的桌面动作：{act}"
         if act in _POINTER_ACTIONS.union({"input", "fill", "verify", "assert"}):
             return None
+        # extract_otp / api_call 等跨端动作也通过校验
+        return None
     elif layer == "web" and act in ("launch_app", "attach_window"):
         return f"Web 步骤不允许桌面专用动作：{act}，请将自动化层切换为「桌面」"
     elif layer == "web" and act in ("open_app", "close_app", "tap", "input_text"):
@@ -518,6 +536,57 @@ class DesktopAutomation:
             mods = []
             i += 1
 
+    def _execute_extract_otp(self, step: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
+        """跨端步骤：从手机端提取短信验证码。"""
+        try:
+            from mobile_cross_end_tools import dispatch_cross_end_tool
+            result = dispatch_cross_end_tool("mobile_extract_otp", {
+                "timeout_sec": spec.get("timeout_sec", 120),
+                "sender_hint": spec.get("sender_hint", ""),
+                "pattern": spec.get("pattern", ""),
+            })
+            if isinstance(result, dict) and result.get("sms_otp"):
+                return {
+                    "status": "success",
+                    "action": "extract_otp",
+                    "verified": True,
+                    "sms_otp": result["sms_otp"],
+                    "variables": result.get("variables", {"sms_otp": result["sms_otp"]}),
+                }
+            return {
+                "status": "error",
+                "action": "extract_otp",
+                "error": str(result.get("error") or "未提取到验证码"),
+                "raw": result,
+            }
+        except Exception as e:
+            return {"status": "error", "action": "extract_otp", "error": str(e)}
+
+    def _execute_api_call(self, step: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
+        """跨端步骤：执行 HTTP 接口调用。"""
+        try:
+            from agent_api_runner import run_temp_http, run_api_case, summarize_for_agent
+            case_id = spec.get("case_id")
+            if case_id:
+                api_result = run_api_case(int(case_id))
+            else:
+                api_result = run_temp_http(
+                    method=str(spec.get("method") or "GET"),
+                    url=str(spec.get("url") or ""),
+                    headers=spec.get("headers") if isinstance(spec.get("headers"), dict) else None,
+                    body=spec.get("body"),
+                    timeout_sec=float(spec.get("timeout_sec") or 30.0),
+                )
+            summary = summarize_for_agent(api_result)
+            return {
+                "status": "success",
+                "action": "api_call",
+                "verified": True,
+                "summary": summary[:500],
+            }
+        except Exception as e:
+            return {"status": "error", "action": "api_call", "error": str(e)}
+
     def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
         if not desktop_runtime_available():
             raise RuntimeError(
@@ -528,6 +597,16 @@ class DesktopAutomation:
         step = prepare_desktop_step(step)
         action = (step.get("action") or "").strip()
         spec = parse_desktop_spec(step.get("desktop_spec"))
+        # 跨端步骤优先使用 cross_end_spec
+        if action in ("extract_otp", "api_call"):
+            ces = step.get("cross_end_spec")
+            if ces and not isinstance(ces, dict):
+                try:
+                    spec = json.loads(ces)
+                except Exception:
+                    spec = {}
+            elif isinstance(ces, dict):
+                spec = ces
         input_value = step.get("input_value") or ""
         compare_type = (step.get("compare_type") or "equals").strip().lower()
 
@@ -550,7 +629,6 @@ class DesktopAutomation:
         if action in ("input", "fill"):
             if not str(input_value):
                 raise ValueError("桌面输入步骤缺少 input_value")
-            # 热键/附着后的键盘输入：无 visual 模板时不要强行视觉点击（否则微信搜索必失败）
             st = (step.get("selector_type") or "").strip().lower()
             keyboard_only = bool(spec.get("keyboard_only")) or (
                 (compare_type or "").strip().lower() in ("keyboard", "type", "paste")
@@ -560,13 +638,20 @@ class DesktopAutomation:
                 self._run_visual_pointer({**step, "action": "click"})
                 time.sleep(0.15)
             sendinput_type_text(str(input_value))
-            return {
+            result = {
                 "status": "success",
                 "action": action,
                 "verified": True,
                 "pointer_executed": bool(has_visual and not keyboard_only),
                 "keyboard_only": bool(keyboard_only or not has_visual),
             }
+            # URL 输入：自动按 Enter 确认导航
+            if _is_url_text(str(input_value)):
+                time.sleep(0.3)
+                self._send_hotkey("Enter")
+                result["url_navigated"] = True
+                result["reply"] = f"已输入 URL 并按 Enter 导航：{str(input_value)}"
+            return result
 
         if action == "hotkey":
             keys = (input_value or "").strip()
@@ -574,6 +659,12 @@ class DesktopAutomation:
                 raise ValueError("hotkey 需要 input_value，如 ^c 或 %{F4}")
             self._send_hotkey(keys)
             return {"status": "success", "action": action, "verified": True}
+
+        if action == "extract_otp":
+            return self._execute_extract_otp(step, spec)
+
+        if action == "api_call":
+            return self._execute_api_call(step, spec)
 
         if action == "wait":
             mode = (compare_type or "fixed").strip().lower()

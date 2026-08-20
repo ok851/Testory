@@ -1990,7 +1990,7 @@ class Database:
         cursor = conn.cursor()
         ct = _normalize_case_type(case_type)
         role = (case_role or "business").strip().lower()
-        if role not in ("login_feature", "business", "auth_fixture"):
+        if role not in ("login_feature", "business", "auth_fixture", "smoke", "regression", "edge_case", "security", "boundary", "negative", "exploratory", "integration", "e2e"):
             role = "business"
         plat = _normalize_platform(platform)
         uid = int(unit_id) if unit_id else None

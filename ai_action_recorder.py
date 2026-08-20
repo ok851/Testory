@@ -178,10 +178,10 @@ class ActionRecorder:
             action_id=f"act_{len(self.records)}",
             action_type=self._normalize_action_type(name, args),
             target=target or name,
-            input_data=str(args.get("text") or args.get("input_value") or "")[:100],
+            input_data=str(args.get("text") or args.get("input_value") or "")[:500],
             result=summary or f"{name}",
             status=st,
-            raw_text=json.dumps({"name": name, "args": args}, ensure_ascii=False)[:300],
+            raw_text=json.dumps({"name": name, "args": args}, ensure_ascii=False)[:2000],
         )
         self.records.append(rec)
         return [rec]
@@ -245,6 +245,13 @@ class ActionRecorder:
         n = (name or "").strip()
         if n.startswith("windows_"):
             return n.replace("windows_", "", 1)
+        # 跨端工具：映射为统一 action 名（与 normalize_ai_step 的 allowed_actions 对齐）
+        if n == "mobile_extract_otp":
+            return "extract_otp"
+        if n == "desktop_type_text":
+            return "input"
+        if n == "api_call":
+            return "api_call"
         if n == "computer_use":
             return str(args.get("action") or "computer_use")[:40]
         return n[:40] or "tool"
@@ -278,6 +285,52 @@ class ActionRecorder:
                 if self.platform in ("web", "desktop", "android")
                 else "web",
             }
+            # ── 跨端/api 步骤：仅当 raw_name 明确匹配时才做特殊参数恢复 ──
+            _raw_name = ""
+            _raw_args: Dict[str, Any] = {}
+            try:
+                raw = json.loads(rec.raw_text or "{}")
+                _raw_name = raw.get("name") or ""
+                _raw_args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
+            except Exception:
+                pass
+            if _raw_name == "mobile_extract_otp" or rec.action_type == "extract_otp":
+                step["action"] = "extract_otp"
+                step["automation_layer"] = "cross_end"
+                cross_spec = {}
+                if _raw_args.get("timeout_sec"):
+                    cross_spec["timeout_sec"] = _raw_args["timeout_sec"]
+                if _raw_args.get("sender_hint"):
+                    cross_spec["sender_hint"] = _raw_args["sender_hint"]
+                if _raw_args.get("pattern"):
+                    cross_spec["pattern"] = _raw_args["pattern"]
+                step["cross_end_spec"] = json.dumps(cross_spec, ensure_ascii=False)
+                step["description"] = step.get("description") or "提取手机短信验证码"
+            elif _raw_name == "desktop_type_text":
+                step["action"] = "input"
+                step["automation_layer"] = "desktop"
+                if _raw_args.get("text"):
+                    step["input_value"] = str(_raw_args["text"])[:500]
+                if _raw_args.get("clear") is not None:
+                    ds = json.loads(step.get("desktop_spec") or "{}") if step.get("desktop_spec") else {}
+                    ds["clear"] = bool(_raw_args["clear"])
+                    step["desktop_spec"] = json.dumps(ds, ensure_ascii=False)
+            elif _raw_name == "api_call" or rec.action_type == "api_call":
+                step["action"] = "api_call"
+                step["automation_layer"] = "cross_end"
+                api_spec = {}
+                api_spec["method"] = str(_raw_args.get("method") or "GET")
+                api_spec["url"] = str(_raw_args.get("url") or "")
+                if _raw_args.get("headers"):
+                    api_spec["headers"] = _raw_args["headers"]
+                if _raw_args.get("body") is not None:
+                    api_spec["body"] = _raw_args["body"]
+                if _raw_args.get("timeout_sec"):
+                    api_spec["timeout_sec"] = _raw_args["timeout_sec"]
+                if _raw_args.get("case_id"):
+                    api_spec["case_id"] = _raw_args["case_id"]
+                step["cross_end_spec"] = json.dumps(api_spec, ensure_ascii=False)
+                step["description"] = step.get("description") or f"{api_spec.get('method','GET')} {api_spec.get('url','')}"
             if rec.locator:
                 step["locator"] = rec.locator
             hit = probe_by_text.get((rec.target or "").strip())

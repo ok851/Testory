@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Callable, Dict, List, Optional
 
@@ -50,10 +51,18 @@ def case_steps_include_web(steps: List[Dict[str, Any]]) -> bool:
 def ensure_mixed_run_environment(steps: List[Dict[str, Any]]) -> Optional[str]:
     """
     混排用例运行前检查。返回 None 表示通过；否则为错误/警告文案。
+    跨端桥接步骤（extract_otp / api_call）不参与 Android 混排检查，
+    因为它们始终从桌面执行器内部调用，不需要独立 Android 运行环境。
     """
     has_desktop = case_steps_include_desktop(steps)
     has_android = case_steps_include_android(steps)
     has_web = case_steps_include_web(steps)
+
+    # 跨端桥接步骤（extract_otp/api_call）不计入混排检查
+    _cross_end_count = sum(
+        1 for s in (steps or [])
+        if isinstance(s, dict) and (s.get("action") or "").strip().lower() in ("extract_otp", "api_call")
+    )
 
     if has_android and has_web:
         return "暂不支持 Web 与 Android 步骤混排，请将用例拆分为独立平台用例。"
@@ -87,7 +96,7 @@ def ensure_mixed_run_environment(steps: List[Dict[str, Any]]) -> Optional[str]:
 
 
 def enrich_execution_step(step: Dict[str, Any]) -> Dict[str, Any]:
-    """将数据库步骤格式补充 automation_layer / desktop_spec / mobile_spec 到执行脚本 dict。"""
+    """将数据库步骤格式补充 automation_layer / desktop_spec / mobile_spec / cross_end_spec 到执行脚本 dict。"""
     out = dict(step)
     out["automation_layer"] = normalize_automation_layer(step)
     ds = step.get("desktop_spec")
@@ -109,7 +118,58 @@ def enrich_execution_step(step: Dict[str, Any]) -> Dict[str, Any]:
             (step.get("strategy") or step.get("selector_type") or "accessibility_id").strip()
             or "accessibility_id"
         )
+    # 跨端 spec 解析
+    ces = step.get("cross_end_spec")
+    if ces and not isinstance(ces, dict):
+        try:
+            out["cross_end_spec"] = json.loads(ces) if isinstance(ces, str) else {}
+        except Exception:
+            out["cross_end_spec"] = {}
+    elif isinstance(ces, dict):
+        out["cross_end_spec"] = ces
+    else:
+        out["cross_end_spec"] = {}
+    # 变量替换：把 input_value 中的 {{var}} 占位符替换为实际值
+    _resolve_step_vars_in_place(out)
     return out
+
+
+# 跨端用例回放时的运行时变量存储
+_runtime_case_vars: Dict[str, str] = {}
+
+
+def set_case_var(key: str, value: str) -> None:
+    if key and value is not None:
+        _runtime_case_vars[key] = str(value)
+
+
+def get_case_var(key: str) -> str:
+    return _runtime_case_vars.get(key, "")
+
+
+def clear_case_vars() -> None:
+    _runtime_case_vars.clear()
+
+
+def _resolve_step_vars_in_place(step: Dict[str, Any]) -> None:
+    """把 input_value / cross_end_spec 中的 {{var}} 占位符替换为运行时变量值。"""
+    import re as _re
+    pattern = _re.compile(r"\{\{(\w+)\}\}")
+
+    def _replace(val: Any) -> Any:
+        if isinstance(val, str) and "{{" in val:
+            return pattern.sub(
+                lambda m: _runtime_case_vars.get(m.group(1), m.group(0)),
+                val,
+            )
+        return val
+
+    if step.get("input_value"):
+        step["input_value"] = _replace(step["input_value"])
+    ces = step.get("cross_end_spec")
+    if isinstance(ces, dict):
+        for k, v in list(ces.items()):
+            ces[k] = _replace(v)
 
 
 def is_desktop_step(step: Dict[str, Any]) -> bool:
@@ -267,6 +327,11 @@ def sync_execute_step_by_layer(
 
     if layer == "desktop":
         result = sync_desktop_execute_step(step)
+        # 跨端步骤 extract_otp：把返回的 sms_otp 写入运行时变量
+        if action == "extract_otp" and isinstance(result, dict):
+            otp = result.get("sms_otp") or ""
+            if otp:
+                set_case_var("sms_otp", str(otp))
         return validate_desktop_step_result(result, action)
 
     if layer == "android":
@@ -276,6 +341,10 @@ def sync_execute_step_by_layer(
 
         exec_step = enrich_execution_step(step)
         result = sync_mobile_execute_step(exec_step, get_mobile_executor())
+        if action == "extract_otp" and isinstance(result, dict):
+            otp = result.get("sms_otp") or ""
+            if otp:
+                set_case_var("sms_otp", str(otp))
         return validate_mobile_step_result(result, action)
 
     if web_executor:
@@ -301,6 +370,11 @@ async def async_execute_step_by_layer(
 
     if is_desktop_step(exec_step):
         result = await asyncio.to_thread(sync_desktop_execute_step, exec_step)
+        # 跨端步骤 extract_otp：把返回的 sms_otp 写入运行时变量
+        if action == "extract_otp" and isinstance(result, dict):
+            otp = result.get("sms_otp") or ""
+            if otp:
+                set_case_var("sms_otp", str(otp))
         return [validate_desktop_step_result(result, action)]
 
     if is_mobile_step(exec_step):
@@ -311,6 +385,10 @@ async def async_execute_step_by_layer(
         result = await asyncio.to_thread(
             sync_mobile_execute_step, exec_step, get_mobile_executor()
         )
+        if action == "extract_otp" and isinstance(result, dict):
+            otp = result.get("sms_otp") or ""
+            if otp:
+                set_case_var("sms_otp", str(otp))
         return [validate_mobile_step_result(result, action)]
 
     results = await automation.execute_single_step(exec_step)

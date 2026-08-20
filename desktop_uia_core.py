@@ -300,6 +300,31 @@ class UIAElement:
         except Exception:
             return None
 
+    def get_children(self) -> List['UIAElement']:
+        """获取所有直接子元素。"""
+        children: List[UIAElement] = []
+        walker = self._get_tree_walker()
+        if not walker:
+            return children
+        try:
+            child = walker.GetFirstChildElement(self._element)
+            while child:
+                children.append(UIAElement(child, walker))
+                try:
+                    child = walker.GetNextSiblingElement(child)
+                except Exception:
+                    break
+        except Exception:
+            pass
+        return children
+
+    def _get_automation_id(self) -> str:
+        """获取 AutomationId 属性。"""
+        try:
+            return str(self._element.CurrentAutomationId or "").strip()
+        except Exception:
+            return ""
+
     def is_interactive(self) -> bool:
         """判断是否为可交互控件"""
         ct_id = self.get_control_type_id()
@@ -811,3 +836,155 @@ def find_element_by_acc_name(acc_name: str) -> Dict[str, Any]:
         "class_name": found.get_class_name(),
         "selector": build_selector_from_element(found),
     }
+
+
+def find_elements_by_description(
+    description: str,
+    root: Optional[Any] = None,
+    max_depth: int = 12,
+    max_results: int = 20,
+) -> List[Dict[str, Any]]:
+    """按自然语言描述查找 UIA 元素（支持模糊匹配 + 深度递归）。
+
+    供 UnifiedElementLocator 使用。返回列表，每项包含:
+        x, y, width, height, score, strategy, name, control_type, automation_id
+    """
+    name = (description or "").strip()
+    if not name:
+        return []
+
+    _ensure_com_initialized()
+    uia = _get_uia()
+    if not uia:
+        return []
+
+    walker = _get_tree_walker(uia)
+    if not walker:
+        return []
+
+    if root is None:
+        try:
+            root = UIAElement(uia.GetRootElement(), walker)
+        except Exception:
+            return []
+
+    keywords = _extract_search_keywords(name)
+    results: List[Dict[str, Any]] = []
+    _collect_elements_deep(root, name, keywords, results, depth=0, max_depth=max_depth, max_results=max_results)
+    results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    return results
+
+
+def _extract_search_keywords(description: str) -> List[str]:
+    """从描述中提取搜索关键词。"""
+    import re
+    text = description.strip()
+    expanded = [text]
+    mapping = {
+        "登录": ["登录", "登陆", "login", "sign in", "submit", "确定"],
+        "确定": ["确定", "确认", "ok", "yes"],
+        "取消": ["取消", "cancel", "close", "关闭"],
+        "搜索": ["搜索", "查找", "search", "find"],
+        "保存": ["保存", "save"],
+        "删除": ["删除", "delete", "remove"],
+        "添加": ["添加", "新增", "add", "new"],
+        "发送": ["发送", "提交", "send", "submit"],
+        "下载": ["下载", "download", "export"],
+        "上传": ["上传", "upload", "import"],
+        "编辑": ["编辑", "修改", "edit"],
+        "返回": ["返回", "后退", "back"],
+        "下一步": ["下一步", "next"],
+        "开始": ["开始", "start", "run"],
+        "停止": ["停止", "stop"],
+        "刷新": ["刷新", "refresh", "reload"],
+        "关闭": ["关闭", "close", "exit"],
+    }
+    for key, aliases in mapping.items():
+        if key in text.lower():
+            expanded.extend(aliases)
+            break
+    expanded.append(text.lower())
+    tokens = re.split(r"[\s,，。.!！?？;；:：、\(\)（）\[\]【】]+", text)
+    for t in tokens:
+        t = t.strip()
+        if len(t) >= 2 and t.lower() not in [e.lower() for e in expanded]:
+            expanded.append(t)
+    return list(dict.fromkeys([e for e in expanded if e]))
+
+
+def _collect_elements_deep(
+    element: "UIAElement",
+    description: str,
+    keywords: List[str],
+    results: List[Dict[str, Any]],
+    depth: int = 0,
+    max_depth: int = 12,
+    max_results: int = 20,
+):
+    """深度递归收集匹配的元素。"""
+    if len(results) >= max_results:
+        return
+    if depth > max_depth:
+        return
+    try:
+        acc_name = element.get_acc_name() or ""
+        class_name = element.get_class_name() or ""
+        ctrl_type = element.get_control_type() or ""
+        automation_id = ""
+        try:
+            automation_id = element._get_automation_id() or ""
+        except Exception:
+            pass
+        rect = element.get_bounding_rect()
+        if rect:
+            x1, y1, x2, y2 = rect
+            w = max(1, int(x2 - x1))
+            h = max(1, int(y2 - y1))
+            text_lower = f"{acc_name} {class_name} {automation_id}".lower()
+            desc_lower = description.lower()
+            score = 0.0
+            strategy = "fuzzy"
+            if acc_name and acc_name.lower() == desc_lower:
+                score = 1.0
+                strategy = "exact"
+            elif acc_name and desc_lower in acc_name.lower():
+                score = 0.9
+                strategy = "exact"
+            elif acc_name and acc_name.lower() in desc_lower:
+                score = 0.75
+                strategy = "exact"
+            else:
+                keyword_hits = 0
+                for kw in keywords:
+                    if kw and kw.lower() in text_lower:
+                        keyword_hits += 1
+                if keyword_hits > 0:
+                    score = min(0.85, 0.3 + 0.15 * keyword_hits)
+                    strategy = "keyword"
+                elif acc_name and len(acc_name) >= 2:
+                    score = 0.3
+                    strategy = "name_only"
+                elif automation_id and len(automation_id) >= 2:
+                    score = 0.25
+                    strategy = "automation_id"
+            if score >= 0.25:
+                results.append({
+                    "x": int(x1),
+                    "y": int(y1),
+                    "width": w,
+                    "height": h,
+                    "score": score,
+                    "strategy": strategy,
+                    "name": acc_name or class_name,
+                    "control_type": ctrl_type,
+                    "automation_id": automation_id,
+                    "depth": depth,
+                })
+    except Exception:
+        pass
+    try:
+        children = element.get_children() or []
+        for child in children:
+            _collect_elements_deep(child, description, keywords, results, depth + 1, max_depth, max_results)
+    except Exception:
+        pass

@@ -1657,10 +1657,10 @@ class LocalAIService:
             content = _norm_str(item.get("content"))
             if not content:
                 continue
-            if len(content) > 12000:
-                content = content[:11999] + "…"
+            if len(content) > 20000:
+                content = content[:19999] + "…"
             out.append({"role": role, "content": content})
-        return out[-12:]
+        return out[-40:]
 
     def _build_refine_prompt(
         self,
@@ -1673,7 +1673,7 @@ class LocalAIService:
         dom_context_pack: Optional[str] = None,
         interaction_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        hist_clean = self._sanitize_chat_history_for_prompt(history)[-6:]
+        hist_clean = self._sanitize_chat_history_for_prompt(history)[-20:]
         history_text = "\n".join(
             [f"- {item.get('role', 'user')}: {item.get('content', '')}" for item in hist_clean]
         )

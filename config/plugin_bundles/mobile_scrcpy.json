@@ -1,15 +1,15 @@
-﻿{
+{
   "id": "mobile-scrcpy",
   "name": "scrcpy (mirror + control)",
-  "version": "2.7",
+  "version": "3.3.4",
   "type": "runtime_bundle",
   "description": "高帧率投屏 + PC 端反控（tap/swipe）。安装后自动写入 scrcpy_path。",
   "platforms": {
     "windows": {
-      "filename": "scrcpy-win64-v2.7.zip",
-      "zip_inner_dir": "scrcpy-win64-v2.7",
+      "filename": "scrcpy-win64-v3.3.4.zip",
+      "zip_inner_dir": "scrcpy-win64-v3.3.4",
       "scrcpy_binary": "scrcpy.exe",
-      "url": "https://github.com/Genymobile/scrcpy/releases/download/v2.7/scrcpy-win64-v2.7.zip",
+      "url": "https://github.com/Genymobile/scrcpy/releases/download/v3.3.4/scrcpy-win64-v3.3.4.zip",
       "sha256": "",
       "size_mb_hint": 40
     }

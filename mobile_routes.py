@@ -8,7 +8,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from flask import Response, jsonify, request, stream_with_context
+from flask import jsonify, request
 from flask_login import current_user, login_required
 
 from mobile_device_manager import (
@@ -277,50 +277,23 @@ def _gateway_diagnostics() -> dict:
 
 
 def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dict[str, Any]:
-    """构建投屏信息 payload，供 connect 响应与 mirror/status 复用。"""
-    from mobile_env_config import resolve_mirror_backend, scrcpy_bridge_url
-    from mobile_scrcpy_bridge import scrcpy_mirror_diagnostics
+    """构建投屏信息 payload，供 connect 响应与 mirror/start 复用。
 
-    backend = resolve_mirror_backend(udid)
-    diag = scrcpy_mirror_diagnostics(udid)
+    已放弃内嵌画布方案：投屏统一由手机画面投屏承担（在用户本地电脑启动），
+    不再预热内嵌 scrcpy 会话、不再产出内嵌流地址。
+    """
+    _ = session_id, client_host  # 保留参数以兼容调用方
+    from mobile_env_config import scrcpy_available
+    from mobile_mirror import external_scrcpy_status
+
+    ext_status = external_scrcpy_status(udid)
     payload: Dict[str, Any] = {
-        "mirror_backend": backend,
-        "mirror_frame_url": f"/api/mobile/mirror/frame?session_id={session_id}&udid={udid}",
-        "scrcpy_server_version": diag.get("scrcpy_server_version"),
-        "scrcpy_session_active": diag.get("scrcpy_session_active"),
-        "client_mirror_hint": (
-            "高帧率投屏需浏览器或桌面 WebView 支持 WebCodecs H.264（avc1）解码"
-        ),
+        "scrcpy_available": scrcpy_available(),
+        "external_scrcpy_running": ext_status.get("running", False),
+        "external_scrcpy_available": ext_status.get("available", False),
+        "client_mirror_hint": "投屏采用手机画面投屏（在本地电脑启动，已放弃内嵌画布方案）",
     }
-    if backend == "scrcpy_ws":
-        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started, warm_scrcpy_session
-
-        ensure_bridge_started()
-        health = bridge_health()
-        if not health.get("scrcpy_server_ready"):
-            payload["mirror_backend"] = "none"
-            payload["mirror_fallback_reason"] = "未找到 scrcpy-server，无法投屏"
-            return payload
-        warm_ok, warm_err = warm_scrcpy_session(udid)
-        if not warm_ok:
-            payload["mirror_backend"] = "none"
-            payload["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败，无法投屏"
-            payload["scrcpy_session_active"] = False
-            payload["scrcpy_warm_diagnostics"] = scrcpy_mirror_diagnostics(udid)
-            return payload
-        from urllib.parse import quote
-
-        payload["mirror_stream_url"] = (
-            f"/api/mobile/mirror/scrcpy-stream?serial={quote(udid, safe='')}"
-        )
-        payload["mirror_ws_url"] = f"{scrcpy_bridge_url(client_host)}/?serial={udid}"
-        payload["bridge"] = health
-        payload["scrcpy_warmed"] = True
-        warm_diag = scrcpy_mirror_diagnostics(udid)
-        payload["scrcpy_session_active"] = warm_diag.get("scrcpy_session_active")
-    elif diag.get("mirror_fallback_reason"):
-        payload["mirror_fallback_reason"] = diag.get("mirror_fallback_reason")
-    if payload.get("mirror_backend") != "scrcpy_ws" and udid:
+    if udid:
         try:
             from mobile_scrcpy_bridge import _diagnose_device_for_scrcpy
             quick_diag = _diagnose_device_for_scrcpy(udid)
@@ -343,16 +316,16 @@ def _connect_response_with_mirror(
     *,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """基于 _connect_response 结果追加投屏信息。"""
+    """基于 _connect_response 结果追加投屏标记（不触发 warm，由前端异步初始化）。"""
     from mobile_mirror import start_scrcpy_mirror
+    from mobile_env_config import scrcpy_available
 
     resolved = (agent_result.get("udid") or udid or "").strip()
     mirror = start_scrcpy_mirror(resolved)
-    client_host = (request.host or "").split(":")[0] if request else ""
     out = _connect_response(resolved, agent_result)
     out["session_id"] = mirror.get("session_id") or out.get("session_id") or ""
     out["scrcpy_started"] = bool(mirror.get("scrcpy_started"))
-    out.update(_mirror_payload(resolved, mirror.get("session_id") or "", client_host=client_host))
+    out["scrcpy_available"] = scrcpy_available()
     if extra:
         out.update(extra)
     return out
@@ -520,34 +493,71 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
-        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started, scrcpy_mirror_diagnostics
-        from mobile_env_config import resolve_mirror_backend, scrcpy_available
+        from mobile_env_config import scrcpy_available
+        from mobile_mirror import external_scrcpy_status
 
-        ensure_bridge_started()
         udid = (request.args.get("udid") or "").strip()
         if not udid:
             from mobile_device_manager import get_connected_udid
             udid = get_connected_udid() or ""
-        diag = scrcpy_mirror_diagnostics(udid)
+        ext_status = external_scrcpy_status(udid)
         out: Dict[str, Any] = {
             "success": True,
             "udid": udid,
-            "mirror_backend": resolve_mirror_backend(udid),
             "scrcpy_available": scrcpy_available(),
-            "bridge": bridge_health(),
-            **diag,
+            "external_scrcpy_running": ext_status.get("running", False),
+            "external_scrcpy_available": ext_status.get("available", False),
+            "client_mirror_hint": "投屏采用手机画面投屏（在本地电脑启动，已放弃内嵌画布方案）",
         }
-        if request.args.get("warm") == "1" and udid:
-            from mobile_scrcpy_bridge import warm_scrcpy_session
-            warm_ok, warm_err = warm_scrcpy_session(udid)
-            out["scrcpy_warm_ok"] = warm_ok
-            out["scrcpy_warm_error"] = "" if warm_ok else warm_err
-            if warm_ok:
-                out["mirror_backend"] = "scrcpy_ws"
-                out["mirror_fallback_reason"] = ""
-            elif out.get("mirror_backend") == "scrcpy_ws":
-                out["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败"
         return jsonify(out)
+
+    @app.route("/api/mobile/connection-status", methods=["GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_connection_status():
+        """返回当前设备连接/绑定状态，用于前端模块切换后恢复状态。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        from mobile_device_manager import get_connected_udid, check_mobile_health
+        from mobile_env_config import scrcpy_available
+        from mobile_mirror import external_scrcpy_status
+
+        udid = get_connected_udid() or ""
+        health = check_mobile_health() if udid else {}
+        device_info = {}
+        assistant_installed = False
+        assistant_connected = False
+
+        if udid:
+            try:
+                device_info = get_device_info(udid) or {}
+            except Exception:
+                pass
+            try:
+                from mobile_assistant_bundles import assistant_installed_on_device
+                assistant_installed = bool(assistant_installed_on_device(udid))
+            except Exception:
+                pass
+            try:
+                ast = agent_plugin_status(udid)
+                assistant_connected = bool(ast.get("plugin_ready"))
+            except Exception:
+                pass
+
+        ext_status = external_scrcpy_status(udid) if udid else {"running": False}
+        return jsonify({
+            "success": True,
+            "connected": bool(udid),
+            "udid": udid,
+            "device_info": device_info,
+            "assistant_installed": assistant_installed,
+            "assistant_connected": assistant_connected,
+            "scrcpy_available": scrcpy_available(),
+            "scrcpy_running": ext_status.get("running", False),
+            "adb_ok": health.get("adb_ok", False),
+            "authorized_device_count": health.get("authorized_device_count", 0),
+        })
 
     @app.route("/api/mobile/mirror/start", methods=["POST"])
     @login_required
@@ -586,39 +596,49 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
                 stop_scrcpy_device_session(udid)
             except Exception:
                 pass
+            try:
+                from mobile_mirror import stop_external_scrcpy
+                stop_external_scrcpy(udid)
+            except Exception:
+                pass
         return jsonify({"success": True})
 
-    @app.route("/api/mobile/mirror/scrcpy-stream", methods=["GET"])
+    @app.route("/api/mobile/mirror/launch-external", methods=["POST"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")
     @api_error_handler
-    def api_mobile_mirror_scrcpy_stream():
-        """设备高帧率 H.264 流（同源 HTTP，走 Flask 端口）。"""
-        from urllib.parse import unquote
+    def api_mobile_mirror_launch_external():
+        """在用户本地电脑启动手机画面投屏窗口。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        udid = _resolve_request_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        from mobile_mirror import launch_external_scrcpy
 
-        serial = unquote(
-            (request.args.get("serial") or request.args.get("udid") or "").strip()
-        )
-        if not serial:
-            return jsonify({"success": False, "error": "缺少 serial"}), 400
-        from mobile_scrcpy_bridge import iter_scrcpy_http_stream
+        result = launch_external_scrcpy(udid)
+        if not result.get("success"):
+            return jsonify(result), 503
+        return jsonify(result)
 
-        @stream_with_context
-        def _generate():
-            for chunk in iter_scrcpy_http_stream(serial):
-                yield chunk
+    @app.route("/api/mobile/mirror/stop-external", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_mirror_stop_external():
+        """关闭指定设备的手机画面投屏窗口。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        udid = _resolve_request_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        from mobile_mirror import stop_external_scrcpy
 
-        return Response(
-            _generate(),
-            mimetype="application/octet-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "X-Accel-Buffering": "no",
-                "X-Content-Type-Options": "nosniff",
-                "Connection": "keep-alive",
-            },
-            direct_passthrough=True,
-        )
+        return jsonify(stop_external_scrcpy(udid))
 
     # ── end scrcpy mirror routes ──────────────────────────────────────────
 
@@ -715,6 +735,11 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             try:
                 from mobile_scrcpy_bridge import stop_scrcpy_device_session
                 stop_scrcpy_device_session(udid)
+            except Exception:
+                pass
+            try:
+                from mobile_mirror import stop_external_scrcpy
+                stop_external_scrcpy(udid)
             except Exception:
                 pass
         agent_disconnect_device(udid)

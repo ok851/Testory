@@ -244,26 +244,33 @@ def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
 
 def normalize_ai_step(step: dict) -> dict:
     layer = _str(step.get("automation_layer")).lower() or "web"
-    if layer not in ("web", "desktop", "android"):
+    if layer not in ("web", "desktop", "android", "cross_end"):
         layer = "web"
+    # 跨端层：extract_otp / api_call 直接放行，desktop_type_text 已在 to_case_steps 转为 input
+    cross_end_actions = {"extract_otp", "api_call"}
     desktop_actions = {
         "launch_app", "attach_window", "click", "input", "wait", "verify",
         "extract_text", "assert", "hotkey", "screenshot", "double_click", "right_click",
     }
+    desktop_actions |= cross_end_actions  # 桌面用例可含跨端步骤
     android_actions = {
         "open_app", "close_app", "tap", "input_text", "swipe", "wait",
         "assert_text", "assert_element", "screenshot", "click", "input", "verify", "assert",
         "ai_tap", "ai_input", "assert_vision", "wait_vision", "extract_vision",
     }
+    android_actions |= cross_end_actions  # 移动端用例可含跨端步骤
     allowed_actions = {
         "navigate", "click", "input", "wait", "verify", "extract_text", "assert",
         "ai_tap", "ai_input", "ai_scroll",
         "assert_vision", "wait_vision", "extract_vision",
     }
+    allowed_actions |= cross_end_actions  # web 用例也可含 api_call
     if layer == "desktop":
         allowed_actions = desktop_actions
     elif layer == "android":
         allowed_actions = android_actions
+    elif layer == "cross_end":
+        allowed_actions = cross_end_actions | {"input", "wait"}
     action = _str(step.get("action")).lower()
     if layer == "android":
         alias = {"click": "tap", "input": "input_text", "fill": "input_text", "verify": "assert_element", "assert": "assert_text"}
@@ -339,6 +346,16 @@ def normalize_ai_step(step: dict) -> dict:
                 out["mobile_spec"] = json.dumps(ms, ensure_ascii=False)
             except Exception:
                 out["mobile_spec"] = ""
+    # 跨端步骤：保留 cross_end_spec
+    ces = step.get("cross_end_spec")
+    if ces is not None:
+        if isinstance(ces, str):
+            out["cross_end_spec"] = ces
+        else:
+            try:
+                out["cross_end_spec"] = json.dumps(ces, ensure_ascii=False)
+            except Exception:
+                out["cross_end_spec"] = ""
     return out
 
 
@@ -348,7 +365,7 @@ def infer_plan_platform_type(plan: Optional[Dict[str, Any]] = None, steps: Any =
         meta = plan.get("meta") if isinstance(plan.get("meta"), dict) else {}
         for key in ("platform_type", "platform"):
             pt = _str(plan.get(key) if key == "platform" else meta.get(key)).lower()
-            if pt in ("web", "desktop", "android"):
+            if pt in ("web", "desktop", "android", "cross_end"):
                 return pt
     rows = steps if isinstance(steps, list) else (plan.get("steps") if isinstance(plan, dict) else [])
     if not isinstance(rows, list):
@@ -358,11 +375,15 @@ def infer_plan_platform_type(plan: Optional[Dict[str, Any]] = None, steps: Any =
         for s in rows
         if isinstance(s, dict) and _str(s.get("automation_layer"))
     }
+    if "cross_end" in layers:
+        return "cross_end"
     if "desktop" in layers:
         return "desktop"
     if "android" in layers:
         return "android"
     actions = {_str(s.get("action")).lower() for s in rows if isinstance(s, dict)}
+    if actions & {"extract_otp", "api_call"}:
+        return "cross_end"
     if actions & {"launch_app", "attach_window", "hotkey"}:
         return "desktop"
     if actions & {"open_app", "tap", "input_text"}:

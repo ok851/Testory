@@ -212,39 +212,16 @@ def mobile_wait_after_action_ms() -> int:
         return 300
 
 
-def mirror_fps() -> int:
-    try:
-        return max(1, min(30, int(os.environ.get("MOBILE_MIRROR_FPS", "8"))))
-    except ValueError:
-        return 8
-
-
-def mirror_max_width() -> int:
-    try:
-        return max(0, min(3840, int(os.environ.get("MOBILE_MIRROR_MAX_WIDTH", "0"))))
-    except ValueError:
-        return 0
-
-
-def mirror_jpeg_quality() -> int:
-    try:
-        return max(40, min(95, int(os.environ.get("MOBILE_MIRROR_JPEG_QUALITY", "75"))))
-    except ValueError:
-        return 75
-
-
-def mirror_format() -> str:
-    raw = (os.environ.get("MOBILE_MIRROR_FORMAT") or "jpeg").strip().lower()
-    return raw if raw in ("jpeg", "jpg", "png") else "jpeg"
-
-
 def mirror_backend() -> str:
-    """投屏后端：若 scrcpy 可用则使用 WebSocket 推流，否则 none。"""
+    """投屏后端：已放弃内嵌画布方案，统一由独立 scrcpy 窗口承担。保留字段以兼容旧调用方。"""
     return resolve_mirror_backend()
 
 
 def resolve_mirror_backend(udid: str = "") -> str:
-    """根据 scrcpy 可用性决定投屏后端。"""
+    """根据 scrcpy 可用性决定投屏后端（仅用于兼容性标记，投屏实际由独立 scrcpy 窗口承担）。
+
+    已放弃内嵌画布方案，亦不再提供 screencap 降级方案。
+    """
     del udid
     return "scrcpy_ws" if scrcpy_available() else "none"
 
@@ -395,16 +372,14 @@ def public_config() -> Dict[str, Any]:
         ],
         "agent_ws_url": _mobile_agent_ws_public(),
         "mirror_backend": mirror_backend(),
-        "mirror_fps": mirror_fps(),
         "scrcpy_available": scrcpy_available(),
         "scrcpy_path": scrcpy_path() if scrcpy_available() else "",
         "scrcpy_bridge_port": scrcpy_bridge_port(),
-        "mirror_ws_url": scrcpy_bridge_url() if scrcpy_available() else "",
-        "mirror_stream_url": "",
+        "external_scrcpy_supported": True,
         "hint": (
             "连接真机 USB、无线调试或模拟器后点击「连接设备」。"
             "录制请使用手机端助手 APK。"
-            "安装 scrcpy 插件后启用投屏+反控。"
+            "安装 scrcpy 插件后将在本地电脑启动手机画面进行投屏与反控（已放弃内嵌画布方案）。"
         ),
         "auto_start_appium": False,
     }

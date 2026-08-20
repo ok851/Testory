@@ -306,10 +306,33 @@
     .ai-chat-bubble {
         max-width: 80%;
         padding: 10px 14px;
+        padding-right: 38px;
         font-size: 13px;
         line-height: 1.55;
         word-break: break-word;
+        position: relative;
+        user-select: text;
+        -webkit-user-select: text;
+        -moz-user-select: text;
+        -ms-user-select: text;
+        cursor: text;
     }
+    .ai-chat-copy-btn {
+        position: absolute; top: 6px; right: 6px;
+        width: 26px; height: 26px; border-radius: 6px;
+        border: none; background: rgba(0,0,0,0.06); color: #64748b;
+        font-size: 12px; cursor: pointer; opacity: 0;
+        transition: opacity 0.15s, background 0.15s;
+        display: flex; align-items: center; justify-content: center;
+        text-decoration: none !important;
+    }
+    .ai-chat-copy-btn:hover,
+    .ai-chat-copy-btn:hover i {
+        text-decoration: none !important;
+    }
+    html.dark .ai-chat-copy-btn { background: rgba(255,255,255,0.1); color: #94a3b8; }
+    .ai-chat-bubble:hover .ai-chat-copy-btn { opacity: 1; }
+    .ai-chat-copy-btn:hover { background: rgba(99,102,241,0.18); color: #4f46e5; }
     .ai-chat-typing {
         display: flex; gap: 4px;
         padding: 8px 0;
@@ -1188,15 +1211,22 @@
         if (toast) toast.classList.remove('show');
     }
 
+    var AI_CHAT_COPY_BTN_HTML = '<button type="button" class="ai-chat-copy-btn" title="复制" onclick="copyChatBubbleText(this)"><i class="fas fa-copy"></i></button>';
+
     function addChatMessage(text, isUser) {
         var messages = document.getElementById('aiChatMessages');
         var div = document.createElement('div');
         div.className = 'ai-chat-message ' + (isUser ? 'user' : 'ai');
         div.innerHTML = isUser ?
-            '<div class="ai-chat-avatar user"><i class="fas fa-user"></i></div><div class="ai-chat-bubble">' + escapeHtml(text) + '</div>' :
-            '<div class="ai-chat-avatar ai"><i class="fas fa-robot"></i></div><div class="ai-chat-bubble">' + escapeHtml(text) + '</div>';
+            ('<div class="ai-chat-avatar user"><i class="fas fa-user"></i></div><div class="ai-chat-bubble">' + escapeHtml(text) + AI_CHAT_COPY_BTN_HTML + '</div>') :
+            ('<div class="ai-chat-avatar ai"><i class="fas fa-robot"></i></div><div class="ai-chat-bubble">' + escapeHtml(text) + AI_CHAT_COPY_BTN_HTML + '</div>');
         messages.appendChild(div);
         messages.scrollTop = messages.scrollHeight;
+    }
+
+    function renderWelcomeMessage() {
+        var messages = document.getElementById('aiChatMessages');
+        messages.innerHTML = '<div class="ai-chat-message ai"><div class="ai-chat-avatar ai"><i class="fas fa-robot"></i></div><div class="ai-chat-bubble">您好！我是 Testory AI 测试助手。可以说「打开控制面板」做桌面操作，或「打开 https://…」做网页自动化；闲聊直接问即可。' + AI_CHAT_COPY_BTN_HTML + '</div></div>';
     }
 
     function showTyping() {
@@ -1214,10 +1244,57 @@
         if (typing) typing.remove();
     }
 
-    function clearChatHistory() {
-        var messages = document.getElementById('aiChatMessages');
-        messages.innerHTML = '<div class="ai-chat-message ai"><div class="ai-chat-avatar ai"><i class="fas fa-robot"></i></div><div class="ai-chat-bubble">您好！我是 Testory AI 测试助手。可以说「打开控制面板」做桌面操作，或「打开 https://…」做网页自动化；闲聊直接问即可。</div></div>';
+    window.copyChatBubbleText = function(btn) {
+        var bubble = btn && btn.closest ? btn.closest('.ai-chat-bubble') : null;
+        if (!bubble) return;
+        var tmp = bubble.cloneNode(true);
+        var btnClone = tmp.querySelector('.ai-chat-copy-btn');
+        if (btnClone) btnClone.remove();
+        var text = (tmp.innerText || tmp.textContent || '').trim();
+        if (!text) return;
+        var done = function(ok) {
+            if (typeof showToast === 'function') {
+                showToast(ok ? '已复制' : '复制失败，请手动选择', ok ? 'success' : 'error');
+            } else if (ok) {
+                var orig = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check"></i>';
+                setTimeout(function(){ btn.innerHTML = orig; }, 1500);
+            } else {
+                alert('复制失败，请手动选中文本');
+            }
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() { done(true); }, function() { done(false); });
+        } else {
+            var ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+            document.body.appendChild(ta); ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            done(ok);
+        }
+    };
+
+    async function clearChatHistory() {
+        if (!confirm('确定清空当前 AI 对话？清空后 AI 将不再记得本轮上下文。')) return;
+        try {
+            var hdrs = { 'Content-Type': 'application/json' };
+            if (typeof window.getCsrfToken === 'function') {
+                hdrs['X-CSRFToken'] = window.getCsrfToken();
+            }
+            var resp = await fetch('/api/ai/chat/session/clear', { method: 'POST', headers: hdrs });
+            var data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok || !data.success) {
+                console.warn('后端 session clear 失败:', data);
+            }
+        } catch (e) {
+            console.warn('session clear 网络异常:', e);
+        }
         try { localStorage.removeItem('ai_test_chat_history'); } catch (e) {}
+        if (typeof AI_TEST_STATE !== 'undefined') AI_TEST_STATE.history = [];
+        renderWelcomeMessage();
+        if (typeof showToast === 'function') showToast('已清空对话上下文', 'success');
     }
 
     function saveChatHistory() {
@@ -1238,21 +1315,21 @@
     function loadChatHistory() {
         try {
             var raw = localStorage.getItem('ai_test_chat_history');
-            if (!raw) return;
+            if (!raw) { renderWelcomeMessage(); return; }
             var items = JSON.parse(raw);
-            if (!Array.isArray(items) || items.length === 0) return;
+            if (!Array.isArray(items) || items.length === 0) { renderWelcomeMessage(); return; }
             var messages = document.getElementById('aiChatMessages');
             messages.innerHTML = '';
             items.forEach(function(item) {
                 var div = document.createElement('div');
                 div.className = 'ai-chat-message ' + (item.isUser ? 'user' : 'ai');
                 div.innerHTML = item.isUser ?
-                    '<div class="ai-chat-avatar user"><i class="fas fa-user"></i></div><div class="ai-chat-bubble">' + escapeHtml(item.text) + '</div>' :
-                    '<div class="ai-chat-avatar ai"><i class="fas fa-robot"></i></div><div class="ai-chat-bubble">' + escapeHtml(item.text) + '</div>';
+                    ('<div class="ai-chat-avatar user"><i class="fas fa-user"></i></div><div class="ai-chat-bubble">' + escapeHtml(item.text) + AI_CHAT_COPY_BTN_HTML + '</div>') :
+                    ('<div class="ai-chat-avatar ai"><i class="fas fa-robot"></i></div><div class="ai-chat-bubble">' + escapeHtml(item.text) + AI_CHAT_COPY_BTN_HTML + '</div>');
                 messages.appendChild(div);
             });
             messages.scrollTop = messages.scrollHeight;
-        } catch (e) {}
+        } catch (e) { renderWelcomeMessage(); }
     }
 
     function escapeHtml(text) {
@@ -2419,6 +2496,27 @@
                 var verifyChk = document.getElementById('aiVerifyOllamaChk');
                 if (verifyChk) { verifyChk.disabled = !!ollamaError; verifyChk.checked = !ollamaError; }
                 updateActiveModelChip();
+                // ---- 同步左侧推理引擎下拉 & 顶部 chip ----
+                var engineSelect = document.getElementById('aiTestEngine');
+                var modelNameEl = document.getElementById('aiModelName');
+                if (engineSelect) {
+                    var curVal = engineSelect.value;
+                    engineSelect.innerHTML = aiProfiles.length
+                        ? aiProfiles.map(function(p) {
+                            var sel = (p.id === activeProfileId) ? ' selected' : '';
+                            return '<option value="' + escapeHtml(p.id) + '"' + sel + '>'
+                                + escapeHtml(p.label || p.model_id) + '</option>';
+                          }).join('')
+                        : '<option value="">暂无模型</option>';
+                    if (curVal && Array.prototype.some.call(engineSelect.options, function(o){ return o.value === curVal; })) {
+                        engineSelect.value = curVal;
+                    }
+                }
+                if (modelNameEl) {
+                    var cur = aiProfiles.find(function(p) { return p.id === activeProfileId; })
+                        || aiProfiles[0] || null;
+                    modelNameEl.textContent = cur ? (cur.label || cur.model_id) : '未设置';
+                }
             } catch (e) {
                 console.warn('加载模型列表失败:', e);
                 var modelSelect = document.getElementById('aiModelSelect');
@@ -2444,11 +2542,22 @@
             try {
                 var resp = await fetch('/api/ai/models/active', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: sid }) });
                 var data = await resp.json();
-                if (!resp.ok || !data.success) throw new Error(data.error);
+                if (!resp.ok || !data.success) throw new Error(data.error || '保存失败');
                 activeProfileId = sid;
                 updateActiveModelChip();
                 await loadAiModels();
-                document.getElementById('aiTestEngine').value = sid;
+                var eng = document.getElementById('aiTestEngine');
+                if (eng) eng.value = sid;
+                var hermesErr = (data.hermes && data.hermes.error) || '';
+                var tip = '已保存并设为默认模型';
+                if (hermesErr) {
+                    tip += '（智能体配置同步异常：' + hermesErr + '，请稍后重启智能体）';
+                }
+                if (typeof showToast === 'function') {
+                    showToast(tip, hermesErr ? 'warning' : 'success');
+                } else {
+                    alert(tip);
+                }
             } catch (e) { alert('保存失败:' + e.message); }
         };
 
@@ -2459,6 +2568,10 @@
                 var data = await resp.json();
                 if (!resp.ok || !data.success) throw new Error(data.error);
                 await loadAiModels();
+                if (activeProfileId) {
+                    var eng = document.getElementById('aiTestEngine');
+                    if (eng) eng.value = activeProfileId;
+                }
             } catch (e) { alert('删除失败:' + e.message); }
         };
 
@@ -2491,7 +2604,12 @@
                 var data2 = await resp2.json();
                 if (!resp2.ok || !data2.success) throw new Error(data2.error);
                 await loadAiModels();
+                if (activeProfileId) {
+                    var eng = document.getElementById('aiTestEngine');
+                    if (eng) eng.value = activeProfileId;
+                }
                 pick.value = '';
+                if (typeof showToast === 'function') showToast('模型注册成功', 'success');
             } catch (e) { alert('注册失败:' + e.message); }
         };
 

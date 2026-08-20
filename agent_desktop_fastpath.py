@@ -21,6 +21,11 @@ _DESKTOP_APP_MAP = (
     (("微信", "wechat", "weixin"), "微信", "微信"),
     (("企业微信", "wecom", "wxwork"), "企业微信", "企业微信"),
     (("qq",), "QQ", "QQ"),
+    # 浏览器
+    (("edge", "msedge", "microsoft edge", "microsoft-edge", "微软edge"), "msedge", "Microsoft Edge"),
+    (("chrome", "google chrome", "google-chrome", "谷歌chrome"), "chrome", "Google Chrome"),
+    (("firefox", "mozilla firefox", "火狐"), "firefox", "Firefox"),
+    (("browser", "浏览器"), "msedge", "默认浏览器"),
 )
 
 _LOCAL_HINTS = (

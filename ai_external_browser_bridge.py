@@ -20,13 +20,15 @@ _screen_share_active = False  # 共享屏幕开关
 _screen_share_interval = 3    # 共享屏幕截图间隔（秒）
 
 
-def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edge") -> bool:
+def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edge", force_new: bool = False) -> bool:
     """
     确保本机有头浏览器已启动并连接 CDP（优先系统 Edge/Chrome）。
     Hermes 通过 sync_hermes_cdp_endpoint() attach 到同一浏览器。
 
     启动策略：进程只开 about:blank 单标签，业务 URL 一律 page.goto；
     禁止把业务 URL 放进浏览器命令行（否则 Edge 会「新建标签页」+ 目标页双开）。
+
+    force_new: True 时强制关闭现有浏览器实例并重新启动，确保全新会话。
     """
     global _browser, _context, _page, _cdp_ws
     kind = (browser or "edge").strip().lower()
@@ -42,6 +44,22 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
             (_cdp_mod._snap() or {}).get("pending_start_url") or ""
         ).strip()
 
+        # 强制新浏览器：先清理现有实例
+        if force_new:
+            uat_logger.info("[Browser] force_new=True, 正在清理现有浏览器实例...")
+            try:
+                _cdp_mod.disconnect(stop_browser=True)
+            except Exception:
+                pass
+            try:
+                force_cleanup_browser()
+            except Exception:
+                pass
+            _browser = None
+            _context = None
+            _page = None
+            _cdp_ws = ""
+
         if _page and not _page.is_closed():
             if nav_url:
                 try:
@@ -55,6 +73,7 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
                 maximize_debug_browser_window(page=_page)
             except Exception:
                 pass
+            uat_logger.info("[Browser] 复用现有浏览器实例")
             return True
 
         try:
@@ -65,9 +84,11 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
                 _ws = _cdp_mod.fetch_cdp_ws(_debug_port) or ""
 
             if not _ws:
+                uat_logger.info("[Browser] 正在启动新的 %s 浏览器实例...", kind)
                 launched = _cdp_mod.launch_debug_browser(browser=kind, url=nav_url or "")
                 if not launched.get("success"):
                     if kind == "edge":
+                        uat_logger.info("[Browser] Edge 启动失败，尝试 Chrome...")
                         launched = _cdp_mod.launch_debug_browser(
                             browser="chrome", url=nav_url or ""
                         )
@@ -79,6 +100,7 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
                     _cdp_mod.fetch_cdp_ws(_debug_port) or ""
                 )
                 nav_url = nav_url or str(launched.get("pending_start_url") or "").strip()
+                uat_logger.info("[Browser] %s 浏览器启动成功，CDP 端口: %d", kind, _debug_port)
 
             if not _ws:
                 uat_logger.warning("本机浏览器已启动但未拿到 CDP WebSocket")

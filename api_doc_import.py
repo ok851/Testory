@@ -1,10 +1,45 @@
 """
 Parse OpenAPI 2/3 and Postman Collection v2.1 into platform api_request step payloads.
+
+变量处理策略（与 Postman 行为一致）：
+- URL 中的 {{baseUrl}} 在导入时解析为实际地址（否则 URL 无效）
+- 其余所有 {{var}} 占位符原样保留，运行时由 db.resolve_variables() 替换
+- Postman 集合中的变量自动提取，由调用方创建为用例级变量
 """
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
+
+_VAR_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
+
+
+def _resolve_baseurl(text: str, base_url: str) -> str:
+    """Only resolve {{baseUrl}} (case-insensitive) in text; preserve all other {{var}}."""
+    if not text or not base_url:
+        return text
+
+    def repl(m: re.Match) -> str:
+        key = m.group(1).strip()
+        if key.lower() == "baseurl":
+            return base_url.rstrip("/")
+        return m.group(0)
+
+    return _VAR_RE.sub(repl, text)
+
+
+def _extract_postman_variables(data: Dict[str, Any]) -> Dict[str, str]:
+    """Extract Postman collection-level variables from the 'variable' array."""
+    result: Dict[str, str] = {}
+    variables = data.get("variable")
+    if isinstance(variables, list):
+        for v in variables:
+            if isinstance(v, dict):
+                key = (v.get("key") or v.get("name") or "").strip()
+                if key:
+                    result[key] = str(v.get("value") or "")
+    return result
 
 
 def _join_url(base: str, path: str) -> str:
@@ -79,6 +114,34 @@ def _operation_to_spec_v3(
         "body_type": "none",
         "headers": {"Accept": "application/json"},
     }
+
+    params: Dict[str, str] = {}
+    parameters = op.get("parameters")
+    if isinstance(parameters, list):
+        for p in parameters:
+            if not isinstance(p, dict):
+                continue
+            if p.get("in") == "query":
+                pname = str(p.get("name") or "").strip()
+                if pname:
+                    schema = p.get("schema") or {}
+                    val = p.get("example")
+                    if val is None and isinstance(schema, dict):
+                        val = schema.get("example")
+                    params[pname] = str(val) if val is not None else ""
+            elif p.get("in") == "header":
+                pname = str(p.get("name") or "").strip()
+                if pname:
+                    schema = p.get("schema") or {}
+                    val = p.get("example")
+                    if val is None and isinstance(schema, dict):
+                        val = schema.get("example")
+                    spec.setdefault("headers", {})[pname] = str(val) if val is not None else ""
+            elif p.get("in") == "body" and p.get("schema"):
+                pass  # handled below via requestBody
+        if params:
+            spec["params"] = params
+
     rb = op.get("requestBody")
     if isinstance(rb, dict) and rb.get("content"):
         ct = rb["content"]
@@ -111,15 +174,31 @@ def _operation_to_spec_v2(
         "body_type": "none",
         "headers": {"Accept": "application/json"},
     }
-    params = op.get("parameters")
+    params: Dict[str, str] = {}
+    parameters = op.get("parameters")
     body_obj = None
-    if isinstance(params, list):
-        for p in params:
+    if isinstance(parameters, list):
+        for p in parameters:
             if not isinstance(p, dict):
                 continue
-            if p.get("in") == "body" and p.get("schema"):
+            if p.get("in") == "query":
+                pname = str(p.get("name") or "").strip()
+                if pname:
+                    val = p.get("default")
+                    if val is None:
+                        val = p.get("example")
+                    params[pname] = str(val) if val is not None else ""
+            elif p.get("in") == "header":
+                pname = str(p.get("name") or "").strip()
+                if pname:
+                    val = p.get("default")
+                    if val is None:
+                        val = p.get("example")
+                    spec.setdefault("headers", {})[pname] = str(val) if val is not None else ""
+            elif p.get("in") == "body" and p.get("schema"):
                 body_obj = p.get("schema")
-                break
+    if params:
+        spec["params"] = params
     if isinstance(body_obj, dict) and "example" in body_obj:
         spec["body_type"] = "json"
         spec["body_json"] = body_obj.get("example")
@@ -195,16 +274,28 @@ def parse_openapi_dict(
     return items, warns
 
 
-def _postman_url_to_string(u: Any) -> str:
+def _postman_url_parse(u: Any, base_url: str = "") -> Tuple[str, Dict[str, str]]:
+    """Parse a Postman URL object into (url_without_query, params_dict).
+
+    Only {{baseUrl}} is resolved (to form a valid URL); all other {{var}} are preserved.
+    Query params are separated into a dict, with {{var}} placeholders intact.
+    """
     if u is None:
-        return ""
+        return "", {}
     if isinstance(u, str):
-        return u.strip()
+        raw = _resolve_baseurl(u.strip(), base_url)
+        url_part, params = _split_url_query(raw)
+        return url_part, params
     if not isinstance(u, dict):
-        return ""
-    raw = (u.get("raw") or "").strip()
+        return "", {}
+
+    # Prefer the "raw" field (most reliable in Postman v2.1)
+    raw = _resolve_baseurl((u.get("raw") or "").strip(), base_url)
     if raw:
-        return raw
+        url_part, params = _split_url_query(raw)
+        return url_part, params
+
+    # Fall back to building from parts
     proto = str(u.get("protocol") or "https").split(":")[0]
     host_parts = u.get("host")
     if isinstance(host_parts, list):
@@ -219,24 +310,46 @@ def _postman_url_to_string(u: Any) -> str:
         path = "/" + "/".join(str(x) for x in path_parts if x is not None)
     else:
         path = str(path_parts or "")
-    if not host:
-        return path or ""
+
     query = u.get("query")
-    qs = ""
+    params: Dict[str, str] = {}
     if isinstance(query, list):
-        parts = []
         for q in query:
-            if isinstance(q, dict) and q.get("key") is not None:
-                parts.append(f"{q.get('key')}={q.get('value', '')}")
-        if parts:
-            qs = "?" + "&".join(parts)
-    return f"{proto}://{host}{path}{qs}"
+            if isinstance(q, dict) and q.get("key") is not None and not q.get("disabled"):
+                k = str(q.get("key") or "")
+                if k:
+                    params[k] = str(q.get("value") or "")
+
+    if not host:
+        return path or "", params
+    return f"{proto}://{host}{path}", params
+
+
+def _split_url_query(url: str) -> Tuple[str, Dict[str, str]]:
+    """Split a URL into (url_without_query, params_dict)."""
+    if not url:
+        return "", {}
+    qidx = url.find("?")
+    if qidx < 0:
+        return url, {}
+    url_part = url[:qidx]
+    query_str = url[qidx + 1:]
+    params: Dict[str, str] = {}
+    if query_str:
+        for pair in query_str.split("&"):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                params[k] = v
+            else:
+                params[pair] = ""
+    return url_part, params
 
 
 def _flatten_postman_items(
     node: Any,
     out: List[Dict[str, Any]],
     warns: List[str],
+    base_url: str = "",
     folder: str = "",
 ) -> None:
     if not isinstance(node, list):
@@ -248,13 +361,20 @@ def _flatten_postman_items(
         sub = it.get("item")
         if isinstance(sub, list):
             prefix = f"{folder}/{name}" if folder else name
-            _flatten_postman_items(sub, out, warns, prefix)
+            _flatten_postman_items(sub, out, warns, base_url, prefix)
             continue
         req = it.get("request")
         if not isinstance(req, dict):
             continue
         method = str(req.get("method") or "GET").upper()
-        url_s = _postman_url_to_string(req.get("url"))
+        url_obj = req.get("url")
+        url_s, parsed_params = _postman_url_parse(url_obj, base_url)
+
+        # If URL still starts with {{ (no baseUrl resolved), try base_url_override
+        if base_url and url_s and not url_s.startswith("http"):
+            url_s = base_url.rstrip("/") + ("/" + url_s.lstrip("/") if url_s else "")
+
+        # Headers — preserve {{var}} as-is for runtime resolution
         headers_in = req.get("header")
         headers: Dict[str, str] = {}
         if isinstance(headers_in, list):
@@ -263,6 +383,7 @@ def _flatten_postman_items(
                     k = (h.get("key") or "").strip()
                     if k:
                         headers[k] = str(h.get("value") or "")
+
         body = req.get("body")
         spec: Dict[str, Any] = {
             "method": method,
@@ -274,6 +395,10 @@ def _flatten_postman_items(
             "body_type": "none",
             "headers": headers or {"Accept": "application/json"},
         }
+        if parsed_params:
+            spec["params"] = parsed_params
+
+        # Body — preserve {{var}} as-is for runtime resolution
         if isinstance(body, dict):
             mode = str(body.get("mode") or "").lower()
             if mode == "raw":
@@ -307,50 +432,66 @@ def _flatten_postman_items(
 
 def parse_postman_collection_dict(
     data: Dict[str, Any],
-) -> Tuple[List[Dict[str, Any]], List[str]]:
+    *,
+    base_url_override: str = "",
+) -> Tuple[List[Dict[str, Any]], List[str], Dict[str, str]]:
+    """Returns (items, warnings, variables) where variables is the Postman collection variables dict."""
     warns: List[str] = []
     items: List[Dict[str, Any]] = []
     if not isinstance(data, dict):
-        return [], ["集合不是 JSON 对象"]
+        return [], ["集合不是 JSON 对象"], {}
     if "collection" in data and isinstance(data["collection"], dict):
         data = data["collection"]
+
+    variables = _extract_postman_variables(data)
+
+    # Determine effective base_url: user override > Postman baseUrl variable
+    base_url = base_url_override.strip() if base_url_override else variables.get("baseUrl", "")
+
     root_items = data.get("item")
     if not isinstance(root_items, list):
-        return [], ["未找到 item 数组（非 Postman Collection v2.1？）"]
-    _flatten_postman_items(root_items, items, warns, "")
+        return [], ["未找到 item 数组（非 Postman Collection v2.1？）"], {}
+    _flatten_postman_items(root_items, items, warns, base_url, "")
     if not items:
         warns.append("集合中未找到可导入的请求项")
-    return items, warns
+
+    if not base_url and not any(
+        (it.get("api_spec") or {}).get("url", "").startswith("http") for it in items
+    ):
+        warns.append("未检测到有效服务地址，请确认 Postman 变量 baseUrl 已定义或导入时填写 base_url")
+
+    return items, warns, variables
 
 
 def detect_and_parse_api_doc(
     text: str,
     *,
     base_url_override: str = "",
-) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+) -> Tuple[str, List[Dict[str, Any]], List[str], Dict[str, str]]:
     """
-    Returns (kind, items, warnings) where kind is 'openapi' | 'postman' | 'unknown'.
+    Returns (kind, items, warnings, variables).
+    variables is non-empty only for Postman collections (collection-level variables).
     """
     raw = (text or "").strip()
     if not raw:
-        return "unknown", [], ["内容为空"]
+        return "unknown", [], ["内容为空"], {}
     try:
         obj = json.loads(raw)
     except json.JSONDecodeError as e:
-        return "unknown", [], [f"JSON 解析失败: {e}"]
+        return "unknown", [], [f"JSON 解析失败: {e}"], {}
 
     if isinstance(obj, dict):
         if "info" in obj and isinstance(obj["info"], dict):
             if "item" in obj and isinstance(obj["item"], list):
-                items, w = parse_postman_collection_dict(obj)
-                return "postman", items, w
+                items, w, variables = parse_postman_collection_dict(obj, base_url_override=base_url_override)
+                return "postman", items, w, variables
         if "openapi" in obj or "swagger" in obj or (
             isinstance(obj.get("paths"), dict) and ("definitions" in obj or "components" in obj)
         ):
             items, w = parse_openapi_dict(obj, base_url_override=base_url_override)
-            return "openapi", items, w
+            return "openapi", items, w, {}
         if isinstance(obj.get("paths"), dict):
             items, w = parse_openapi_dict(obj, base_url_override=base_url_override)
-            return "openapi", items, w
+            return "openapi", items, w, {}
 
-    return "unknown", [], ["无法识别为 OpenAPI 或 Postman Collection（需顶层含 paths 或 item）"]
+    return "unknown", [], ["无法识别为 OpenAPI 或 Postman Collection（需顶层含 paths 或 item）"], {}

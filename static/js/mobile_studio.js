@@ -111,6 +111,8 @@
                     : '设备已连接，可安装助手 APK；录制请用右侧配对码在手机完成',
                 'ok'
             );
+            // re-trigger scrcpy mirror after device connects
+            if (typeof window.initMirror === 'function') { window.initMirror(); }
         } catch (e) {
             state.connected = false; updateConnectBadge(); refreshAllButtons();
             setStatus('连接失败: ' + e.message, 'err');
@@ -128,6 +130,7 @@
         state.connected = false; state.udid = ''; state.assistantConnected = false;
         updateConnectBadge(); updateAssistantBadge(); refreshAllButtons();
         setStatus('设备已断开', 'ok');
+        if (typeof window.initMirror === 'function') { window.initMirror(); }
     }
 
     async function wirelessConnect() {
@@ -274,8 +277,8 @@
         $('msBtnWirelessConnect').addEventListener('click', wirelessConnect);
         $('msBtnInstallPlugin').addEventListener('click', installAssistant);
         $('msBtnRefreshPair').addEventListener('click', refreshPairCode);
-        $('msBtnRefreshCases').addEventListener('click', function () { loadCases().then(loadStepCount); });
-        $('msBtnOpenSteps').addEventListener('click', function () {
+        if ($('msBtnRefreshCases')) $('msBtnRefreshCases').addEventListener('click', function () { loadCases().then(loadStepCount); });
+        if ($('msBtnOpenSteps')) $('msBtnOpenSteps').addEventListener('click', function () {
             if (state.caseId) window.open('/list_steps?case_id=' + state.caseId, '_blank');
         });
 
@@ -289,6 +292,49 @@
         if (caseSel) caseSel.addEventListener('change', loadStepCount);
     }
 
+    // 从后端恢复设备连接状态，用于模块切换后保持绑定状态不丢失
+    async function refreshDeviceStatus() {
+        try {
+            var data = await apiJson('/api/mobile/connection-status');
+            if (data && data.connected && data.udid) {
+                state.connected = true;
+                state.udid = data.udid;
+                state.assistantInstalled = !!data.assistant_installed;
+                state.assistantConnected = !!data.assistant_connected;
+                updateConnectBadge();
+                updateAssistantBadge();
+                refreshAllButtons();
+                // 同步设备选择框
+                var sel = $('msDeviceSelect');
+                if (sel) {
+                    var found = false;
+                    for (var i = 0; i < sel.options.length; i++) {
+                        if (sel.options[i].value === data.udid) {
+                            sel.selectedIndex = i;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found && data.udid) {
+                        var opt = document.createElement('option');
+                        opt.value = data.udid;
+                        opt.textContent = (data.device_info && data.device_info.model || data.udid) + ' [已连接]';
+                        sel.appendChild(opt);
+                        sel.value = data.udid;
+                    }
+                }
+                // 恢复连接状态但不弹 toast（页面加载时静默恢复）
+                var statusEl = $('msStatus');
+                if (statusEl) {
+                    statusEl.textContent = '设备已连接（状态已恢复）';
+                    statusEl.className = 'ms-status';
+                }
+            }
+        } catch (e) {
+            // 后端未就绪时静默忽略
+        }
+    }
+
     async function init() {
         if (document.getElementById('__mobileStudioDisabledJson')) return;
         wireUi();
@@ -297,7 +343,13 @@
         await renderPcAddressHint();
         await loadProjects();
         refreshDeviceList().catch(function () {});
+        // 在刷新设备列表后恢复连接状态（确保已连接设备在列表中选中）
+        await refreshDeviceStatus();
         refreshPairCode().catch(function () {});
+        // 连接状态恢复完成后，初始化手机画面投屏区域
+        if (typeof window.initMirror === 'function') {
+            window.initMirror();
+        }
 
         var params = new URLSearchParams(window.location.search);
         var urlCaseId = parseInt(params.get('case_id') || '', 10);

@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 
 try:
@@ -3520,6 +3520,11 @@ def api_set_active_ai_model():
         cfg['active_profile_id'] = profile_id
         cfg['version'] = 2
         _save_ai_model_config(cfg)
+        try:
+            from vlm_grounding import configure_vlm
+            configure_vlm(None)
+        except Exception:
+            pass
         hermes_info: dict = {}
         try:
             from hermes_service_bootstrap import ensure_hermes_llm_current
@@ -3613,6 +3618,31 @@ def api_delete_ai_model():
         'active_profile_id': cfg.get('active_profile_id'),
         'profiles': [_mask_profile_for_api(p) for p in new_profiles],
     })
+
+
+@app.route('/api/ai/chat/session/clear', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_chat_session_clear():
+    """用户点「清空对话」时：重置当前 Flask session 的 ai_chat_history 列表，并清运行时上下文缓存。"""
+    if session.get('ai_chat_history'):
+        session['ai_chat_history'] = []
+        session.modified = True
+    try:
+        from ai_chat_tool_loop import clear_runtime_chat_context
+        clear_runtime_chat_context(user_id=session.get('user_id') or 0)
+    except Exception:
+        pass
+    try:
+        # 兼容：如果有 ai_refine_history 之类的也一并清
+        for k in ('ai_chat_history', 'ai_refine_history', 'chat_history', 'ai_tool_loop_history'):
+            if session.get(k):
+                session[k] = []
+        session.modified = True
+    except Exception:
+        pass
+    return jsonify({'success': True})
 
 
 @app.route('/api/ai/models/verify', methods=['POST'])
@@ -4080,18 +4110,31 @@ def _ai_desktop_planning_snapshot() -> tuple:
 
 
 def _ai_execute_desktop_plan_steps(steps: list) -> list:
-    """在本地执行桌面层步骤（AI 运行模式）。"""
+    """在本地执行桌面层步骤（AI 运行模式）。
+    支持混编步骤：desktop / cross_end (extract_otp/api_call) 正常分发，
+    web 步骤跳过（需 Playwright 上下文），android 步骤跳过（需移动端设备）。
+    """
     from desktop_run_context import reset_desktop_run_context
-    from step_executor import enrich_execution_step, sync_execute_step_by_layer
+    from step_executor import enrich_execution_step, sync_execute_step_by_layer, clear_case_vars
 
     reset_desktop_run_context()
+    clear_case_vars()  # 清空跨端变量（如 sms_otp），避免上轮残留
     results = []
     for raw in steps or []:
         if not isinstance(raw, dict):
             continue
         step = enrich_execution_step(dict(raw))
-        if (step.get("automation_layer") or "").strip().lower() != "desktop":
-            step["automation_layer"] = "desktop"
+        layer = (step.get("automation_layer") or "").strip().lower()
+        # 跳过非桌面/非跨端步骤（web 需要 Playwright，android 需要设备）
+        if layer in ("web", "android"):
+            results.append({
+                "ok": False,
+                "action": step.get("action"),
+                "skipped": True,
+                "error": f"AI 运行模式暂不支持 {layer} 层步骤，请用例回放功能执行",
+                "description": step.get("description") or "",
+            })
+            continue
         try:
             row = sync_execute_step_by_layer(step)
             results.append({
@@ -5147,10 +5190,10 @@ def api_ai_import_api_spec_preview():
 
     from api_doc_import import detect_and_parse_api_doc
 
-    kind, items, warns = detect_and_parse_api_doc(content, base_url_override=base_url)
+    kind, items, warns, variables = detect_and_parse_api_doc(content, base_url_override=base_url)
     if kind == 'unknown':
         return jsonify({'success': False, 'error': (warns or ['无法解析'])[0], 'warnings': warns}), 400
-    return jsonify({'success': True, 'kind': kind, 'items': items[:500], 'warnings': warns})
+    return jsonify({'success': True, 'kind': kind, 'items': items[:500], 'warnings': warns, 'variables': variables})
 
 
 @app.route('/api/ai/import/api-spec/commit', methods=['POST'])
@@ -5225,7 +5268,22 @@ def api_ai_import_api_spec_commit():
             pass
         return jsonify({'success': False, 'error': '没有可写入的有效 api_spec 项'}), 400
 
-    return jsonify({'success': True, 'case_id': case_id, 'steps_created': n})
+    # Auto-create case-scoped variables from Postman collection variables
+    variables = data.get('variables')
+    var_count = 0
+    if isinstance(variables, dict) and variables:
+        for var_name, var_val in variables.items():
+            if not var_name or var_name == 'baseUrl':
+                continue
+            try:
+                _db.upsert_case_scoped_variable(
+                    str(var_name), str(var_val or ''), project_id, case_id
+                )
+                var_count += 1
+            except Exception:
+                pass
+
+    return jsonify({'success': True, 'case_id': case_id, 'steps_created': n, 'variables_created': var_count})
 
 
 @app.route('/api/ai/cases/import-ui-plan', methods=['POST'])
@@ -8430,7 +8488,7 @@ def api_ai_task_execute():
                         ok = ensure_browser(headless=False, url=nav_url or "", browser="edge")
                         if not ok:
                             if run_platform == "auto":
-                                return True, ""  # 允许 Hermes 改走桌面/其它手
+                                return True, ""
                             return False, "本机浏览器启动失败，请确认已安装 Edge/Chrome"
                     elif nav_url:
                         # 已有会话时仍导航到任务目标 URL，避免卡在 about:blank
@@ -8721,6 +8779,11 @@ def api_ai_task_execute():
                     run_platform = "desktop"
                 elif use_outer_desktop:
                     run_platform = "desktop"
+
+                # 浏览器任务：提前告知用户正在启动浏览器
+                from agent_intent import message_needs_browser as _msg_needs_br
+                if _msg_needs_br(task) or run_platform == "web":
+                    yield send('think', text='检测到浏览器任务，正在准备浏览器环境...', status='running')
 
                 params = ChatToolLoopParams(
                     message=task,
@@ -11883,7 +11946,6 @@ def api_create_project():
             'error': f'已达到项目数量限制（{limits["max_projects"]}个）。请升级到企业版。'
         }), 403
 
-    project_id = db.create_project(name, description)
     project_id = _db.create_project(name, description)
     # 将创建者添加为项目所有者
     _db.add_project_member(project_id, current_user.id, role='owner')
@@ -17801,8 +17863,8 @@ def team_management_page():
 @app.route('/join-team')
 @login_required
 def join_team_page():
-    """团队管理页面"""
     """加入团队页面"""
+    return render_template('join_team.html')
 
 
 

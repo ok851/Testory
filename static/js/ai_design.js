@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   'use strict';
 
   var state = {
@@ -181,7 +181,10 @@
     tick();
   }
 
-  function renderDraftList() {
+  state._draftPage = 1;
+  var DRAFT_PAGE_SIZE = 10;
+
+  function _renderDraftPage() {
     var wrap = document.getElementById('aiDesignDraftList');
     var saveBtn = document.getElementById('aiDesignSaveBtn');
     if (!wrap) return;
@@ -193,24 +196,39 @@
     }
     wrap.style.display = 'block';
     if (saveBtn) saveBtn.style.display = 'inline-flex';
+    var total = state.drafts.length;
+    var totalPages = Math.max(1, Math.ceil(total / DRAFT_PAGE_SIZE));
+    if (state._draftPage > totalPages) state._draftPage = totalPages;
+    var pgStart = (state._draftPage - 1) * DRAFT_PAGE_SIZE;
+    var pgEnd = Math.min(pgStart + DRAFT_PAGE_SIZE, total);
     var html = '<div class="ai-design-draft-toolbar">'
       + '<label><input type="checkbox" id="aiDesignSelectAll" checked> 全选</label>'
-      + '<span class="ai-design-draft-count">共 ' + state.drafts.length + ' 条草案</span>'
+      + '<span class="ai-design-draft-count">共 ' + total + ' 条草案，第 ' + state._draftPage + '/' + totalPages + ' 页</span>'
       + '</div>';
-    state.drafts.forEach(function (d, i) {
+    for (var i = pgStart; i < pgEnd; i++) {
+      var d = state.drafts[i];
       var steps = (d.steps && d.steps.length) || 0;
       var role = ROLE_LABELS[d.case_role] || d.case_role || '业务';
-      html += '<label class="ai-design-draft-card ai-design-draft-card-v2" style="animation-delay:' + (i * 60) + 'ms">'
+      html += '<label class="ai-design-draft-card ai-design-draft-card-v2" style="animation-delay:' + ((i - pgStart) * 60) + 'ms">'
         + '<input type="checkbox" class="ai-design-draft-cb" data-idx="' + i + '" checked>'
         + '<div class="ai-design-draft-card__body">'
-        + '<strong>' + escapeHtml(d.case_name || ('用例 ' + (i + 1))) + '</strong>'
+        + '<strong>' + (i + 1) + '. ' + escapeHtml(d.case_name || ('用例 ' + (i + 1))) + '</strong>'
         + '<span class="ai-design-draft-meta">' + escapeHtml(role)
         + (d.design_method ? ' · ' + escapeHtml(d.design_method) : '')
         + ' · ' + steps + ' 步</span>'
         + (d.case_url ? '<span class="ai-design-draft-url">' + escapeHtml(d.case_url) + '</span>' : '')
         + '<p class="ai-design-draft-desc">' + escapeHtml((d.description || '').slice(0, 200)) + '</p>'
         + '</div></label>';
-    });
+    }
+    if (totalPages > 1) {
+      html += '<div style="display:flex;align-items:center;justify-content:center;gap:8px;margin:12px 0;">';
+      if (state._draftPage > 1)
+        html += '<button type="button" class="btn btn-outline" style="padding:4px 12px;font-size:13px;" data-draft-prev>← 上一页</button>';
+      html += '<span style="font-size:13px;color:#64748b;">' + state._draftPage + ' / ' + totalPages + '</span>';
+      if (state._draftPage < totalPages)
+        html += '<button type="button" class="btn btn-outline" style="padding:4px 12px;font-size:13px;" data-draft-next>下一页 →</button>';
+      html += '</div>';
+    }
     wrap.innerHTML = html;
     var all = document.getElementById('aiDesignSelectAll');
     if (all) {
@@ -220,7 +238,14 @@
         });
       });
     }
+    var prevBtn = wrap.querySelector('[data-draft-prev]');
+    var nextBtn = wrap.querySelector('[data-draft-next]');
+    if (prevBtn) prevBtn.addEventListener('click', function () { state._draftPage--; _renderDraftPage(); });
+    if (nextBtn) nextBtn.addEventListener('click', function () { state._draftPage++; _renderDraftPage(); });
   }
+
+  function renderDraftList() { state._draftPage = 1; _renderDraftPage(); }
+
 
   function getSelectedDrafts() {
     var wrap = document.getElementById('aiDesignDraftList');
@@ -373,7 +398,7 @@
     state.drafts = [];
     renderDraftList();
     hideDesignSummary();
-    setStatus('正在根据需求生成用例草案（约 6–10 条），请稍候…', 'busy');
+    setStatus('正在根据需求生成用例草案，请稍候…', 'busy');
     showDesignThinking();
     updateDesignThinkingStep('parse', 'active');
     try {
