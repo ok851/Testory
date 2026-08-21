@@ -11,16 +11,49 @@ def _flag(name: str, default: str = "1") -> bool:
 
 
 def probe_web() -> Dict[str, Any]:
-    ok = False
-    detail = "cdp_not_attached"
+    """探测浏览器手 (Web) 能力。
+
+    重要：CDP 是否已 attach 不能作为 web 能力的唯一判断标准！
+    - 任务刚开始时，浏览器必然还没启动、CDP 必然未 attach；
+    - 但只要 Hermes Gateway 已配置（有 hermes 能力），平台就能按需启动本机 Edge/Chrome 并连接 CDP；
+    - 所以判定逻辑改为：CDP 已连 → 显式 on；CDP 未连但 Hermes 已配置 → 按需 on（表明可以启动）；
+      只有 Hermes 也没配置时才 off。
+    """
+    cdp_attach = False
+    hermes_ok = False
+    detail_parts: List[str] = []
     try:
         from hermes_config import hermes_cdp_attached
-
-        ok = bool(hermes_cdp_attached())
-        detail = "cdp_attached" if ok else "cdp_not_attached"
+        cdp_attach = bool(hermes_cdp_attached())
     except Exception as e:
-        detail = str(e)[:120]
-    return {"id": "web", "available": ok, "detail": detail, "skills": ["testory-web-browser"]}
+        detail_parts.append(f"cdp_err:{str(e)[:60]}")
+    try:
+        from hermes_gateway_client import HermesGatewayClient
+        c = HermesGatewayClient()
+        if c.is_configured():
+            hermes_ok = True
+    except Exception:
+        hermes_ok = False
+    if cdp_attach:
+        detail_parts.append("cdp_attached")
+    elif hermes_ok:
+        detail_parts.append("cdp_on_demand")  # 可以按需启动浏览器
+    else:
+        detail_parts.append("hermes_not_configured")
+    available = cdp_attach or hermes_ok
+    if cdp_attach:
+        detail = "cdp_attached"
+    elif hermes_ok:
+        detail = "cdp_on_demand"
+    else:
+        detail = "hermes_not_configured"
+    return {
+        "id": "web",
+        "available": available,
+        "detail": detail,
+        "skills": ["testory-web-browser"],
+        "cdp_attached": cdp_attach,
+    }
 
 
 def probe_desktop() -> Dict[str, Any]:

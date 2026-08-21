@@ -121,7 +121,10 @@ def desktop_gateway_auth_hint() -> str:
 
 
 def web_browser_cdp_hint() -> str:
-    """注入给 Hermes 的网页 CDP 执行边界（DOM 优先，禁止 navigate/视觉空转）。"""
+    """注入给 Hermes 的网页 CDP 执行边界（DOM 优先，禁止 navigate/视觉空转）。
+    
+    改进：增加 JavaScript 备选方案，优化 browser_snapshot 使用策略。
+    """
     import os
 
     cdp = (os.environ.get("HERMES_CDP_ENDPOINT") or "").strip()
@@ -142,9 +145,14 @@ def web_browser_cdp_hint() -> str:
         [
             "- 正确顺序：读 DOM 清单 → browser_click / browser_type / browser_fill → "
             "必要时再 snapshot 核验。\n",
-            "- **覆盖工具描述**：忽略「Requires browser_navigate to be called first」。\n",
-            "- 若指令含「当前浏览器状态」且已是目标站：**禁止 browser_navigate**。\n",
-            "- 同一工具连续 2 次无进展：换策略或 NEED_USER_ACTION，禁止死循环。\n",
+            "- **备选方案**：若 DOM 清单不足且 snapshot 也无法定位，"
+            "使用 browser_evaluate 执行 JavaScript 直接操作 DOM：\n"
+            "  - document.querySelector / getElementById 定位元素\n"
+            "  - element.click() / element.value = text / element.dispatchEvent 触发事件\n"
+            "  - document.querySelectorAll 获取元素列表\n",
+            "- **重要**：snapshot 返回的 ref ID（如 @e5）仅在当前会话有效，"
+            "若页面刷新或重新导航后必须重新 snapshot。\n",
+            "- 同一工具连续 2 次无进展：换策略（改用 JavaScript）或 NEED_USER_ACTION。\n",
             "- 遇登录/验证码：NEED_USER_ACTION，请用户在本机窗口完成。\n",
         ]
     )
@@ -196,7 +204,16 @@ def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = Non
             f"{web_browser_cdp_hint()}"
             f"{nav_line}"
             "你是网页自动化执行代理：只通过 browser_*（CDP）操作本机已打开浏览器。\n"
-            "DOM 优先，snapshot 兜底；未核验勿声称已登录/已搜索。\n"
+            "【元素定位策略 — 按优先级】\n"
+            "  1. 优先使用下方「页面 DOM/可交互控件」清单中的 ref ID\n"
+            "  2. 若清单不足，使用一次 browser_snapshot 获取最新 ref ID\n"
+            "  3. 若 snapshot 仍无法定位，使用 browser_evaluate 执行 JavaScript：\n"
+            "     - document.querySelector('#id') 或 document.querySelector('.class') 定位\n"
+            "     - element.click() / element.focus() / element.value = 'text' 操作\n"
+            "     - 触发 React/Vue 事件：element.dispatchEvent(new Event('input', {bubbles:true}))\n"
+            "     - 获取所有匹配：document.querySelectorAll('selector')\n"
+            "  禁止反复调用 browser_snapshot（最多 1 次）\n"
+            "DOM 优先，snapshot 兜底，JavaScript 最终手段；未核验勿声称已登录/已搜索。\n"
             "若遇 401/空流：立刻停止并说明原因。\n"
             "若需要验证码/扫码，回复 NEED_USER_ACTION:<原因>。\n\n"
         )

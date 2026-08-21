@@ -309,9 +309,12 @@ def maximize_debug_browser_window(
     process_pid: int = 0,
     page: Any = None,
 ) -> bool:
-    """尽量把调试浏览器窗口最大化（CDP windowState + Win32 ShowWindow）。"""
+    """通过 CDP 协议最大化浏览器窗口（不抢焦点）。
+
+    仅使用 CDP Browser.setWindowBounds，不调用 Win32 ShowWindow/SetForegroundWindow，
+    避免浏览器窗口抢占用户鼠标和前台焦点。
+    """
     ok = False
-    # 1) 已有 Playwright page：用 CDP session（勿再 connect_over_cdp，避免冲掉桥接）
     if page is not None:
         try:
             cdp = page.context.new_cdp_session(page)
@@ -342,44 +345,6 @@ def maximize_debug_browser_window(
                 ok = True
         except Exception:
             pass
-
-    # 2) Win32：按进程 PID 最大化顶层窗
-    if sys.platform == "win32":
-        pid = int(process_pid or 0)
-        if not pid:
-            try:
-                proc = _snap().get("browser_process")
-                pid = int(getattr(proc, "pid", 0) or 0)
-            except Exception:
-                pid = 0
-        if pid:
-            try:
-                import ctypes
-                from ctypes import wintypes
-
-                user32 = ctypes.windll.user32
-                SW_MAXIMIZE = 3
-                targets: List[int] = []
-
-                @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-                def _enum(hwnd, _lp):
-                    try:
-                        if not user32.IsWindowVisible(hwnd):
-                            return True
-                        p = wintypes.DWORD()
-                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
-                        if int(p.value or 0) == pid:
-                            targets.append(int(hwnd))
-                    except Exception:
-                        pass
-                    return True
-
-                user32.EnumWindows(_enum, 0)
-                for hwnd in targets[:4]:
-                    user32.ShowWindow(hwnd, SW_MAXIMIZE)
-                    ok = True
-            except Exception:
-                pass
     return ok
 
 
@@ -519,7 +484,7 @@ def _launch_debug_browser_unlocked(
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-popup-blocking",
-        "--start-maximized",
+        "--window-size=1920,1080",
         "--window-position=0,0",
         "--disable-features=TranslateUI,InfiniteSessionRestore",
         "--noerrdialogs",
@@ -574,10 +539,6 @@ def _launch_debug_browser_unlocked(
         context=None,
         page=None,
     )
-    try:
-        maximize_debug_browser_window(debug_port=debug_port, process_pid=getattr(proc, "pid", 0) or 0)
-    except Exception:
-        pass
     return {
         "success": True,
         "debug_port": debug_port,

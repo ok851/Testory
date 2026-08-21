@@ -281,6 +281,10 @@ def _is_noise_focus_window(title: str, process: str, class_name: str) -> bool:
         return True
     if p in ("gdi+windows.exe", "gdi+windows"):
         return True
+    # 【修复】过滤 Testory/自主测试自身窗口，防止误匹配到软件自身
+    _TESTORY_MARKERS = ("testory", "自主测试", "ai测试", "ai 测试", "ai自动化")
+    if any(m in t for m in _TESTORY_MARKERS) and p in ("python.exe", "pythonw.exe"):
+        return True
     return False
 
 
@@ -902,8 +906,16 @@ def _windows_focus_app_impl(app_name: str) -> Dict[str, Any]:
             "error": "app_name 为空",
             "suggestion": "请传入窗口标题或应用名，如「记事本」「微信」。",
         }
+    is_browser = _is_browser_app(name)
     needles = _focus_needles(name)
     windows = _enum_focus_candidate_windows()
+
+    # 【修复】浏览器任务优先使用 _find_running_browsers，避免误匹配
+    if is_browser:
+        browsers = _find_running_browsers(name)
+        if browsers:
+            return browsers[0]
+
     scored: List[Tuple[float, Dict[str, Any]]] = []
     for w in windows:
         s = _score_focus_candidate(w, needles)
@@ -928,7 +940,7 @@ def _windows_focus_app_impl(app_name: str) -> Dict[str, Any]:
         except Exception:
             pass
     if not picked:
-        if _is_browser_app(name):
+        if is_browser:
             browsers = _find_running_browsers(name)
             if browsers:
                 return browsers[0]
@@ -1303,15 +1315,25 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
     is_browser = _is_browser_app(name)
     display_target = display if display else name
 
-    already = _windows_focus_app_impl(display_target)
-    if not already.get("success") and is_browser:
+    # 【修复】浏览器任务优先使用 _find_running_browsers，避免误匹配到 Testory 窗口
+    if is_browser:
         browsers = _find_running_browsers(name)
         if browsers:
             already = browsers[0]
-    if already.get("success"):
-        already["via"] = "already_running_focus"
-        already["launched"] = False
-        return already
+            already["via"] = "already_running_browser"
+            already["launched"] = False
+            return already
+        already = _windows_focus_app_impl(display_target)
+        if already.get("success"):
+            already["via"] = "already_running_focus"
+            already["launched"] = False
+            return already
+    else:
+        already = _windows_focus_app_impl(display_target)
+        if already.get("success"):
+            already["via"] = "already_running_focus"
+            already["launched"] = False
+            return already
 
     path = launch_val
     try:
@@ -1381,7 +1403,7 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
         "success": False,
         "error": last_focus.get("error")
         or f"已尝试启动「{display}」，但未出现可聚焦窗口",
-        "launched": True,
+        "launched": False,
         "via": launched_via,
         "launch_value": launch_val,
         "resolved_path": path,

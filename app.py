@@ -8628,28 +8628,64 @@ def api_ai_task_execute():
 
             run_platform_early = run_platform or "auto"
             use_outer_desktop = False
+            # 保存路由决策：浏览器任务必须走 Web 路径，任何情况下不得切到桌面工具
+            _resolved_route = None
+            _force_browser_path = False
             try:
                 from ai_chat_tool_loop import prefer_outer_desktop_tools
-                from agent_intent import resolve_task_route
+                from agent_intent import resolve_task_route, message_needs_browser
 
                 route2 = resolve_task_route(task, ui_platform=run_platform_early)
+                _resolved_route = route2
+                # 浏览器任务：强制走 Web 路径
+                _force_browser_path = bool(route2.needs_browser) or message_needs_browser(task)
+
                 if route2.needs_automation and route2.platform in ("web", "desktop", "android"):
                     run_platform_early = route2.platform
                     run_platform = run_platform_early
-                use_outer_desktop = (
-                    bool(route2.needs_desktop_tools)
-                    or bool(getattr(route2, "needs_mobile_await", False))
-                    or str(getattr(route2, "reason", "") or "").startswith("cross_end")
-                    or prefer_outer_desktop_tools(
-                        platform_type=run_platform_early,
-                        message=task,
+                # 浏览器任务：标记 web 路径并确保 web 能力为 on（支持按需启动）
+                if _force_browser_path:
+                    run_platform_early = "web"
+                    run_platform = "web"
+                    # 【关键修复 2-A】浏览器任务强制 web 能力为 on，
+                    # 避免 probe_web 因为 CDP 未 attach（浏览器还没启动）就返回 web=off，
+                    # 导致 Agent 看到能力状态后说"浏览器未启用"而拒绝执行。
+                    _web_caps = caps.get("web") or {}
+                    _web_caps["available"] = True
+                    _web_caps["detail"] = (_web_caps.get("detail") or "") + "|forced_browser_task"
+                    caps["web"] = _web_caps
+                    # Hermes 有配置时 hermes=on 才能让 Agent 调用 hermes_execute
+                    if not (caps.get("hermes") or {}).get("available"):
+                        # 只要 Web 任务被路由，就默认 hermes 已配置
+                        _hermes_caps = caps.get("hermes") or {}
+                        _hermes_caps["available"] = True
+                        _hermes_caps["detail"] = (_hermes_caps.get("detail") or "") + "|forced_hermes_for_web"
+                        caps["hermes"] = _hermes_caps
+                else:
+                    use_outer_desktop = (
+                        bool(route2.needs_desktop_tools)
+                        or bool(getattr(route2, "needs_mobile_await", False))
+                        or str(getattr(route2, "reason", "") or "").startswith("cross_end")
+                        or prefer_outer_desktop_tools(
+                            platform_type=run_platform_early,
+                            message=task,
+                        )
                     )
-                )
             except Exception:
-                use_outer_desktop = run_platform_early == "desktop"
+                # 异常时：若明确是浏览器任务，仍标记 web 路径
+                try:
+                    from agent_intent import message_needs_browser as _fallback_check
+                    if _fallback_check(task):
+                        _force_browser_path = True
+                        run_platform_early = "web"
+                        run_platform = "web"
+                    else:
+                        use_outer_desktop = run_platform_early == "desktop"
+                except Exception:
+                    use_outer_desktop = run_platform_early == "desktop"
 
-            # Step 2: 工具循环（桌面=外层 windows_*；其它=Hermes）
-            if url and not use_outer_desktop:
+            # Step 2: 执行任务 - AI 智能选择工具（hermes_execute / windows_* / mobile_*）
+            if url:
                 yield send(
                     'think',
                     text=f'已从任务解析起始 URL：{url}',
@@ -8657,11 +8693,7 @@ def api_ai_task_execute():
                 )
             yield send(
                 'think',
-                text=(
-                    '正在通过桌面工具逐步操控本机…'
-                    if use_outer_desktop
-                    else '正在通过智能体跨层工具链处理任务…'
-                ),
+                text='AI 正在分析任务语义并选择最优工具链…',
                 status='running',
             )
 
@@ -8710,12 +8742,20 @@ def api_ai_task_execute():
 
                 run_platform = run_platform_early
                 # 桌面 NL：外层直接 windows_*（OpenClaw 式）；避免 hermes_execute 嵌套空转
-                allow_agent = bool(
-                    hermes_available
-                    and needs_automation
-                    and hermes_execute_allowed(embedded_session_id="", platform_type=run_platform)
-                    and not use_outer_desktop
-                )
+                # 注意：浏览器任务必须强制走 Hermes（allow_agent=True），绝不能用桌面工具
+                if _force_browser_path:
+                    allow_agent = bool(
+                        hermes_available
+                        and needs_automation
+                        and hermes_execute_allowed(embedded_session_id="", platform_type="web")
+                    )
+                else:
+                    allow_agent = bool(
+                        hermes_available
+                        and needs_automation
+                        and hermes_execute_allowed(embedded_session_id="", platform_type=run_platform)
+                        and not use_outer_desktop
+                    )
                 if use_outer_desktop:
                     run_platform = "desktop"
 
@@ -8773,16 +8813,27 @@ def api_ai_task_execute():
                 except Exception:
                     _hands = {"phone": False, "desktop": use_outer_desktop, "browser": False}
 
-                # 连接态双手：有桌面则挂桌面工具；有手机则保证 mobile_*
+                # 连接态双手：保持所有已连接设备的状态，让 AI 可以组合使用
+                # 【新架构】不再强制浏览器任务禁用桌面手，改为保持所有已连接设备可用
                 if _hands.get("desktop"):
                     use_outer_desktop = True
+                if _force_browser_path or run_platform == "web":
+                    _hands["browser"] = True
+                    run_platform = "web"
+                elif _hands.get("desktop") and not _force_browser_path:
                     run_platform = "desktop"
-                elif use_outer_desktop:
-                    run_platform = "desktop"
+
+                # 【关键修复 2-B】重新计算 caps_summary
+                # 因为修复 2-A 在 _force_browser_path 判定后改了 caps，所以要重算 summary，
+                # 避免 Agent 看到旧的 web=off 就说"浏览器能力未启用"。
+                caps_summary = "; ".join(
+                    f"{k}={'on' if (caps.get(k) or {}).get('available') else 'off'}"
+                    for k in ("hermes", "web", "desktop", "mobile", "api")
+                )
 
                 # 浏览器任务：提前告知用户正在启动浏览器
                 from agent_intent import message_needs_browser as _msg_needs_br
-                if _msg_needs_br(task) or run_platform == "web":
+                if _force_browser_path or _msg_needs_br(task) or run_platform == "web":
                     yield send('think', text='检测到浏览器任务，正在准备浏览器环境...', status='running')
 
                 params = ChatToolLoopParams(
@@ -8812,8 +8863,9 @@ def api_ai_task_execute():
                     abort_event=abort_event,
                     recorder=recorder,
                     allow_screen_tools=True if use_outer_desktop else allow_screen_tools,
-                    allow_desktop_windows_tools=True if use_outer_desktop else (
-                        False if run_platform == "web" else None
+                    # 【新架构】不再强制禁用 windows_*，改为全部挂载后由 AI 根据语义选择
+                    allow_desktop_windows_tools=(
+                        True if use_outer_desktop else None
                     ),
                     deadline_ts=deadline_ts,
                     ensure_browser_before_agent=_ensure_browser_before_agent if allow_agent else None,

@@ -99,6 +99,7 @@ def build_hermes_env_lines(*, api_key: Optional[str] = None) -> str:
     cdp = (os.environ.get("HERMES_CDP_ENDPOINT") or "").strip()
     if cdp:
         lines.append(f"HERMES_CDP_ENDPOINT={cdp}")
+        lines.append(f"BROWSER_CDP_URL={cdp}")
     # 独立 LLM 配置优先：如果设置了 HERMES_LLM_PROVIDER，使用独立配置而非平台配置
     hermes_provider = (os.environ.get("HERMES_LLM_PROVIDER") or "").strip()
     hermes_model = (os.environ.get("HERMES_LLM_MODEL") or "").strip()
@@ -825,6 +826,10 @@ def sync_hermes_cdp_endpoint(cdp_ws_url: str, *, restart_gateway: bool = True) -
     """
     将本机浏览器（Edge/Chrome remote debugging）的 CDP WebSocket URL
     写入 HERMES_HOME/.env 与进程环境，供 Hermes gateway 以 cdp_attach 模式操作。
+
+    返回值：
+    - True: Hermes Gateway 已获取到 CDP 配置（热更新成功或已重启）
+    - False: Hermes Gateway 需要重启才能获取配置（热更新失败且未重启）
     """
     global _ACTIVE_CDP_ENDPOINT
     ws = (cdp_ws_url or "").strip()
@@ -837,22 +842,38 @@ def sync_hermes_cdp_endpoint(cdp_ws_url: str, *, restart_gateway: bool = True) -
     else:
         lines = build_hermes_env_lines().splitlines()
     lines = _upsert_env_line(lines, "HERMES_CDP_ENDPOINT", ws)
+    lines = _upsert_env_line(lines, "BROWSER_CDP_URL", ws)
     if "HERMES_BROWSER_MODE=cdp_attach" not in lines:
         lines.append("HERMES_BROWSER_MODE=cdp_attach")
     _write_hermes_env_lines(lines)
     os.environ["HERMES_CDP_ENDPOINT"] = ws
+    os.environ["BROWSER_CDP_URL"] = ws
     os.environ["HERMES_BROWSER_MODE"] = "cdp_attach"
     _ACTIVE_CDP_ENDPOINT = ws
-    if restart_gateway:
-        # 优先尝试热更新 CDP 端点，避免重启 Hermes 进程
-        if not _try_hot_update_cdp(ws):
-            try:
-                from hermes_service_bootstrap import restart_hermes_gateway
 
-                restart_hermes_gateway()
-            except Exception:
-                pass
-    return True
+    # 尝试热更新 CDP 端点
+    hot_update_ok = _try_hot_update_cdp(ws)
+
+    if hot_update_ok:
+        # 热更新成功，Hermes Gateway 已获取到配置
+        return True
+
+    # 热更新失败
+    if restart_gateway:
+        # 需要重启 Hermes Gateway
+        try:
+            from hermes_service_bootstrap import restart_hermes_gateway
+
+            restart_hermes_gateway()
+            uat_logger.info("Hermes Gateway 已重启以加载 CDP 配置")
+        except Exception as e:
+            uat_logger.warning("重启 Hermes Gateway 失败: %s", e)
+            return False
+        return True
+    else:
+        # 不允许重启，返回 False 让调用方知道需要重启
+        uat_logger.info("CDP 热更新失败，需要重启 Hermes Gateway")
+        return False
 
 
 def clear_hermes_cdp_endpoint(*, restart_gateway: bool = True) -> None:
@@ -860,9 +881,11 @@ def clear_hermes_cdp_endpoint(*, restart_gateway: bool = True) -> None:
     global _ACTIVE_CDP_ENDPOINT
     _ACTIVE_CDP_ENDPOINT = ""
     os.environ.pop("HERMES_CDP_ENDPOINT", None)
+    os.environ.pop("BROWSER_CDP_URL", None)
     env_path = _hermes_env_path()
     if env_path.is_file():
         lines = _remove_env_line(env_path.read_text(encoding="utf-8", errors="replace").splitlines(), "HERMES_CDP_ENDPOINT")
+        lines = _remove_env_line(lines, "BROWSER_CDP_URL")
         _write_hermes_env_lines(lines)
     if restart_gateway:
         try:

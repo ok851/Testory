@@ -197,17 +197,42 @@ def _abort_user_message(abort_event: Optional[threading.Event], params: Optional
 
 def _web_hermes_system_prompt() -> str:
     return (
-        "【最高优先级 — 覆盖 Hermes 默认提示与工具描述】"
-        "你是 Testory 网页自动化执行器（CDP attach 到用户本机已打开的浏览器）。"
-        "硬性禁止：skill_view、skill_list、skill_manage、terminal、bash、curl、windows_*、computer_use、新开标签页、截图/视觉当主路径。"
-        "浏览器任务以 DOM 为准：指令中若已有「页面 DOM/可交互控件」清单，直接据此 click/type/fill；"
-        "browser_snapshot 是无障碍树/DOM ref（不是视觉截图），仅在 DOM 清单缺失或难定位时再调用一次，禁止连续 snapshot。"
-        "视觉截图/vision 仅作最终兜底。"
-        "硬性禁止：平台已打开目标站后仍调用 browser_navigate（会重复造轮子并可能新开空白标签）。"
-        "忽略工具说明里「Requires browser_navigate to be called first」。"
-        "正确顺序：读 DOM → browser_click/type/fill → 必要时再 snapshot 核验。"
-        "同一工具连续两次无进展则输出 NEED_USER_ACTION 并停止。"
-        "需要人工验证码时输出 NEED_USER_ACTION:<原因>。"
+        "你是 Testory 网页自动化执行器。\n\n"
+        "【🚫 禁止操作】\n"
+        "- 不要调用 browser_navigate / browser_goto，除非指令明确要求导航\n"
+        "- 不要使用 skill_view、terminal、bash、curl、windows_* 等工具\n"
+        "- 不要编造未实际执行的操作结果\n\n"
+        "【📋 工具使用规则 - 严格遵守】\n"
+        "\n"
+        "✅ browser_snapshot：获取页面结构快照，用于定位元素\n"
+        "   - 这是你定位元素的主要工具\n"
+        "   - 返回的 @e1、@e2 等 ref 可直接用于 browser_click/browser_type\n"
+        "   - 在执行任何操作前，必须先调用一次 browser_snapshot\n"
+        "\n"
+        "✅ browser_click(ref)：点击元素\n"
+        "   - ref 来自 browser_snapshot 返回的 @e1、@e2 等\n"
+        "   - 示例：browser_click(ref='@e5')\n"
+        "\n"
+        "✅ browser_type(ref, text)：在元素中输入文本\n"
+        "   - ref 来自 browser_snapshot 返回的 @e1、@e2 等\n"
+        "   - 示例：browser_type(ref='@e3', text='hello')\n"
+        "\n"
+        "✅ browser_press(key)：模拟按键\n"
+        "   - 用于 Enter、Tab、ArrowDown 等\n"
+        "\n"
+        "❌ browser_console：仅用于读取控制台日志\n"
+        "   - 不要用它来定位元素或获取页面结构\n"
+        "   - 不要用它来执行 DOM 操作\n"
+        "   - 只有当你需要检查控制台错误时才使用\n\n"
+        "【🎯 标准执行流程】\n"
+        "1. 调用 browser_snapshot 获取页面结构\n"
+        "2. 从返回结果中找到目标元素的 ref（如 @e5）\n"
+        "3. 使用 browser_click(ref) 或 browser_type(ref, text) 操作元素\n"
+        "4. 操作完成后，可以再次调用 browser_snapshot 验证结果\n\n"
+        "【📌 重要提示】\n"
+        "- 页面已就绪时不要调用 browser_navigate\n"
+        "- 遇到验证码/扫码：等待用户在浏览器窗口完成\n"
+        "- 操作失败时换另一种方式，不要死循环\n"
     )
 
 
@@ -377,8 +402,10 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_focus_app",
                 "description": (
-                    "将指定应用窗口激活到前台并设为当前桌面目标。"
-                    "若应用未运行，会自动尝试启动（等同 launch）；也可显式用 windows_launch_app。"
+                    "【平台=仅桌面本机GUI·非浏览器】将指定桌面应用窗口激活到前台并设为目标。"
+                    "【适用】微信、钉钉、记事本、Word、WPS、企业微信、QQ 等非浏览器本机应用。"
+                    "【严禁】浏览器/网页任务（打开网站、访问URL、搜索网页等）绝对不要调用此工具！"
+                    "浏览器任务必须用 hermes_execute，它会自动启动真正的浏览器并操作DOM。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -394,15 +421,19 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_launch_app",
                 "description": (
-                    "启动本机应用（未运行也可）。对应用例层 launch_app。"
-                    "如 notepad/记事本、calc/计算器；启动后自动聚焦并绑定目标。"
+                    "【平台=仅桌面本机GUI·非浏览器】启动本机应用并绑定目标窗口。"
+                    "【适用】记事本/notepad、计算器/calc、画图/mspaint、钉钉、飞书、企业微信、微信、QQ、Word、Excel、WPS 等**非浏览器**应用。"
+                    "【严禁 1】浏览器/网页任务（打开网站、访问 URL、搜索、输入网址等）绝对不要调用！"
+                    "     👉 浏览器任务必须用 hermes_execute（会自动启动 Edge/Chrome 并通过 CDP 操作页面）。"
+                    "【严禁 2】不要用 launch_app('Edge') + press_key('Ctrl+T') + type_text(网址) 这种桌面模拟方式操作浏览器！"
+                    "     👉 桌面模拟会把焦点所在窗口（比如 Testory 软件自己）当作目标，导致按键/输入按错地方！"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "app_name": {
                             "type": "string",
-                            "description": "应用名或别名，如「记事本」「notepad」「计算器」",
+                            "description": "应用名或别名（仅限非浏览器应用），如「记事本」「notepad」「计算器」「钉钉」",
                         },
                     },
                     "required": ["app_name"],
@@ -414,18 +445,18 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_click_element",
                 "description": (
-                    "按短控件名点击元素（UIA→OCR→VLM 三模融合定位）。"
-                    "系统自动通过 UIA 树、OCR 文本识别和视觉模型三种方式找到元素并点击。"
-                    "description 只写「确定」「保存」「登录」「搜索」等控件标签；"
-                    "禁止把「编辑内容为…」整句当点击目标——那是 windows_type_text。"
-                    "失败时系统自动触发屏幕观察并从重试描述，无需手动重试。"
+                    "【平台=仅桌面本机GUI·非浏览器】按短控件名点击桌面可见控件（UIA→OCR→VLM 三模定位）。"
+                    "【适用】微信/钉钉/Word/记事本/WPS 等本机应用的按钮、菜单、输入框标签。"
+                    "【前置条件】调用前必须先 get_screen_text 获取当前屏幕文本候选，确认是目标应用再点击。"
+                    "【严禁】浏览器/网页任务不要调用！浏览器页面元素点击请用 hermes_execute。"
+                    "【严禁】不要在 Testory 软件自己的窗口上找「登录」「账号」等网页控件，这些在真实浏览器里。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "description": {
                             "type": "string",
-                            "description": "短控件名，如「确定」；不要写用户整句",
+                            "description": "短控件名，如「确定」「保存」「登录」；不要整句",
                         },
                     },
                     "required": ["description"],
@@ -437,10 +468,11 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_type_text",
                 "description": (
-                    "向当前桌面目标窗口输入文本（优先 UIA/目标窗粘贴）。"
-                    "记事本等编辑器启动后可直接输入，无需先点「编辑」菜单。"
-                    "用户说「编辑内容为X / 输入X / 写入X」时，把 X 作为 text。"
-                    "返回 capture_after；未核验时勿声称已输入。"
+                    "【平台=仅桌面本机GUI·非浏览器】向当前聚焦的桌面应用窗口输入框键入文本。"
+                    "【适用】记事本编辑内容、微信消息框、钉钉输入框、Word文档、Excel单元格等。"
+                    "【前置条件】先 windows_focus_app 聚焦目标应用，再 get_screen_text 确认窗口正确，再输入。"
+                    "【严禁】浏览器地址栏/网页输入框不要用此工具！必须用 hermes_execute 在浏览器内操作。"
+                    "【失败含义】若返回「UIA/OCR 均未确认内容出现」，说明当前聚焦窗口不是预期目标（可能聚焦到了 Testory 软件窗口），应先 focus_app + get_screen_text 确认窗口，再重试。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -457,15 +489,18 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_press_key",
                 "description": (
-                    "按键或组合键。必须一次传入完整键，如 Enter、Esc、Ctrl+N、Ctrl+S；"
-                    "禁止只传 ctrl。新建文件/新页用 Ctrl+N；勿默认用 Ctrl+F 或点搜索。"
+                    "【平台=仅桌面本机GUI·非浏览器】向当前聚焦的桌面窗口发送按键或组合键。"
+                    "【适用】记事本 Ctrl+S 保存、微信 Enter 发送消息、Word Ctrl+N 新建文档等。"
+                    "【严禁 1】浏览器任务不要调用！不要用 Ctrl+T / Ctrl+L / Enter 来模拟浏览器操作——"
+                    "因为焦点很可能在 Testory 软件窗口或其他非目标窗口，会按错！"
+                    "【严禁 2】浏览器任务必须用 hermes_execute，它会在真实浏览器窗口里通过 CDP 协议精准操作 DOM。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "key": {
                             "type": "string",
-                            "description": "完整按键名，如 Enter / Ctrl+N（不要只写 ctrl）",
+                            "description": "完整按键名，如 Enter / Ctrl+S（不要只写 ctrl）",
                         },
                     },
                     "required": ["key"],
@@ -477,8 +512,8 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_wait",
                 "description": (
-                    "短暂等待。duration_ms 毫秒；或 condition=stable / desktop_change / window:标题关键词。"
-                    "动作用后可用 desktop_change 核验窗口变化。"
+                    "【平台=仅桌面本机GUI】短暂等待或验证桌面窗口变化。"
+                    "如桌面应用启动后等待窗口出现、页面跳转后等待稳定；桌面任务步骤之间可用。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -486,7 +521,7 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
                         "duration_ms": {"type": "integer", "description": "等待毫秒数"},
                         "condition": {
                             "type": "string",
-                            "description": "stable | desktop_change | window:标题",
+                            "description": "stable | desktop_change | window:标题关键词",
                         },
                     },
                 },
@@ -502,8 +537,13 @@ def _screen_observation_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "get_screen_text",
                 "description": (
-                    "获取当前屏幕可见文字及位置（轻量 OCR，优先于视觉描述）。"
-                    "操作前不确定元素位置、或点击失败后应调用此工具。"
+                    "【共享屏幕·OCR】获取当前整块屏幕的可见文字与坐标。"
+                    "【必须调用的场景】"
+                    "  1) 桌面任务第一次 windows_click_element / windows_type_text / windows_press_key 之前，先观察确认是目标应用；"
+                    "  2) windows_* 任何工具失败后，必须立即调用此工具看真实画面文字是什么，再决定下一步；"
+                    "  3) windows_launch_app / windows_focus_app 调用之后，必须调用一次验证窗口正确，否则可能在 Testory 窗口乱点。"
+                    "【返回内容】屏幕上 OCR 到的全部文字和坐标，你根据返回文字判断当前聚焦窗口是不是目标应用。"
+                    "【窗口误判提示】如果返回文字包含 'Testory' / '自主测试' / 'AI 测试' 等，说明焦点在 Testory 软件窗口，应先 focus_app。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -521,7 +561,13 @@ def _screen_observation_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "get_screen_description",
                 "description": (
-                    "获取屏幕视觉结构化描述（≤300字）。仅在文字信息不足以理解界面时调用。"
+                    "【共享屏幕·VLM 视觉】用视觉大模型理解当前屏幕画面，返回结构化语义描述。比 OCR 更全面，能识别图标/颜色/布局。"
+                    "【必须调用的场景】"
+                    "  1) windows_launch_app 或 windows_focus_app 之后：验证真的是目标应用（不是 Testory 软件窗口）；"
+                    "  2) 桌面任务连续 2 次失败后：调用此工具获取画面真实状态；"
+                    "  3) get_screen_text 返回空 / 没有目标文字但界面应该有（Electron / DirectUI / 微信 / QQ 等自定义渲染应用）；"
+                    "  4) 需要判断界面布局、按钮、图标等视觉特征而非仅文字。"
+                    "【可提问】prompt 可直接问：'当前屏幕是什么应用？有没有浏览器地址栏？是不是目标登录页？'"
                 ),
                 "parameters": {
                     "type": "object",
@@ -538,9 +584,11 @@ def _screen_observation_tool_schemas() -> List[Dict[str, Any]]:
 
 
 def _should_enable_desktop_windows_tools(platform_type: str, message: str = "") -> bool:
-    """是否注册外层 windows_*。以 resolve_task_route 为准，避免 web/desktop 互串。
+    """是否注册外层 windows_*。
 
-    设 PLATFORM_OUTER_DESKTOP_TOOLS=0 可关闭。
+    设计理念：**尽量挂载，让 AI 自行选择**。
+    除非明确设置 PLATFORM_OUTER_DESKTOP_TOOLS=0 或平台为 android，否则一律挂载。
+    AI 会根据任务语义判断何时使用 windows_*、hermes_execute 或 mobile_*。
     """
     import os
 
@@ -550,31 +598,8 @@ def _should_enable_desktop_windows_tools(platform_type: str, message: str = "") 
     plat = (platform_type or "").strip().lower()
     if plat == "android":
         return False
-    # UI 已显式选桌面：即使本轮 message 为空也挂工具（schema 预览/默认会话）
-    if plat == "desktop" and not (message or "").strip():
-        return True
-    try:
-        from agent_intent import resolve_task_route
-
-        route = resolve_task_route(message or "", ui_platform=plat or "auto")
-        if route.needs_desktop_tools:
-            return True
-        if plat == "desktop" and route.mode == "automation" and not route.needs_browser:
-            return True
-        # UI=desktop 且非明确网页任务：仍挂桌面工具
-        if plat == "desktop" and route.platform != "web":
-            return True
-    except Exception:
-        if plat == "desktop":
-            return True
-        try:
-            from agent_desktop_fastpath import is_desktop_nl_task
-
-            if message and is_desktop_nl_task(message):
-                return True
-        except Exception:
-            pass
-    return False
+    # 其他情况一律挂载，让 AI 自行选择
+    return True
 
 
 def _desktop_tool_failed(result_text: str) -> bool:
@@ -1600,52 +1625,61 @@ def chat_tool_schemas(
     allow_refine_test_plan: bool = True,
     connected_hands: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    """构建工具列表。
+
+    设计理念：**把工具选择权交还给 AI，而非硬编码过滤**。
+    根据任务意图和已连接设备挂载全部可用工具，通过 System Prompt 引导 AI 正确选择。
+    AI 具备强大的语义理解能力，能自行判断：
+    - 有 URL/网页关键词 → 使用 hermes_execute（浏览器自动化）
+    - 有手机短信/验证码 → 使用 mobile_* 工具
+    - 有桌面应用操作 → 使用 windows_* 工具
+    - 多端联动 → 组合使用多个工具
+    """
     allow = allow_hermes if allow_hermes is not None else allow_openclaw
     schemas: List[Dict[str, Any]] = []
     hands = connected_hands if isinstance(connected_hands, dict) else None
-    # 连接态优先：已连接桌面则挂 windows_*，不因「手机」话术关掉
+    plat = (platform_type or "web").strip().lower()
+
+    # ===== 1. 判断哪些端的工具可用 =====
+    # hermes_execute：只要允许就挂载，不管任务类型
+    # windows_*：只要有桌面连接或用户允许就挂载
+    # mobile_*：只要有手机连接就挂载
+
+    # Windows 桌面工具可用性
     if hands is not None and hands.get("desktop") is True:
         enable_win = True if allow_desktop_windows_tools is not False else False
+    elif allow_desktop_windows_tools is not None:
+        enable_win = allow_desktop_windows_tools
     else:
-        enable_win = (
-            allow_desktop_windows_tools
-            if allow_desktop_windows_tools is not None
-            else _should_enable_desktop_windows_tools(platform_type, message)
-        )
-    plat = (platform_type or "web").strip().lower()
-    # 有跨端双手时用 auto/desktop 精简叙事，避免锁死 android-only
-    if hands and (hands.get("desktop") or hands.get("phone")):
-        if plat == "android":
-            plat = "desktop" if hands.get("desktop") else "auto"
-    desktop_slim = enable_win and plat in ("desktop", "auto") and (
-        plat == "desktop"
-        or _should_enable_desktop_windows_tools("desktop", message)
-        or bool(hands and hands.get("desktop"))
-    )
+        enable_win = _should_enable_desktop_windows_tools(platform_type, message)
+
+    # cross_end desktop_* / mobile_* 工具
+    include_desk = True if (hands is None or hands.get("desktop")) else False
+    include_phone = True if (hands is None or hands.get("phone")) else False
+
+    # ===== 2. 挂载可用工具 =====
+    if allow:
+        schemas.append(_agent_execute_tool_schema())
+
     if enable_win:
         schemas.extend(_desktop_windows_tool_schemas())
-        if desktop_slim or allow_screen_tools:
+        if allow_screen_tools:
             schemas.extend(_screen_observation_tool_schemas())
     elif allow_screen_tools:
         schemas.extend(_screen_observation_tool_schemas())
-    # 按已连接双手挂 desktop_* / mobile_*
+
     try:
         from mobile_cross_end_tools import cross_end_tool_schemas
-
-        include_desk = True if hands is None else bool(hands.get("desktop"))
-        include_phone = True if hands is None else bool(hands.get("phone"))
-        # 无连接快照时保持兼容：全挂（旧行为）
         schemas.extend(
             cross_end_tool_schemas(
-                include_desktop=include_desk or (hands is None),
-                include_mobile=include_phone or (hands is None),
+                include_desktop=include_desk,
+                include_mobile=include_phone,
             )
         )
     except Exception:
         pass
-    if allow and not (desktop_slim and plat == "desktop"):
-        schemas.append(_agent_execute_tool_schema())
-    if allow_refine_test_plan and not (desktop_slim and plat == "desktop"):
+
+    if allow_refine_test_plan:
         schemas.append(
             {
                 "type": "function",
@@ -1668,9 +1702,11 @@ def chat_tool_schemas(
                 },
             },
         )
+
     import os as _os
     if (_os.getenv("AGENT_API_EXECUTION_ENABLE") or "").strip().lower() in ("1", "true", "yes", "on"):
         schemas.append(_api_execution_tool_schema())
+
     return schemas
 
 
@@ -1852,7 +1888,10 @@ def _cross_end_strategy_lines() -> List[str]:
     return [
         "",
         "## 跨端工具原则（能力面，非固定剧本）",
-        "- 桌面 GUI：用 desktop_* / windows_*；每步根据工具返回再决定下一步，禁止臆造成功。",
+        "- 【平台选择优先】浏览器/网页任务（打开网站、访问 URL、操作浏览器页面）→ 一律 hermes_execute 走 CDP，"
+        "**绝对不要**用 desktop_* / windows_* 启动应用或按键盘，禁止在非浏览器窗口乱点！",
+        "- 桌面 GUI（非浏览器本机应用：微信、钉钉、Word、记事本等）：用 desktop_* / windows_*；"
+        "每步根据工具返回再决定下一步，禁止臆造成功。",
         "- 需要短信/通知验证码：调用 mobile_extract_otp，只用工具返回值；禁止编造验证码。",
         "- 需要手机本机跑步骤或用例：mobile_run_steps / mobile_run_case。",
         "- mobile_run_steps 的 steps 须用手机 IR action："
@@ -1910,15 +1949,15 @@ def _build_system_prompt(
     parts = [
         "你是 Testory 平台的 AI 测试助手，可以帮助用户进行自动化测试任务，也可以进行日常对话。",
         "",
-        "## 意图判断（重要）",
-        "请先判断用户输入的意图：",
+        "## 意图判断（最重要，先读再动）",
+        "请先判断用户输入的意图，并**严格按平台边界选工具**：",
         "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。",
-        "- 如果用户要求执行具体的浏览器测试操作 → 可调用 hermes_execute（同一任务只调用一次）。",
-        "- 如果是 Windows 桌面 GUI 操作（打开应用、点击、输入等）→ **直接调用 windows_***"
-            "或 desktop_*；逐步执行；每步根据工具返回再决定下一步。"
-            "禁止只调用 hermes_execute 后空等；禁止臆造「已输入/已发送」。",
-        "- 涉及手机取码、本机执行或桌面+手机联动：按「跨端工具原则」选用 desktop_* / mobile_*；"
-        "禁止臆造 sms_otp。",
+        "- 【浏览器/Web 任务】打开网站、访问 URL、搜索网页、浏览器页面操作、输入网址 → **只调用 hermes_execute**（同一任务只调一次）。"
+            "**严禁**用 windows_* / desktop_* 启动应用或按键！**严禁**在非浏览器窗口（如 Testory 软件本身、其他应用窗口）上点击！"
+            "hermes_execute 会启动真实 Edge/Chrome 浏览器并通过 CDP 操作，用户可见整个过程。",
+        "- 【Windows 桌面任务（非浏览器）】操作本机已安装应用（微信、钉钉、记事本、Word、WPS、企业微信等）→ **直接调用 windows_* 或 desktop_* 逐步执行**。"
+            "每步根据工具返回再决定下一步；禁止只调 hermes_execute 后空等；禁止臆造「已输入/已发送」。",
+        "- 涉及手机取码、本机执行或桌面+手机联动：按「跨端工具原则」选用 desktop_* / mobile_*；禁止臆造 sms_otp。",
         (
             "- 开启「执行后生成用例」时：操作成功后只需简短中文汇报；"
             "平台会从动作轨迹自动规范化生成用例，禁止 refine_test_plan，禁止手写大段用例 JSON。"
@@ -1931,24 +1970,49 @@ def _build_system_prompt(
         "## Hermes Agent 与多轮工具",
     ]
     plat = (platform_type or "web").strip().lower()
-    if plat == "auto":
+    if plat == "web":
         parts_agent = [
-            "【重要】你是可执行 Agent：闲聊直接答；真实环境用工具逐步操作。",
-            "- 闲聊、问身份/能力、要建议 → 直接自然语言回答，禁止乱调工具。",
-            "- Windows 桌面 GUI（任意本机应用）→ **必须用 windows_***："
-            "launch/focus →（新建用 Ctrl+N）→ type_text 写正文 / press；"
-            "「编辑内容为X」= type_text(X)，禁止点菜单「编辑」；勿默认点「搜索」。"
-            "每步看工具返回再继续；禁止只调一次 hermes_execute 然后声称完成。"
-            "同轮不要一次提交多个互依赖动作；若上一步失败/flow_halt，禁止继续 type/press/click。"
-            "【进度】已成功步骤禁止回退重跑；失败即停止并向用户说明。"
-            "严禁编造「无法操作某应用/只能测网页」；用 windows_* 真实执行。",
-            "- 网页 / 移动 / 跨层复杂探索 → 可一次 hermes_execute。",
+            "【浏览器/Web 场景】当用户任务涉及网页、URL、浏览器操作时：",
+            "  ✓ 首选工具：hermes_execute（启动真实 Edge/Chrome，通过 CDP 协议操作）",
+            "  ✓ 备选工具：mobile_*（如需手机获取验证码）、windows_*（如需桌面配合）",
+            "  ✗ 不推荐：windows_launch_app + press_key 模拟浏览器操作（容易发到错误窗口）",
+            "",
+            "正确流程：调用 hermes_execute，把完整任务写在 instruction 里（含 URL、要走的流程、验收点）。",
+            "平台会确保浏览器窗口启动并最大化；Hermes 将在真实浏览器中通过 DOM/CDP 自主 navigate/click/input，用户可见整个过程。",
+            "起始 URL 优先从用户消息解析（平台无独立 URL 输入框）；若消息中有网址，instruction 须明确写出。",
+            "若消息是短指令（如「打开百度搜索 AI」），instruction 中先写清楚目标：访问哪个网址、做什么操作、期望什么结果。",
+            "",
+            "多端联动：如果任务需要手机验证码，在 hermes_execute 的 instruction 中说明，",
+            "平台会自动调用 mobile_extract_otp 获取验证码并回填。",
+            (
+                "【收尾】开启生成用例：hermes_execute 完成后一两句中文汇报即可；"
+                "平台从轨迹自动生成用例，禁止 refine_test_plan / 手写 JSON。"
+                if generate_case_after_run
+                else "【收尾】未开启生成用例：hermes_execute 完成后一两句中文汇报，禁止 refine_test_plan / 用例 JSON。"
+            ),
+        ]
+    elif plat == "auto":
+        parts_agent = [
+            "【智能 Agent 模式】根据用户任务语义自行选择最合适的工具：",
+            "- 闲聊、问身份/能力、要建议 → 直接自然语言回答，不要调用工具。",
+            "- 网页/浏览器任务（含 URL、打开网站、搜索网页）→ 首选 hermes_execute（自动启动真实 Edge/Chrome），而非 windows_launch_app + press_key 模拟。",
+            "- Windows 桌面 GUI（本机应用如微信/钉钉/记事本）→ 使用 windows_* 工具。",
+            "- 手机操作（取验证码、查消息）→ 使用 mobile_* 工具。",
+            "- 多端联动任务 → 组合使用多个工具族。",
+            "",
+            "工具选择决策参考：",
+            "  ✓ hermes_execute：涉及 URL/网页时首选，自动启动浏览器并通过 CDP 操作",
+            "  ✓ windows_*：涉及本机桌面应用时使用",
+            "  ✓ mobile_*：涉及手机操作时使用",
+            "  ✗ 避免：用 windows_launch_app + press_key 模拟浏览器操作（不可靠，容易发到错误窗口）",
+            "",
+            "每步看工具返回再继续；同轮不要一次提交多个互依赖动作；若上一步失败/flow_halt，停止并说明原因。",
             (
                 "- 开启生成用例：成功后简短汇报；用例由平台从动作轨迹自动生成，禁止 refine_test_plan / 手写大段 JSON。"
                 if generate_case_after_run
                 else "- 未开启生成用例：完成后简短汇报，禁止 refine_test_plan / 用例 JSON。"
             ),
-            "- 收到 NEED_USER_ACTION / stream_empty / auth_fatal 时向用户说明；"
+            "- 收到 NEED_USER_ACTION / stream_empty / auth_fatal 时向用户说明；",
             "禁止编造未实际执行的 steps JSON。",
             "",
             "禁止在未确认用户要操作真实环境时调用自动化工具。",
@@ -2271,7 +2335,10 @@ def _inject_execution_env_verify(
 
 
 def _resolve_start_url_for_hermes(params: Optional[ChatToolLoopParams], args: Dict[str, Any]) -> str:
-    """任务起始 URL：优先用户消息原文（前端无独立 URL 框），再 plan / probe / 工具参数。"""
+    """任务起始 URL：优先用户消息原文（前端无独立 URL 框），再 plan / probe / 工具参数。
+
+    修复：不再从 instruction 中提取 URL（AI 生成的 instruction 可能包含操作指令）。
+    """
     candidates: List[str] = []
     if params:
         candidates.append(str(getattr(params, "message", None) or "").strip())
@@ -2284,7 +2351,9 @@ def _resolve_start_url_for_hermes(params: Optional[ChatToolLoopParams], args: Di
         if isinstance(ctx, dict):
             candidates.append(str(ctx.get("url") or "").strip())
     candidates.append(str((args or {}).get("start_url") or (args or {}).get("url") or "").strip())
-    candidates.append(str((args or {}).get("instruction") or "").strip())
+    # 【修复】不再从 instruction 中提取 URL - 它是 AI 生成的指令文本，不是 URL 来源
+    # candidates.append(str((args or {}).get("instruction") or "").strip())
+    
     try:
         from agent_intent import extract_task_url
     except Exception:
@@ -2428,37 +2497,58 @@ def _handle_agent_execute(
     except Exception:
         pass
 
-    # 注入平台已采集的 DOM（JS 可交互控件），减少对 snapshot/navigate 的依赖
-    dom_pack = ""
+    # 注入平台已采集的丰富页面上下文（DOM + 视觉 + JavaScript 建议）
+    rich_context = ""
     try:
-        from ai_external_browser_bridge import get_dom_context_pack, get_page_snapshot
+        from ai_external_browser_bridge import get_rich_page_context
 
-        dom_pack = (get_dom_context_pack() or "").strip()
-        if not dom_pack:
-            dom_pack = (get_page_snapshot() or "").strip()
+        rich_context = get_rich_page_context(instr)
     except Exception:
+        rich_context = ""
+
+    # 备用：如果丰富上下文获取失败，尝试获取基本 DOM 信息
+    if not rich_context:
         dom_pack = ""
+        try:
+            from ai_external_browser_bridge import get_dom_context_pack, get_page_snapshot
+
+            dom_pack = (get_dom_context_pack() or "").strip()
+            if not dom_pack:
+                dom_pack = (get_page_snapshot() or "").strip()
+        except Exception:
+            dom_pack = ""
+        rich_context = dom_pack
 
     if already_on and cur_url:
         instr = (
             f"【当前浏览器状态】URL={cur_url}，标题={cur_title}。\n"
-            f"**禁止** browser_navigate / skill_view / terminal / 新开标签（平台已导航成功，再 navigate=重复造轮子）。\n"
-            f"优先使用下方 DOM 控件清单直接 click/type；"
-            f"仅当清单不足以定位时，才允许 **一次** browser_snapshot（DOM/a11y ref，非视觉）。\n\n"
-            + (f"【页面 DOM/可交互控件】\n{dom_pack[:6000]}\n\n" if dom_pack else "")
+            f"⚠️ **重要警告**：浏览器已在目标页面，**绝对禁止**调用 browser_navigate！\n"
+            f"   - browser_navigate 会导致页面重新加载，之前的操作都会丢失\n"
+            f"   - 请直接使用下方的 DOM 信息和 JavaScript 操作页面元素\n"
+            f"   - 如需刷新页面，使用 browser_evaluate 执行 location.reload() 即可\n\n"
+            f"**禁止** skill_view / terminal / 新开标签 / 反复 browser_snapshot。\n\n"
+            + (f"{rich_context[:8000]}\n\n" if rich_context else "")
             + instr
         )
     elif start_url:
         instr = (
             f"【起始 URL】{start_url}\n"
-            f"平台通常已预导航；若指令含「当前浏览器状态」或 DOM 清单，**禁止** browser_navigate。\n"
-            f"仅当确认仍在 about:blank 时，允许 **仅一次** browser_navigate 到该地址；到达后禁止再 navigate。\n"
-            f"勿新开空白标签。优先 DOM 清单；snapshot 仅作难定位兜底。\n\n"
-            + (f"【页面 DOM/可交互控件】\n{dom_pack[:6000]}\n\n" if dom_pack else "")
+            f"平台通常已预导航到此 URL；若下方有 DOM 清单或页面状态信息，**绝对禁止** browser_navigate。\n"
+            f"⚠️ **警告**：只有在确认浏览器仍在 about:blank 空白页时，才允许 **仅一次** browser_navigate。\n"
+            f"   - 调用前请先检查下方的【页面状态】信息\n"
+            f"   - 如果 URL 已经是目标地址，直接使用 DOM/JavaScript 操作\n"
+            f"   - 到达目标页后 **立即禁止** 再次 navigate\n"
+            f"   - 禁止新开空白标签\n\n"
+            + (f"{rich_context[:8000]}\n\n" if rich_context else "")
             + instr
         )
-    elif dom_pack:
-        instr = f"【页面 DOM/可交互控件】\n{dom_pack[:6000]}\n\n" + instr
+    elif rich_context:
+        instr = (
+            f"【浏览器状态】页面已就绪，请直接使用下方的 DOM/视觉/JavaScript 信息操作。\n"
+            f"⚠️ **禁止** browser_navigate（除非确认在 about:blank）、skill_view、terminal。\n\n"
+            f"{rich_context[:8000]}\n\n"
+            + instr
+        )
 
     # 供熔断：已在目标页时，navigate 出现 1 次即中止
     meta["hermes_already_on_page"] = bool(already_on)
@@ -2552,7 +2642,7 @@ def _handle_agent_execute(
         result_text = None
         traces: List[str] = []
         tool_events: List[Dict[str, Any]] = []
-        # Hermes 同名工具死循环熔断（skill_view / terminal / browser_navigate / 连续 snapshot）
+        # Hermes 同名工具死循环熔断（skill_view / terminal / browser_navigate / 连续 snapshot / 连续 console）
         _rep_name = ""
         _rep_count = 0
         _forbid_nav = bool(meta.get("hermes_forbid_navigate"))
@@ -2567,6 +2657,7 @@ def _handle_agent_execute(
                 "browser_goto",
                 "navigate",
                 "browser_snapshot",
+                "browser_console",
             }
         )
         _NAV_NAMES = frozenset({"browser_navigate", "browser_goto", "navigate"})
@@ -2603,12 +2694,23 @@ def _handle_agent_execute(
             return None
 
         def _halt_tool_loop(looped: str) -> str:
-            err = (
-                f"智能体工具「{looped}」连续调用仍无进展，已中止（非用户取消）。"
-                "网页任务应优先用平台注入的 DOM 控件清单 click/type；"
-                "browser_snapshot 仅难定位时用一次（DOM ref，非视觉）；"
-                "禁止 skill_view / 反复 browser_navigate。"
-            )
+            is_snapshot_loop = looped == "browser_snapshot"
+            is_console_loop = looped == "browser_console"
+            if is_snapshot_loop:
+                err = (
+                    "页面快照获取失败，已自动停止该操作。\n"
+                    "建议刷新页面后重试，或改用其他方式操作。"
+                )
+            elif is_console_loop:
+                err = (
+                    "控制台日志读取失败，已自动停止该操作。\n"
+                    "建议改用 browser_snapshot 获取页面结构，再用 browser_click/browser_type 操作元素。"
+                )
+            else:
+                err = (
+                    f"工具「{looped}」连续调用失败，已自动停止。\n"
+                    "建议换一种方式操作。"
+                )
             meta["hermes_tool_loop_blocked"] = True
             meta["hermes_tool_loop_error"] = err
             meta["hermes_stream_blocked"] = True
@@ -2622,7 +2724,7 @@ def _handle_agent_execute(
                     "error": err,
                     "tool_loop": True,
                     "loop_tool": looped,
-                    "hint": "请用中文向用户说明死循环已停止；禁止再次 hermes_execute；禁止说用户取消。",
+                    "hint": "请用中文简要说明情况，不要展示代码或技术细节。",
                 },
                 ensure_ascii=False,
             )
@@ -2786,13 +2888,27 @@ def _handle_agent_execute(
             user_msg = (getattr(params, "message", None) or "").strip()
         windows_enabled = False
         if params is not None:
-            if getattr(params, "allow_desktop_windows_tools", None) is True:
-                windows_enabled = True
-            elif getattr(params, "allow_desktop_windows_tools", None) is None:
-                windows_enabled = _should_enable_desktop_windows_tools(
-                    getattr(params, "platform_type", "") or "auto",
-                    user_msg,
-                )
+            # 【关键保护】浏览器任务：即使 Hermes 鉴权失败也不回退到桌面工具
+            try:
+                from agent_intent import message_needs_browser
+                _plat = (getattr(params, "platform_type", "") or "auto").strip().lower()
+                if _plat == "web" or (user_msg and message_needs_browser(user_msg)):
+                    windows_enabled = False
+                elif getattr(params, "allow_desktop_windows_tools", None) is True:
+                    windows_enabled = True
+                elif getattr(params, "allow_desktop_windows_tools", None) is None:
+                    windows_enabled = _should_enable_desktop_windows_tools(
+                        getattr(params, "platform_type", "") or "auto",
+                        user_msg,
+                    )
+            except Exception:
+                if getattr(params, "allow_desktop_windows_tools", None) is True:
+                    windows_enabled = True
+                elif getattr(params, "allow_desktop_windows_tools", None) is None:
+                    windows_enabled = _should_enable_desktop_windows_tools(
+                        getattr(params, "platform_type", "") or "auto",
+                        user_msg,
+                    )
         if windows_enabled:
             try:
                 parsed = json.loads(result_text)
@@ -2998,12 +3114,97 @@ def run_ai_chat_with_tools(
         except Exception:
             ic_note = str(params.interaction_context)[:2000]
 
+    # ===== 智能任务分析：为 AI 提供语义引导，而非强制路由 =====
+    # AI 具备强大的语义理解能力，只需给予正确的上下文和示例
+    _msg = (params.message or "").strip()
+    _task_decision_prefix = ""
+    try:
+        from agent_intent import _score_surfaces, _first_url
+        _scores = _score_surfaces(_msg, ui_platform=plat)
+        
+        # 检测关键信号
+        _has_url = bool(_first_url(_msg))
+        _has_web_keywords = any(kw in _msg.lower() for kw in ("浏览器", "网页", "网站", "url", "http", ".com", ".cn", "访问", "打开"))
+        _has_mobile_otp = any(kw in _msg for kw in ("验证码", "短信", "短信验证码", "sms", "otp", "手机号"))
+        _is_multi_device = _has_url and _has_mobile_otp
+        
+        _lines: List[str] = []
+        _lines.append("\n\n## === 任务语义分析与工具选择指南 ===")
+        
+        # 平台状态
+        _connected = connected_hands or {}
+        _parts = []
+        if allow_agent:
+            _parts.append("hermes_execute(浏览器)")
+        if _connected.get("desktop"):
+            _parts.append("windows_*(桌面)")
+        if _connected.get("phone"):
+            _parts.append("mobile_*(手机)")
+        _lines.append(f"当前可用工具族：{'、'.join(_parts) if _parts else '无'}")
+        
+        # 核心引导
+        if _has_url or _has_web_keywords:
+            _lines.append("")
+            _lines.append("📌 **检测到 URL 或网页关键词 → 这是一个浏览器/Web 任务**")
+            _lines.append("   你应该使用 hermes_execute 工具，它会：")
+            _lines.append("   1. 自动启动用户本地的 Edge/Chrome 浏览器")
+            _lines.append("   2. 通过 CDP 协议在真实浏览器中操作")
+            _lines.append("   3. 用户可以看到整个浏览器操作过程")
+            _lines.append("")
+            _lines.append("   ⚠️ 重要提示：")
+            _lines.append("   - 不要使用 windows_launch_app + press_key 来模拟浏览器操作")
+            _lines.append("   - 这种方式容易把按键发到 Testory 软件或其他错误窗口")
+            _lines.append("   - 直接调用 hermes_execute，把完整流程写在 instruction 参数中")
+            
+            if _is_multi_device:
+                _lines.append("")
+                _lines.append("📱 **多端联动场景检测：需要手机验证码**")
+                _lines.append("   对于「网页 + 手机验证码」的组合任务：")
+                _lines.append("   1. 先调用 hermes_execute 打开网页、填写表单")
+                _lines.append("   2. 在 instruction 中注明「需要获取手机短信验证码」")
+                _lines.append("   3. 当网页需要验证码时，平台会自动调用 mobile_extract_otp")
+                _lines.append("   4. 获取验证码后自动回填到网页表单")
+                _lines.append("   5. 完成登录流程")
+        elif _has_mobile_otp and not _has_url:
+            _lines.append("")
+            _lines.append("📱 **检测到手机验证码需求**")
+            _lines.append("   如果需要从手机获取验证码：")
+            _lines.append("   - 使用 mobile_extract_otp 工具")
+            _lines.append("   - 获取的验证码会存入 {{sms_otp}} 变量")
+            _lines.append("   - 如果后续需要在桌面应用中使用，用 windows_type_text 输入")
+        else:
+            _lines.append("")
+            _lines.append("💻 **桌面 GUI 任务（无 URL 检测）**")
+            _lines.append("   如果是操作本地应用（如微信、钉钉、记事本等）：")
+            _lines.append("   1. 使用 windows_focus_app 或 windows_launch_app 启动/聚焦目标应用")
+            _lines.append("   2. 使用 windows_click_element / windows_type_text / windows_press_key 进行操作")
+            _lines.append("   3. 如果涉及手机配合，同时使用 mobile_* 工具")
+        
+        _lines.append("")
+        _lines.append("🔧 **工具选择原则：**")
+        _lines.append("   - 有 URL/网页 → hermes_execute（首选）")
+        _lines.append("   - 有手机操作 → mobile_*")
+        _lines.append("   - 有桌面应用操作 → windows_*")
+        _lines.append("   - 多端联动 → 组合使用多个工具族")
+        _lines.append("   - 不确定时 → 先用 hermes_execute 尝试（如果有 URL）")
+        _lines.append("")
+        _lines.append("## ============================================\n")
+        
+        _task_decision_prefix = "\n".join(_lines)
+        uat_logger.info(
+            "task_semantic_analysis: plat=%s has_url=%s has_mobile_otp=%s multi_device=%s scores=%s",
+            plat, _has_url, _has_mobile_otp, _is_multi_device, _scores,
+        )
+    except Exception as ex:
+        uat_logger.warning("build semantic analysis failed: %s", ex)
+        _task_decision_prefix = ""
+
     system_prompt = _build_system_prompt(
         project_name=params.project_name,
         current_plan=params.current_plan if isinstance(params.current_plan, dict) else {},
         page_snapshot=params.page_snapshot or "",
         dom_pack=params.dom_context_pack or "",
-        memory_context=params.memory_context or "",
+        memory_context=(params.memory_context or "") + _task_decision_prefix,
         interaction_note=ic_note,
         test_scope=(params.test_scope or "").strip() if params.test_scope else "",
         embedded_session_id=embed_sid,
@@ -3015,7 +3216,11 @@ def run_ai_chat_with_tools(
     messages.extend(
         _history_to_messages(params.history, local_ai_service._sanitize_chat_history_for_prompt)
     )
-    messages.append({"role": "user", "content": params.message})
+    # 在 user 消息前附加任务决策上下文，确保 LLM 读完任务决策再读用户任务
+    _user_with_ctx = params.message
+    if _task_decision_prefix:
+        _user_with_ctx = _task_decision_prefix + "\n\n【用户任务】\n" + (_msg or "")
+    messages.append({"role": "user", "content": _user_with_ctx})
 
     last_plan: Dict[str, Any] = dict(params.current_plan) if isinstance(params.current_plan, dict) else {}
     meta: Dict[str, Any] = _prepare_unified_agent_meta(params, plat)

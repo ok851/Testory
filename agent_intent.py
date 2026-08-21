@@ -37,12 +37,28 @@ _HOSTPORT_RE = re.compile(
 
 
 def _sanitize_extracted_url(raw: str) -> str:
+    """清理从文本中提取的 URL，移除中文、空格和其他非法字符。
+    
+    注意：此函数只应用于已提取的 URL 片段，不适用于整个输入文本。
+    """
     u = (raw or "").strip()
     if not u:
         return ""
     # 中文冒号、全角斜杠等
     u = u.replace("：", ":").replace("／", "/").replace("．", ".")
+    
+    # 清理 URL 中的中文字符（只对已提取的 URL 片段执行）
+    # 找到第一个中文字符的位置，截断 URL
+    _CHINESE_RE = re.compile(r'[\u4e00-\u9fff]')
+    m = _CHINESE_RE.search(u)
+    if m:
+        u = u[:m.start()].rstrip()
+    
+    # 清理 URL 尾部的非法字符
     u = u.rstrip(").,;]}、，。；》〉\"'")
+    # 清理尾部的空格和制表符
+    u = u.rstrip()
+    
     return u
 
 
@@ -56,16 +72,21 @@ def _ensure_http_scheme(url: str) -> str:
 
 
 def _first_url(text: str) -> str:
-    """从文本取首个 http(s) URL（兼容中文标点）。"""
-    t = _sanitize_extracted_url(text or "")
+    """从文本取首个 http(s) URL（兼容中文标点）。
+    
+    修复：先在整个文本中匹配 URL，再对提取的 URL 片段进行清理。
+    避免对整个文本进行中文截断导致 URL 丢失。
+    """
+    t = (text or "").strip()
     if not t:
         return ""
-    # 先把 http：// 归一
+    # 先把 http：// 归一（仅替换标点，不截断中文）
     t_norm = re.sub(r"https?\s*：\s*//", lambda m: m.group(0).replace("：", ":").replace(" ", ""), t, flags=re.I)
     t_norm = t_norm.replace("http：//", "http://").replace("https：//", "https://")
     m = _URL_RE.search(t_norm)
     if not m:
         return ""
+    # 对提取的 URL 片段进行清理（移除中文等非法字符）
     return _sanitize_extracted_url(m.group(0))
 
 
@@ -274,9 +295,8 @@ _DESKTOP_APP_HINTS = (
     "企微",
     "vscode",
     "visual studio",
-    "chrome",
-    "edge",
-    "firefox",
+    # 注意：chrome / edge / firefox 属于浏览器，归类为 Web 任务，不得放在桌面 App 列表！
+    # 否则会造成评分冲突："打开 Edge" → 同时命中 desktop+=5 和 web+=3
     "wps",
     "截图",
     "任务管理器",
@@ -557,6 +577,21 @@ def resolve_task_route(
     desk_ops = desk_s > 0 or any(
         k in t for k in ("登录", "登陆", "注册", "填写", "回填", "输入", "打开", "启动", "提交")
     )
+    # 【修复】浏览器任务优先：如果 web_score 明显高于 desktop，即使有 mobile_await 也走 web
+    if web_s >= 3 and web_s > desk_s and needs_mobile_await:
+        return TaskRoute(
+            mode="automation",
+            platform="web",
+            needs_automation=True,
+            needs_browser=True,
+            needs_desktop_tools=False,
+            ui_platform=ui,
+            reason="cross_end_web_priority",
+            web_score=web_s,
+            desktop_score=desk_s,
+            android_score=andr_s,
+            needs_mobile_await=True,
+        )
     if needs_mobile_await and (desk_ops or cross_hint or desk_s > 0 or "桌面" in t):
         return TaskRoute(
             mode="automation",
