@@ -1,0 +1,118 @@
+{
+  "audit_id": "cea-e2868502ea34",
+  "created_at": "2026-08-24T07:27:03.347204+00:00",
+  "status": "failed",
+  "duration": 0.200945,
+  "error": "HITL_TIMEOUT | HITL 超时（timeout_s=0.2）",
+  "flow_name": "lock test",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"skip-1\", \"scenario\": \"lock test\", \"test_type\": \"cross_end\", \"user_id\": \"\", \"project_id\": null, \"trigger_source\": \"ui\", \"agent_run_id\": \"\", \"error_code\": \"HITL_TIMEOUT\", \"gate_passed\": false, \"success\": false, \"lock\": \"skipped\", \"assertion_passed\": 0, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"_hitl_gate_id\": \"cross_end:skip-1:h1\", \"_hitl_prompt\": \"x\"}, \"stage_count\": 1, \"hitl\": [{\"stage_id\": \"h1\", \"gate_id\": \"cross_end:skip-1:h1\", \"outcome\": \"timed_out\", \"events\": 3, \"ok_assert\": false}], \"risk\": [{\"stage_id\": \"h1\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": false}]}",
+  "expected_text": "{\"plan_id\": \"skip-1\", \"project_id\": null, \"agent_run_id\": \"\", \"audit_id\": \"cea-e2868502ea34\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": false,
+      "error": "HITL 超时（timeout_s=0.2）",
+      "elapsed_ms": 201.0,
+      "stage_id": "h1",
+      "layer": "hitl",
+      "hitl_gate_id": "cross_end:skip-1:h1",
+      "hitl_prompt": "x",
+      "error_code": "HITL_TIMEOUT",
+      "hitl_events": [
+        {
+          "event_id": "hitl-36137b617b",
+          "kind": "opened",
+          "gate_id": "cross_end:skip-1:h1",
+          "reason": "x",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-08-24T07:27:03.141993+00:00",
+          "ts": 1787556423.1419935,
+          "detail": {}
+        },
+        {
+          "event_id": "hitl-1f825075b8",
+          "kind": "wait_started",
+          "gate_id": "cross_end:skip-1:h1",
+          "reason": "x",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-08-24T07:27:03.141993+00:00",
+          "ts": 1787556423.1419935,
+          "detail": {
+            "timeout_s": 0.2
+          }
+        },
+        {
+          "event_id": "hitl-b0675cec12",
+          "kind": "wait_timed_out",
+          "gate_id": "cross_end:skip-1:h1",
+          "reason": "x",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-08-24T07:27:03.342938+00:00",
+          "ts": 1787556423.3429384,
+          "detail": {
+            "timeout_s": 0.2
+          }
+        }
+      ],
+      "hitl_outcome": "timed_out",
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "user_hint": "人工确认超时：请在时限内完成验证码/登录并继续；超时按失败计入历史与 Trace。",
+      "error_message": "HITL 超时（timeout_s=0.2）",
+      "extracted": {},
+      "warnings": [],
+      "evidence": [],
+      "schema": "testory.stage_result/v1"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "skip-1",
+    "scenario": "lock test",
+    "test_type": "cross_end",
+    "user_id": "",
+    "project_id": null,
+    "trigger_source": "ui",
+    "agent_run_id": "",
+    "error_code": "HITL_TIMEOUT",
+    "gate_passed": false,
+    "success": false,
+    "lock": "skipped",
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "_hitl_gate_id": "cross_end:skip-1:h1",
+      "_hitl_prompt": "x"
+    },
+    "stage_count": 1,
+    "hitl": [
+      {
+        "stage_id": "h1",
+        "gate_id": "cross_end:skip-1:h1",
+        "outcome": "timed_out",
+        "events": 3,
+        "ok_assert": false
+      }
+    ],
+    "risk": [
+      {
+        "stage_id": "h1",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": false
+      }
+    ]
+  }
+}

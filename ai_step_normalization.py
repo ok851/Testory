@@ -246,23 +246,35 @@ def normalize_ai_step(step: dict) -> dict:
     layer = _str(step.get("automation_layer")).lower() or "web"
     if layer not in ("web", "desktop", "android", "cross_end"):
         layer = "web"
-    # 跨端层：extract_otp / api_call 直接放行，desktop_type_text 已在 to_case_steps 转为 input
+    # 跨端层：extract_otp / api_call 直接放行
     cross_end_actions = {"extract_otp", "api_call"}
+    # 桌面步骤类型：覆盖所有 windows_* 工具
     desktop_actions = {
         "launch_app", "attach_window", "click", "input", "wait", "verify",
         "extract_text", "assert", "hotkey", "screenshot", "double_click", "right_click",
+        "focus_app", "press_key", "scroll", "get_screen_text",
     }
     desktop_actions |= cross_end_actions  # 桌面用例可含跨端步骤
+    # 移动端步骤类型：覆盖所有 mobile_* 工具 + scrcpy_* 视觉工具
     android_actions = {
         "open_app", "close_app", "tap", "input_text", "swipe", "wait",
         "assert_text", "assert_element", "screenshot", "click", "input", "verify", "assert",
         "ai_tap", "ai_input", "assert_vision", "wait_vision", "extract_vision",
+        "scroll", "extract_otp", "extract_text", "press_key", "back", "home",
     }
+    # scrcpy 视觉/控制步骤类型
+    scrcpy_actions = {
+        "capture_frame", "ocr_device", "navigate_to_messages",
+        "scrcpy_tap", "scrcpy_swipe", "scrcpy_type_text",
+    }
+    android_actions |= scrcpy_actions
     android_actions |= cross_end_actions  # 移动端用例可含跨端步骤
+    # Web 浏览器步骤类型：覆盖所有 browser_* 工具
     allowed_actions = {
         "navigate", "click", "input", "wait", "verify", "extract_text", "assert",
         "ai_tap", "ai_input", "ai_scroll",
         "assert_vision", "wait_vision", "extract_vision",
+        "snapshot", "scroll", "press_key", "type", "fill",
     }
     allowed_actions |= cross_end_actions  # web 用例也可含 api_call
     if layer == "desktop":
@@ -270,7 +282,7 @@ def normalize_ai_step(step: dict) -> dict:
     elif layer == "android":
         allowed_actions = android_actions
     elif layer == "cross_end":
-        allowed_actions = cross_end_actions | {"input", "wait"}
+        allowed_actions = cross_end_actions | {"input", "wait", "tap", "click"}
     action = _str(step.get("action")).lower()
     if layer == "android":
         alias = {"click": "tap", "input": "input_text", "fill": "input_text", "verify": "assert_element", "assert": "assert_text"}

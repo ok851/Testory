@@ -1150,7 +1150,7 @@ def _mobile_halt_user_facing(tool_name: str, result_text: str) -> str:
 
 
 def _record_mobile_tool_outcome(meta: Dict[str, Any], name: str, result_text: str) -> None:
-    """mobile_* 失败计入次数；满 2 次则停（允许一轮修正）。"""
+    """mobile_* 失败计入次数；满 2 次则停（成功后解除停止状态）。"""
     if not (name or "").startswith("mobile_"):
         return
     ok = True
@@ -1164,6 +1164,13 @@ def _record_mobile_tool_outcome(meta: Dict[str, Any], name: str, result_text: st
         ok = '"success": false' not in low and '"ok": false' not in low
     if ok:
         meta["mobile_fail_streak"] = 0
+        # 关键：之前因连续失败触发的 halted 状态，在成功后解除
+        # （例：mobile_extract_otp 先因 APK 心跳失败 2 次，APK 重连后第 3 次成功）
+        if meta.get("mobile_flow_halted"):
+            meta["mobile_flow_halted"] = False
+            meta.pop("halt_reply", None)
+            meta.pop("mobile_last_failed_tool", None)
+            meta.pop("mobile_last_error", None)
         return
     streak = int(meta.get("mobile_fail_streak") or 0) + 1
     meta["mobile_fail_streak"] = streak
@@ -1952,7 +1959,8 @@ def _build_system_prompt(
         "## 意图判断（最重要，先读再动）",
         "请先判断用户输入的意图，并**严格按平台边界选工具**：",
         "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。",
-        "- 【浏览器/Web 任务】打开网站、访问 URL、搜索网页、浏览器页面操作、输入网址 → **只调用 hermes_execute**（同一任务只调一次）。"
+        "- 【浏览器/Web 任务】打开网站、访问 URL、搜索网页、浏览器页面操作、输入网址 → **只调用 hermes_execute**。"
+            "一般任务只调一次；只有「网页+手机短信验证码」多端联动时，才按下方说明把 hermes_execute 分两段调用（点击获取验证码前、回填验证码后各一次）。"
             "**严禁**用 windows_* / desktop_* 启动应用或按键！**严禁**在非浏览器窗口（如 Testory 软件本身、其他应用窗口）上点击！"
             "hermes_execute 会启动真实 Edge/Chrome 浏览器并通过 CDP 操作，用户可见整个过程。",
         "- 【Windows 桌面任务（非浏览器）】操作本机已安装应用（微信、钉钉、记事本、Word、WPS、企业微信等）→ **直接调用 windows_* 或 desktop_* 逐步执行**。"
@@ -1982,8 +1990,11 @@ def _build_system_prompt(
             "起始 URL 优先从用户消息解析（平台无独立 URL 输入框）；若消息中有网址，instruction 须明确写出。",
             "若消息是短指令（如「打开百度搜索 AI」），instruction 中先写清楚目标：访问哪个网址、做什么操作、期望什么结果。",
             "",
-            "多端联动：如果任务需要手机验证码，在 hermes_execute 的 instruction 中说明，",
-            "平台会自动调用 mobile_extract_otp 获取验证码并回填。",
+            "多端联动（网页 + 手机短信验证码）必须分三段执行，禁止在一次 hermes_execute 里空等短信：",
+            "  ① 第 1 次 hermes_execute：打开网页 → 填写手机号 → 点击「获取验证码」→ 停在验证码输入框，立即结束（不要等待短信、不要提交）。",
+            "  ② 调用 mobile_extract_otp 等待手机短信，拿到的验证码会自动存入 {{sms_otp}} 变量。",
+            "  ③ 第 2 次 hermes_execute：把验证码 {{sms_otp}} 填入验证码输入框并点击提交/登录。",
+            "  切分点以「点击获取验证码」为界；禁止在 hermes_execute 内部空等短信，禁止编造验证码。",
             (
                 "【收尾】开启生成用例：hermes_execute 完成后一两句中文汇报即可；"
                 "平台从轨迹自动生成用例，禁止 refine_test_plan / 手写 JSON。"
@@ -2413,8 +2424,11 @@ def _handle_agent_execute(
             {"ok": False, "error": _abort_user_message(abort_event, params), "aborted": True},
             ensure_ascii=False,
         )
-    instr = _compose_agent_instruction(args)
-    sid = (args.get("session_id") or "").strip()
+    _cross_args = _resolve_cross_end_vars(dict(args or {}), meta.get("cross_end_vars"))
+    if not isinstance(_cross_args, dict):
+        _cross_args = dict(args or {})
+    instr = _compose_agent_instruction(_cross_args)
+    sid = str((_cross_args.get("session_id") or args.get("session_id") or "")).strip()
     if params and getattr(params, "task_session_id", None):
         sid = sid or str(params.task_session_id).strip()
     if not instr.strip():
@@ -2425,6 +2439,30 @@ def _handle_agent_execute(
         )
 
     start_url = _resolve_start_url_for_hermes(params, args)
+    # ── 永久锁定：只要之前任何一轮成功执行过浏览器操作，就禁止再次 navigate ──
+    # 解决：mobile_extract_otp 等待短信期间 CDP 临时波动 → cur_url 空 → already_on=False
+    # → 下一轮重新 browser_navigate → 表单清空的严重缺陷
+    _permanent_forbid = False
+    _permanent_already_on_marker = False
+    try:
+        from agent_task_context import get_task_context
+        _ctx_for_perm = get_task_context(getattr(params, "agent_session_id", None)) if params else None
+        if _ctx_for_perm:
+            if _ctx_for_perm.vars.get("_permanent_forbid_navigate"):
+                _permanent_forbid = True
+            # 历史中已有浏览器/桌面步骤，说明之前已经在页面上做过操作 → 禁止 navigate
+            if any(
+                str(_r.get("action_type") or "").startswith(("navigate", "goto", "click", "type", "input", "snapshot", "scroll", "tap", "open_app"))
+                or str(_r.get("action_type") or "").startswith(("browser_", "windows_"))
+                for _r in (getattr(_ctx_for_perm, "platform_actions_cache", None) or [])
+            ):
+                _permanent_already_on_marker = True
+    except Exception:
+        pass
+    if params and getattr(params, "meta", None) and isinstance(params.meta, dict):
+        if params.meta.get("_permanent_forbid_navigate"):
+            _permanent_forbid = True
+        params.meta["_permanent_forbid_navigate"] = _permanent_forbid or params.meta.get("_permanent_forbid_navigate", False)
     cur_url = ""
     cur_title = ""
     try:
@@ -2436,39 +2474,45 @@ def _handle_agent_execute(
     # 桥接页状态为空时，从 CDP /json/list 取最佳 http 页，避免误判「未到达」而反复 navigate
     # 优先匹配 start_url 所在 host 页面，其次取第一个非空白页
     if not cur_url or cur_url.lower() in ("about:blank", "chrome://newtab/", "edge://newtab/"):
-        try:
-            from web_capture.cdp_browser import fetch_cdp_pages, _snap as _cdp_snap, _is_blank_page_url
-            from urllib.parse import urlparse as _urlparse
-
-            port = int((_cdp_snap() or {}).get("debug_port") or 0)
-            _pages = fetch_cdp_pages(port)
-            _best_any = None
-            _best_match = None
-            _target_netloc = ""
+        # ── 修复：永久锁定时即使拿不到 URL，也不认为是空白页（避免误 navigate） ──
+        if _permanent_forbid or _permanent_already_on_marker:
             if start_url:
-                try:
-                    _target_netloc = (_urlparse(start_url).netloc or "").lower()
-                except Exception:
-                    pass
-            for item in _pages:
-                u = str(item.get("url") or "").strip()
-                if not u or _is_blank_page_url(u) or not u.lower().startswith(("http://", "https://")):
-                    continue
-                if _best_any is None:
-                    _best_any = item
-                if _target_netloc:
+                cur_url = start_url
+                cur_title = cur_title or "（使用历史已在目标页标记，已跳过 CDP 临时空白误判）"
+        else:
+            try:
+                from web_capture.cdp_browser import fetch_cdp_pages, _snap as _cdp_snap, _is_blank_page_url
+                from urllib.parse import urlparse as _urlparse
+
+                port = int((_cdp_snap() or {}).get("debug_port") or 0)
+                _pages = fetch_cdp_pages(port)
+                _best_any = None
+                _best_match = None
+                _target_netloc = ""
+                if start_url:
                     try:
-                        if (_urlparse(u).netloc or "").lower() == _target_netloc:
-                            _best_match = item
-                            break
+                        _target_netloc = (_urlparse(start_url).netloc or "").lower()
                     except Exception:
                         pass
-            _chosen = _best_match or _best_any
-            if _chosen:
-                cur_url = str(_chosen.get("url") or "").strip()
-                cur_title = str(_chosen.get("title") or cur_title or "").strip()
-        except Exception:
-            pass
+                for item in _pages:
+                    u = str(item.get("url") or "").strip()
+                    if not u or _is_blank_page_url(u) or not u.lower().startswith(("http://", "https://")):
+                        continue
+                    if _best_any is None:
+                        _best_any = item
+                    if _target_netloc:
+                        try:
+                            if (_urlparse(u).netloc or "").lower() == _target_netloc:
+                                _best_match = item
+                                break
+                        except Exception:
+                            pass
+                _chosen = _best_match or _best_any
+                if _chosen:
+                    cur_url = str(_chosen.get("url") or "").strip()
+                    cur_title = str(_chosen.get("title") or cur_title or "").strip()
+            except Exception:
+                pass
     def _url_looks_on_target(current: str, target: str) -> bool:
         if not current or not target:
             return False
@@ -2488,71 +2532,102 @@ def _handle_agent_execute(
     already_on = _url_looks_on_target(cur_url, start_url) if start_url else (
         bool(cur_url) and cur_url not in ("about:blank", "chrome://newtab/", "edge://newtab/")
     )
-    # 平台侧再清一次空白标签，避免 Hermes navigate 前已有多余 NTP
-    try:
-        from web_capture.cdp_browser import close_blank_cdp_targets, _snap as _cdp_snap
-
-        port = int((_cdp_snap() or {}).get("debug_port") or 0)
-        close_blank_cdp_targets(port, keep_url_substr=cur_url or start_url or "")
-    except Exception:
-        pass
-
-    # 注入平台已采集的丰富页面上下文（DOM + 视觉 + JavaScript 建议）
-    rich_context = ""
-    try:
-        from ai_external_browser_bridge import get_rich_page_context
-
-        rich_context = get_rich_page_context(instr)
-    except Exception:
-        rich_context = ""
-
-    # 备用：如果丰富上下文获取失败，尝试获取基本 DOM 信息
-    if not rich_context:
-        dom_pack = ""
+    # ── 修复：永久标记覆盖（跨端等待期间 CDP 波动时，不丢失已在目标页状态） ──
+    if not already_on and (_permanent_forbid or _permanent_already_on_marker) and bool(cur_url or start_url):
+        already_on = True
+    # 平台侧清理空白标签：仅首次调用时执行（已在目标页时跳过，避免重复 CDP 开销）
+    if not meta.get("_cleared_blank_tabs"):
+        meta["_cleared_blank_tabs"] = True
         try:
-            from ai_external_browser_bridge import get_dom_context_pack, get_page_snapshot
+            from web_capture.cdp_browser import close_blank_cdp_targets, _snap as _cdp_snap
 
-            dom_pack = (get_dom_context_pack() or "").strip()
-            if not dom_pack:
-                dom_pack = (get_page_snapshot() or "").strip()
+            port = int((_cdp_snap() or {}).get("debug_port") or 0)
+            close_blank_cdp_targets(port, keep_url_substr=cur_url or start_url or "")
         except Exception:
-            dom_pack = ""
-        rich_context = dom_pack
+            pass
 
+    # 页面上下文采集：已有缓存时直接复用（避免每次重新执行大量 JS 评估）
+    # 仅在新工具调用/未导航到新页面前使用缓存上下文
+    _context_cache_key = "hermes_context_cached"
+    rich_context = meta.get(_context_cache_key) or ""
+    if not rich_context:
+        try:
+            from ai_external_browser_bridge import get_rich_page_context
+
+            rich_context = get_rich_page_context(instr)
+            if rich_context:
+                meta[_context_cache_key] = rich_context[:8000]
+        except Exception:
+            rich_context = ""
+        if not rich_context:
+            try:
+                from ai_external_browser_bridge import get_dom_context_pack, get_page_snapshot
+
+                rich_context = (get_dom_context_pack() or "").strip()
+                if not rich_context:
+                    rich_context = (get_page_snapshot() or "").strip()
+                if rich_context:
+                    meta[_context_cache_key] = rich_context[:8000]
+            except Exception:
+                rich_context = ""
+
+    # 会话初始化逃生通道：部分 Hermes 构建要求先 browser_navigate 才能使用其他
+    # browser_* 工具；若无此例外，「禁止 navigate」会让 snapshot/click 全部报错，
+    # 智能体只能反复 snapshot 空转（死循环根因之一）
+    _nav_escape_note = (
+        "【唯一例外】若 browser_snapshot/browser_click 等报错提示需要先调用 "
+        "browser_navigate（会话未初始化），允许用**当前页面 URL** 调用一次 "
+        "browser_navigate 完成初始化，随后立即继续快照/操作；其余任何情况禁止 navigate。\n"
+    )
     if already_on and cur_url:
         instr = (
             f"【当前浏览器状态】URL={cur_url}，标题={cur_title}。\n"
-            f"⚠️ **重要警告**：浏览器已在目标页面，**绝对禁止**调用 browser_navigate！\n"
+            f"⚠️ **重要警告**：浏览器已在目标页面，**禁止**再调用 browser_navigate 重新导航！\n"
             f"   - browser_navigate 会导致页面重新加载，之前的操作都会丢失\n"
             f"   - 请直接使用下方的 DOM 信息和 JavaScript 操作页面元素\n"
-            f"   - 如需刷新页面，使用 browser_evaluate 执行 location.reload() 即可\n\n"
-            f"**禁止** skill_view / terminal / 新开标签 / 反复 browser_snapshot。\n\n"
+            f"   - 如需刷新页面，使用 browser_console(expression=\"location.reload()\") 即可\n\n"
+            f"**禁止** skill_view / terminal / 新开标签 / 连续反复 browser_snapshot（全程最多 2 次）。\n"
+            + _nav_escape_note + "\n"
             + (f"{rich_context[:8000]}\n\n" if rich_context else "")
             + instr
         )
     elif start_url:
         instr = (
             f"【起始 URL】{start_url}\n"
-            f"平台通常已预导航到此 URL；若下方有 DOM 清单或页面状态信息，**绝对禁止** browser_navigate。\n"
-            f"⚠️ **警告**：只有在确认浏览器仍在 about:blank 空白页时，才允许 **仅一次** browser_navigate。\n"
+            f"平台通常已预导航到此 URL；若下方有 DOM 清单或页面状态信息，**禁止**再 browser_navigate。\n"
+            f"⚠️ **警告**：只有在确认浏览器仍在 about:blank 空白页，或 browser 工具报错提示"
+            f"需要先 browser_navigate（会话未初始化）时，才允许 **仅一次** browser_navigate。\n"
             f"   - 调用前请先检查下方的【页面状态】信息\n"
             f"   - 如果 URL 已经是目标地址，直接使用 DOM/JavaScript 操作\n"
             f"   - 到达目标页后 **立即禁止** 再次 navigate\n"
-            f"   - 禁止新开空白标签\n\n"
+            f"   - 禁止新开空白标签；禁止连续反复 browser_snapshot（全程最多 2 次）\n\n"
             + (f"{rich_context[:8000]}\n\n" if rich_context else "")
             + instr
         )
     elif rich_context:
         instr = (
             f"【浏览器状态】页面已就绪，请直接使用下方的 DOM/视觉/JavaScript 信息操作。\n"
-            f"⚠️ **禁止** browser_navigate（除非确认在 about:blank）、skill_view、terminal。\n\n"
+            f"⚠️ **禁止** browser_navigate（除非确认在 about:blank）、skill_view、terminal；"
+            f"禁止连续反复 browser_snapshot（全程最多 2 次）。\n"
+            + _nav_escape_note + "\n"
             f"{rich_context[:8000]}\n\n"
             + instr
         )
 
     # 供熔断：已在目标页时，navigate 出现 1 次即中止
     meta["hermes_already_on_page"] = bool(already_on)
-    meta["hermes_forbid_navigate"] = bool(already_on)
+    meta["hermes_forbid_navigate"] = bool(already_on or _permanent_forbid or _permanent_already_on_marker)
+    # ── 永久锁定：本轮已判定 forbid_navigate=True → 写入 task_ctx.vars 永久标记跨轮传递 ──
+    if meta["hermes_forbid_navigate"]:
+        try:
+            from agent_task_context import get_task_context
+            _ctx_perm_write = get_task_context(getattr(params, "agent_session_id", None)) if params else None
+            if _ctx_perm_write:
+                _ctx_perm_write.vars["_permanent_forbid_navigate"] = True
+            if params and getattr(params, "meta", None) and isinstance(params.meta, dict):
+                params.meta["_permanent_forbid_navigate"] = True
+        except Exception:
+            pass
 
     plat = (getattr(params, "platform_type", None) or "auto") if params else "auto"
     vision_summary = ""
@@ -2642,11 +2717,17 @@ def _handle_agent_execute(
         result_text = None
         traces: List[str] = []
         tool_events: List[Dict[str, Any]] = []
-        # Hermes 同名工具死循环熔断（skill_view / terminal / browser_navigate / 连续 snapshot / 连续 console）
+        # Hermes 工具死循环熔断：
+        # 1) 同名连续失败：skill_view / terminal / browser_navigate / 连续 snapshot
+        # 2) 只读交替循环：最近 N 次全是 snapshot/scroll 等探索工具、无任何操作类动作
         _rep_name = ""
         _rep_count = 0
+        _recent_tools: List[str] = []
         _forbid_nav = bool(meta.get("hermes_forbid_navigate"))
-        _REP_LIMIT = 2
+        # 普通工具：允许连续 3 次失败（给一次重试 + 一次换方案的空间）
+        _REP_LIMIT = 3
+        # 已在目标页：navigate 通常是 Hermes 内部初始化/跳转，允许 3 次再熔断
+        _NAV_FORBID_LIMIT = 3
         _REP_WATCH = frozenset(
             {
                 "terminal",
@@ -2657,12 +2738,38 @@ def _handle_agent_execute(
                 "browser_goto",
                 "navigate",
                 "browser_snapshot",
-                "browser_console",
             }
         )
         _NAV_NAMES = frozenset({"browser_navigate", "browser_goto", "navigate"})
+        # 只读探索工具：连续只调这些而没有任何操作类工具 = 死循环
+        # browser_console / browser_back / browser_press 等可改变页面状态，不算只读
+        _READONLY_BROWSER_TOOLS = frozenset(
+            {"browser_snapshot", "browser_scroll", "browser_get_images"}
+        )
+        _READONLY_CYCLE_WINDOW = 5
+        # 同一次真实调用可能被推 started/progress/completed 多条事件，按签名去重，
+        # 否则第一次正常的 browser_snapshot 就会被误判成死循环
+        _last_tool_sig = ""
+        _TOOL_DONE_STATUSES = frozenset(
+            {"completed", "success", "succeeded", "done", "finished", "failed", "error"}
+        )
 
-        def _note_hermes_tool_name(raw: str) -> Optional[str]:
+        def _update_readonly_cycle(n: str) -> Optional[str]:
+            """只读浏览器工具交替循环检测。"""
+            if n.startswith("browser_"):
+                _recent_tools.append(n)
+                if len(_recent_tools) > 16:
+                    del _recent_tools[:-16]
+                tail = _recent_tools[-_READONLY_CYCLE_WINDOW:]
+                if len(tail) == _READONLY_CYCLE_WINDOW and all(
+                    t in _READONLY_BROWSER_TOOLS for t in tail
+                ):
+                    return max(set(tail), key=tail.count)
+            return None
+
+        def _note_hermes_tool_name(
+            raw: str, status: Optional[str] = None, readonly_only: bool = False
+        ) -> Optional[str]:
             nonlocal _rep_name, _rep_count
             n = (raw or "").strip().lower()
             if n.startswith("hermes:"):
@@ -2676,40 +2783,74 @@ def _handle_agent_execute(
                 return None
             if "开始执行" in (raw or ""):
                 return None
+
+            # 任何能推动任务进展的工具都清零只读窗口
+            # （browser 操作类 + 桌面/mobile/api 等非 browser 工具）
+            if (n.startswith("browser_") and n not in _READONLY_BROWSER_TOOLS) or not n.startswith(
+                "browser_"
+            ):
+                _recent_tools.clear()
+
+            # 只读交替循环检测
+            looped = _update_readonly_cycle(n)
+            if looped:
+                return looped
+
+            if readonly_only:
+                return None
+
             watch = n in _REP_WATCH or any(n.startswith(w) for w in _REP_WATCH)
             if not watch:
                 _rep_name = ""
                 _rep_count = 0
                 return None
+
+            # 同名连续计数：主要用来检测「同一个工具反复失败/无进展」。
+            # 成功调用说明该次已达成目的，重置计数；失败/未知状态才累计。
+            failed = status in ("failed", "error")
+            success = status in ("completed", "success", "succeeded", "done", "finished")
+
             if n == _rep_name:
-                _rep_count += 1
+                if success:
+                    _rep_count = 0
+                else:
+                    _rep_count += 1
             else:
                 _rep_name = n
-                _rep_count = 1
-            # 已在目标页：任意一次 navigate 即视为重复造轮子
-            limit = 1 if (_forbid_nav and n in _NAV_NAMES) else _REP_LIMIT
-            # snapshot 连续 2 次无动作也熔断（应基于 DOM 直接操作）
+                _rep_count = 0 if success else 1
+
+            limit = _NAV_FORBID_LIMIT if (_forbid_nav and n in _NAV_NAMES) else _REP_LIMIT
             if _rep_count >= limit:
                 return n
             return None
 
         def _halt_tool_loop(looped: str) -> str:
             is_snapshot_loop = looped == "browser_snapshot"
-            is_console_loop = looped == "browser_console"
-            if is_snapshot_loop:
+            is_explore_loop = looped in ("browser_scroll", "browser_get_images")
+            is_nav_loop = looped in ("browser_navigate", "browser_goto", "navigate")
+            if is_snapshot_loop or is_explore_loop:
                 err = (
-                    "页面快照获取失败，已自动停止该操作。\n"
-                    "建议刷新页面后重试，或改用其他方式操作。"
+                    "智能体反复获取页面快照/滚动浏览却始终无法定位目标元素，已自动停止。\n"
+                    "常见原因：浏览器未打开目标页面、页面未加载完成或浏览器会话未初始化。\n"
+                    "建议：直接使用 browser_click/browser_type 操作可见元素，"
+                    "或用 browser_console(expression=\"...\") 执行 JavaScript。"
                 )
-            elif is_console_loop:
+            elif is_nav_loop:
+                err = (
+                    "浏览器导航被连续调用多次且未产生有效进展，已自动停止。\n"
+                    "建议：如果页面已在目标地址，请直接使用 DOM/JavaScript 操作当前页面元素，"
+                    "避免重复刷新。"
+                )
+            elif looped == "browser_console":
                 err = (
                     "控制台日志读取失败，已自动停止该操作。\n"
                     "建议改用 browser_snapshot 获取页面结构，再用 browser_click/browser_type 操作元素。"
                 )
             else:
                 err = (
-                    f"工具「{looped}」连续调用失败，已自动停止。\n"
-                    "建议换一种方式操作。"
+                    f"工具「{looped}」连续调用失败且无进展，已自动停止。\n"
+                    "建议：换一种定位或操作方式，例如用 browser_console 执行 JavaScript，"
+                    "或检查目标元素是否已加载。"
                 )
             meta["hermes_tool_loop_blocked"] = True
             meta["hermes_tool_loop_error"] = err
@@ -2761,6 +2902,7 @@ def _handle_agent_execute(
                     )
                     break
                 if ev_kind == "trace":
+                    stage = str((ev_payload or {}).get("stage") or "")
                     msg = str(
                         (ev_payload or {}).get("message")
                         or (ev_payload or {}).get("stage")
@@ -2773,11 +2915,17 @@ def _handle_agent_execute(
                                 on_trace(msg[:300])
                             except Exception:
                                 pass
-                        looped = _note_hermes_tool_name(msg)
-                        if looped:
-                            # 切勿 abort_event.set()：会被外层误报成「用户取消」
-                            result_text = _halt_tool_loop(looped)
-                            break
+                        # tool_progress 轨迹是工具事件的回声、hint 是文本碎片，
+                        # 都不是独立工具调用；计入会把同一次调用重复计数，
+                        # 导致第一次正常的 browser_snapshot 就被误判为死循环
+                        # trace 里的 stage="tool" 是 tool_calls delta 的轻量回声，
+                        # 已由 tool 事件计数；此处只做只读循环检测，避免重复计数。
+                        if stage not in ("tool_progress", "hint", "tool"):
+                            looped = _note_hermes_tool_name(msg, status=None, readonly_only=True)
+                            if looped:
+                                # 切勿 abort_event.set()：会被外层误报成「用户取消」
+                                result_text = _halt_tool_loop(looped)
+                                break
                 elif ev_kind == "tool":
                     if isinstance(ev_payload, dict):
                         tool_events.append(ev_payload)
@@ -2793,12 +2941,27 @@ def _handle_agent_execute(
                                     on_trace(sum_m[:300])
                                 except Exception:
                                     pass
-                            looped = _note_hermes_tool_name(
-                                str(ev_payload.get("name") or sum_m)
-                            )
-                            if looped:
-                                result_text = _halt_tool_loop(looped)
-                                break
+                            status = str(ev_payload.get("status") or "").strip().lower()
+                            try:
+                                sig = json.dumps(
+                                    [ev_payload.get("name"), ev_payload.get("args") or {}],
+                                    sort_keys=True,
+                                    ensure_ascii=False,
+                                )
+                            except Exception:
+                                sig = str(ev_payload.get("name") or sum_m)
+                            # started/progress/completed 可能对同一次调用推送多条事件，
+                            # 按签名去重，保证一次真实调用只计数一次
+                            count_now = sig != _last_tool_sig
+                            _last_tool_sig = "" if status in _TOOL_DONE_STATUSES else sig
+                            if count_now:
+                                looped = _note_hermes_tool_name(
+                                    str(ev_payload.get("name") or sum_m),
+                                    status=status,
+                                )
+                                if looped:
+                                    result_text = _halt_tool_loop(looped)
+                                    break
                 elif ev_kind == "tool_events":
                     evs = (ev_payload or {}).get("events") if isinstance(ev_payload, dict) else None
                     if isinstance(evs, list):
@@ -3159,12 +3322,11 @@ def run_ai_chat_with_tools(
             if _is_multi_device:
                 _lines.append("")
                 _lines.append("📱 **多端联动场景检测：需要手机验证码**")
-                _lines.append("   对于「网页 + 手机验证码」的组合任务：")
-                _lines.append("   1. 先调用 hermes_execute 打开网页、填写表单")
-                _lines.append("   2. 在 instruction 中注明「需要获取手机短信验证码」")
-                _lines.append("   3. 当网页需要验证码时，平台会自动调用 mobile_extract_otp")
-                _lines.append("   4. 获取验证码后自动回填到网页表单")
-                _lines.append("   5. 完成登录流程")
+                _lines.append("   对于「网页 + 手机验证码」的组合任务，必须分三段执行：")
+                _lines.append("   1. 第 1 次 hermes_execute：打开网页、填手机号、点「获取验证码」，停在验证码输入框后立即结束")
+                _lines.append("   2. 调用 mobile_extract_otp 等待短信，验证码自动存入 {{sms_otp}} 变量")
+                _lines.append("   3. 第 2 次 hermes_execute：把 {{sms_otp}} 填入验证码框并提交/登录")
+                _lines.append("   禁止在一次 hermes_execute 里空等短信；禁止编造验证码。")
         elif _has_mobile_otp and not _has_url:
             _lines.append("")
             _lines.append("📱 **检测到手机验证码需求**")
@@ -3543,6 +3705,20 @@ def run_ai_chat_with_tools(
                         meta.setdefault("cross_end_vars", {}).update(parsed_ce["variables"])
                         if parsed_ce.get("sms_otp"):
                             meta.setdefault("cross_end_vars", {})["sms_otp"] = parsed_ce["sms_otp"]
+                        # 同步到 task_ctx.vars 供 looks_like_hitl_needed 等 HITL 判断
+                        try:
+                            from agent_task_context import get_task_context
+                            sess_id = (
+                                str(params.agent_session_id or "").strip()
+                                or str((args or {}).get("session_id") or "").strip()
+                                or str((call_args or {}).get("session_id") or "").strip()
+                            )
+                            ctx = get_task_context(sess_id) if sess_id else None
+                            if ctx and isinstance(meta.get("cross_end_vars"), dict):
+                                for k, v in meta["cross_end_vars"].items():
+                                    ctx.set_var(str(k), v)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 if name.startswith("mobile_"):
@@ -3895,7 +4071,7 @@ def run_ai_chat_with_tools_stream(
                 )
                 think_msg = "步骤失败，任务已停止"
             meta["final_round"] = round_idx
-            meta["savable"] = False
+            meta["mobile_partial"] = bool(meta.get("mobile_flow_halted"))
             yield ("thinking", {"round": round_idx, "content": think_msg})
             yield ("reply", {"text": reply})
             yield (
@@ -3908,6 +4084,7 @@ def run_ai_chat_with_tools_stream(
                     "failed": True,
                     "savable": False,
                     "partial": True,
+                    "mobile_partial": bool(meta.get("mobile_flow_halted")),
                 },
             )
             return
@@ -4253,24 +4430,99 @@ def run_ai_chat_with_tools_stream(
                 tool_evs = meta.pop("hermes_tool_events", None) or []
                 if tool_evs:
                     from ai_action_recorder import ActionRecorder as _AR
+                    # ── 诊断日志：打印所有 hermes_tool_events 的 name/status/has_result ──
+                    import logging as _LOG
+                    try:
+                        _dbg_summary = []
+                        for _i, _te in enumerate(tool_evs):
+                            if isinstance(_te, dict):
+                                _dbg_summary.append(
+                                    f"[{_i}] name={_te.get('name')!r} status={_te.get('status')!r} "
+                                    f"has_result={_te.get('result') is not None} args_keys={list((_te.get('args') if isinstance(_te.get('args'), dict) else {}).keys())[:5]}"
+                                )
+                        if _dbg_summary:
+                            _LOG.getLogger("hermes_tool_events").info(
+                                "hermes_tool_events (%d):\n%s",
+                                len(_dbg_summary),
+                                "\n".join(_dbg_summary),
+                            )
+                    except Exception:
+                        pass
+
+                    # tool_events 来自 final result 事件时，按签名合并状态：
+                    # 同一工具（name+args）如果有 completed/error 则取，否则取最后一条
+                    _deduped: Dict[str, Dict[str, Any]] = {}
+                    for te in (tool_evs or []):
+                        if not isinstance(te, dict):
+                            continue
+                        try:
+                            _sig_key = json.dumps(
+                                [str(te.get("name") or ""), te.get("args") if isinstance(te.get("args"), dict) else {}],
+                                sort_keys=True,
+                                ensure_ascii=False,
+                            )
+                        except Exception:
+                            _sig_key = str(te.get("name") or id(te))
+                        prev = _deduped.get(_sig_key)
+                        ts = str(te.get("status") or "").strip().lower()
+                        is_done = ts in ("completed", "success", "succeeded", "done", "finished", "failed", "error")
+                        has_result = te.get("result") is not None
+                        if (prev is None) or is_done or (has_result and not (prev.get("result") is not None)):
+                            _deduped[_sig_key] = dict(te)
+                    tool_evs = list(_deduped.values())
 
                     rec_tmp = params.recorder if params.recorder else _AR()
                     out_recs = []
-                    for te in tool_evs[-40:]:
+                    for te in tool_evs[-80:]:
                         if not isinstance(te, dict):
                             continue
+                        te_name = str(te.get("name") or "tool").strip()
                         te_status = str(te.get("status") or "").strip().lower()
+                        te_args = te.get("args") if isinstance(te.get("args"), dict) else {}
+                        te_has_result = te.get("result") is not None
+                        te_seen = str(te.get("sse_event") or "")
+                        # 平台工具（browser_*/windows_*/mobile_*）判定：这类工具即使 result=None、status=running
+                        # 也代表 AI 确实调用过，应当被记录到「执行动作」和「实时用例」。
+                        is_platform_tool = (
+                            te_name.startswith("browser_")
+                            or te_name.startswith("windows_")
+                            or te_name.startswith("mobile_")
+                            or te_name in ("navigate", "goto", "click", "type", "snapshot", "scroll",
+                                           "open_app", "tap", "input_text", "swipe", "extract_otp",
+                                           "launch_app", "focus_app", "press_key", "screenshot")
+                        )
+                        # final result 事件中的工具应视为已完成；若有 result 但 status=running，视为 completed
+                        if te_has_result and te_status in ("running", "in_progress", "started", "progress", ""):
+                            te_status = "completed"
+                        # 【修复】所有平台工具（Web/桌面/移动端）有 args 就不跳过
+                        if is_platform_tool and te_args:
+                            if not te_status or te_status in ("running", "in_progress", "started", "progress"):
+                                te_status = "completed"
+                            if not te_has_result:
+                                # 造一个占位 result，让后续 capture → status 不会变 warning 又被 case_step 过滤
+                                te["result"] = {"ok": True}
+                                te_has_result = True
+                        # 【修复】平台工具即使无 args 但有 name 也要保留（如 mobile_extract_otp 可能无 args）
+                        if is_platform_tool and not te_args and not te_has_result:
+                            # 至少造一个占位 result
+                            te["result"] = {"ok": True}
+                            te_has_result = True
+                            if not te_status or te_status in ("running", "in_progress", "started", "progress"):
+                                te_status = "completed"
                         if te_status in ("running", "in_progress", "started", "progress"):
-                            if te.get("result") is None and te.get("sse_event") == "tool_calls_delta":
-                                continue
-                            if te.get("result") is None and not te.get("args"):
-                                continue
+                            if te.get("result") is None and te_seen == "tool_calls_delta":
+                                # 非平台工具 + 无 result 的纯 delta，可跳过
+                                if not is_platform_tool:
+                                    continue
+                            if te.get("result") is None and not te_args:
+                                if not is_platform_tool:
+                                    continue
                         try:
                             new_recs = rec_tmp.capture_from_tool_event(
                                 name=str(te.get("name") or "tool"),
                                 args=te.get("args") if isinstance(te.get("args"), dict) else {},
                                 result=te.get("result"),
-                                status=str(te.get("status") or ""),
+                                status=te_status,
                             )
                             for r in new_recs:
                                 st = (r.status or "warning").strip().lower()
@@ -4296,6 +4548,201 @@ def run_ai_chat_with_tools_stream(
                             continue
                     if out_recs:
                         yield ("action_records", out_recs)
+                    # ── 【关键修复】Fallback：从文本解析所有端（Web/桌面/移动端）的操作步骤 ──
+                    # 根因：Hermes 网关内部 browser/desktop/mobile 工具通过 CDP/直接调用时
+                    # 可能未发出 SSE tool.completed 事件，导致 hermes_tool_events 缺失步骤。
+                    # 策略：始终运行 fallback 解析，并与已有记录合并去重（不跳过）。
+                    try:
+                        import re as _re
+                        from ai_action_recorder import sanitize_target as _sanitize_tgt, is_state_observation, contains_negative_snippet
+                        fb_recs: List[Dict[str, Any]] = []
+                        _seen_sigs: set = set()
+                        def _dedup_sig(action: str, target: str) -> bool:
+                            k = f"{action}|{str(target).strip()[:80]}"
+                            if k in _seen_sigs:
+                                return False
+                            _seen_sigs.add(k)
+                            return True
+                        # 先注册已有记录的签名，避免重复
+                        for _ex in out_recs:
+                            _dedup_sig(str(_ex.get("action_type") or ""), str(_ex.get("target") or ""))
+                        # 注册跨端工具的签名（已在 out_recs 中）
+                        for _ex in out_recs:
+                            at = str(_ex.get("action_type") or "")
+                            if at in ("extract_otp", "api_call"):
+                                _dedup_sig(at, str(_ex.get("target") or ""))
+
+                        _parse_text = "\n".join(
+                            [str(result_text or "")] +
+                            [str(m or "") for m in (meta.get("hermes_traces") or [])[-40:]]
+                        )
+                        if len(_parse_text.strip()) < 4:
+                            _parse_text = str(result_text or "")
+
+                        # ── ① 函数调用风格：browser_*(...) / windows_*(...) / mobile_*(...) ──
+                        _FN_PATTERNS = [
+                            # Web 浏览器工具
+                            (r"browser_(?:navigate|goto)\s*\(\s*"
+                             r"(?:url\s*=\s*)?['\"]([^'\"]{2,240})['\"]",
+                             "navigate", 0),
+                            (r"browser_click\s*\(\s*"
+                             r"(?:ref\s*=\s*)?['\"]?(@?e?\d+|[^'\",\)]{1,40})['\"]?",
+                             "click", 0),
+                            (r"browser_(?:type|fill)\s*\(\s*(?:ref\s*=\s*)?['\"]([^'\"]{0,80})['\"]\s*,\s*(?:text|value)\s*=\s*['\"]([^'\"]{1,200})['\"]",
+                             "input", 2),
+                            (r"browser_(?:type|fill)\s*\(\s*(?:ref\s*=\s*)?['\"]([^'\"]{0,80})['\"]\s*\)",
+                             "input", 1),
+                            (r"\b(browser_snapshot)\s*\(",
+                             "snapshot", 0),
+                            (r"browser_scroll\s*\(\s*direction\s*=\s*['\"]?([^'\",\)\s]{2,20})['\"]?",
+                             "scroll", 0),
+                            (r"browser_(?:press_key|keyboard)\s*\(\s*key\s*=\s*['\"]?([^'\",\)\s]{1,20})['\"]?",
+                             "press_key", 0),
+                            # 桌面工具
+                            (r"windows_launch_app\s*\(\s*(?:path|app)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
+                             "launch_app", 0),
+                            (r"windows_click_text\s*\(\s*(?:text|label)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
+                             "click", 0),
+                            (r"windows_type_text\s*\(\s*(?:text|value)\s*=\s*['\"]([^'\"]{1,200})['\"]",
+                             "input", 0),
+                            (r"windows_focus_app\s*\(\s*(?:app_name|title)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
+                             "launch_app", 0),
+                            (r"windows_press_key\s*\(\s*key\s*=\s*['\"]?([^'\",\)\s]{2,20})['\"]?",
+                             "hotkey", 0),
+                            # 移动端工具
+                            (r"mobile_open_app\s*\(\s*(?:package|app)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
+                             "open_app", 0),
+                            (r"mobile_tap\s*\(\s*(?:text|selector)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
+                             "tap", 0),
+                            (r"mobile_input_text\s*\(\s*(?:text|input)\s*=\s*['\"]([^'\"]{1,200})['\"]",
+                             "input_text", 0),
+                            (r"mobile_swipe\s*\(\s*direction\s*=\s*['\"]?([^'\",\)\s]{2,20})['\"]?",
+                             "swipe", 0),
+                            (r"mobile_extract_otp\s*\(",
+                             "extract_otp", 0),
+                        ]
+                        for _pat, _act, _g in _FN_PATTERNS:
+                            try:
+                                for _m in _re.finditer(_pat, _parse_text, flags=_re.IGNORECASE):
+                                    try:
+                                        _tgt = _m.group(_g + 1) if _g == 0 else _m.group(_g)
+                                    except Exception:
+                                        _tgt = _m.group(1) if _m.groups() else _act
+                                    if not _tgt:
+                                        _tgt = _act
+                                    _tgt = _sanitize_tgt(str(_tgt).strip()[:120] or _act)
+                                    # 过滤：target 是状态观察或含负向片段 → 跳过
+                                    if is_state_observation(_tgt) or contains_negative_snippet(_tgt):
+                                        continue
+                                    if not _dedup_sig(_act, _tgt):
+                                        continue
+                                    fb_recs.append({
+                                        "action_type": _act,
+                                        "target": _tgt,
+                                        "status": "success",
+                                        "result": _m.group(0)[:100],
+                                        "has_vision": False,
+                                        "env_verify": None,
+                                    })
+                            except Exception:
+                                continue
+
+                        # ── ② 中文语义风格（Web + 桌面 + 移动端） ──
+                        _CN_PATTERNS = [
+                            # Web 浏览器
+                            (r"(?:导航到|访问|打开网页|进入网站)\s*[:：]\s*(https?://[^\s\"'，。、；]{4,240})",
+                             "navigate", 1),
+                            (r"获取页面结构|页面结构快照|DOM\s*清单|browser_snapshot\(\)",
+                             "snapshot", 0),
+                            (r"点击\s*([^「\"'\s，。；：\n]{1,30}?)\s*(?:按钮|链接|图标|tab|标签|菜单|选项卡)",
+                             "click", 1),
+                            (r"点击\s*(@?e?\d+)",
+                             "click", 1),
+                            (r"(?:在|向)\s*([^，。；：\s]{1,30}?)\s*(?:输入框|文本框|框|栏|字段)\s*(?:中|里)?\s*(?:输入|填写|填入)\s*[:：]\s*['\"]?([^\"'，。；\n]{1,160})",
+                             "input", 2),
+                            (r"([一二三四五六12345])\s*项(?:信息|填写|输入)\s*(?:已)?成功",
+                             "input", 0),
+                            # 桌面
+                            (r"(?:启动|打开)\s*([^，。；：\s]{1,30}?)\s*(?:应用|程序|软件)",
+                             "launch_app", 1),
+                            (r"(?:聚焦|切换到)\s*([^，。；：\s]{1,30}?)\s*(?:窗口|应用)",
+                             "launch_app", 1),
+                            # 移动端
+                            (r"(?:在手机|移动端|手机)\s*上?\s*(?:打开|启动)\s*([^，。；：\s]{1,30}?)\s*(?:应用|App|app)",
+                             "open_app", 1),
+                            (r"(?:在手机|移动端)\s*上?\s*(?:点击|轻触)\s*([^，。；：\s]{1,30}?)\s*(?:按钮|图标|文字)",
+                             "tap", 1),
+                            (r"(?:在手机|移动端)\s*上?\s*(?:输入|填写)\s*[:：]\s*['\"]?([^\"'，。；\n]{1,160})",
+                             "input_text", 1),
+                            (r"(?:提取|获取|读取)\s*(?:短信|验证码|OTP|otp)",
+                             "extract_otp", 0),
+                            (r"验证码\s*[:：]\s*['\"]?([^\"'，。；\n]{4,8})",
+                             "extract_otp", 1),
+                        ]
+                        for _pat, _act, _tg in _CN_PATTERNS:
+                            try:
+                                for _m in _re.finditer(_pat, _parse_text):
+                                    try:
+                                        _raw_tgt = _m.group(_tg) if _tg > 0 else _m.group(0)
+                                    except Exception:
+                                        _raw_tgt = _m.group(0)
+                                    if _act == "input" and _tg == 2:
+                                        try:
+                                            _field = _m.group(1)
+                                            _val = _raw_tgt
+                                            _tgt = f"{_sanitize_tgt(str(_field))}: {_sanitize_tgt(str(_val))[:60]}"
+                                        except Exception:
+                                            _tgt = _sanitize_tgt(str(_raw_tgt))[:120]
+                                    elif _act == "input" and _tg == 0:
+                                        _tgt = f"批量填写{str(_raw_tgt).strip()[:6]}"
+                                    elif _act in ("click", "tap") and _tg >= 1:
+                                        _tgt = _sanitize_tgt(str(_raw_tgt))[:120]
+                                        if is_state_observation(_tgt) or contains_negative_snippet(_tgt):
+                                            continue
+                                    else:
+                                        _tgt = _sanitize_tgt(str(_raw_tgt))[:120] or _act
+                                    if not _dedup_sig(_act, _tgt):
+                                        continue
+                                    fb_recs.append({
+                                        "action_type": _act,
+                                        "target": _tgt,
+                                        "status": "warning" if _act == "snapshot" else "success",
+                                        "result": str(_m.group(0) or _act)[:100],
+                                        "has_vision": False,
+                                        "env_verify": None,
+                                    })
+                            except Exception:
+                                continue
+
+                        if fb_recs:
+                            fb_recs = fb_recs[-30:]
+                            try:
+                                import logging as _LOG2
+                                _LOG2.getLogger("hermes_tool_events").info(
+                                    "fallback_extract_all_platforms_records (%d): %s",
+                                    len(fb_recs),
+                                    [(r["action_type"], r["target"][:60]) for r in fb_recs],
+                                )
+                            except Exception:
+                                pass
+                            # 如果 fallback 解析到了导航/点击/输入步骤，设置 forbid_navigate
+                            if any(r["action_type"] in ("navigate", "click", "input", "type", "scroll") for r in fb_recs):
+                                try:
+                                    from agent_task_context import get_task_context
+                                    _ctx_fb = get_task_context(getattr(params, "agent_session_id", None)) if params else None
+                                    if _ctx_fb:
+                                        _ctx_fb.vars["_permanent_forbid_navigate"] = True
+                                except Exception:
+                                    pass
+                            yield ("action_records", fb_recs)
+                    except Exception as _fb_ex:
+                        try:
+                            import logging as _LOG3
+                            _LOG3.getLogger("hermes_tool_events").warning(
+                                "fallback_extract_all_platforms_records failed: %s", str(_fb_ex)[:200]
+                            )
+                        except Exception:
+                            pass
                 # Hermes 工具死循环：立即向用户说明并结束，禁止再开一轮被误报成「用户取消」
                 if meta.get("hermes_tool_loop_blocked"):
                     halt = meta.get("hermes_tool_loop_error") or "智能体因工具死循环已中止"
@@ -4503,6 +4950,7 @@ def run_ai_chat_with_tools_stream(
                         name, call_args, abort_event=_abort
                     )
                 meta["tools_used"].append(name)
+                parsed_ce: Any = {}
                 try:
                     parsed_ce = json.loads(result_text)
                     if isinstance(parsed_ce, dict):
@@ -4523,6 +4971,35 @@ def run_ai_chat_with_tools_stream(
                 if name.startswith("mobile_"):
                     _record_mobile_tool_outcome(meta, name, result_text)
                 _record_cross_end_or_api_to_recorder(params, name, call_args, result_text)
+                try:
+                    _ce_ok = isinstance(parsed_ce, dict) and parsed_ce.get("success") is not False and parsed_ce.get("ok") is not False
+                    _ce_tgt = ""
+                    if name == "mobile_extract_otp":
+                        _ce_tgt = str(call_args.get("sender_hint") or "短信验证码")[:120]
+                    elif name == "mobile_run_steps":
+                        _ce_tgt = f"手机回放 {len(call_args.get('steps') or [])} 步"
+                    elif name == "mobile_run_case":
+                        _ce_tgt = f"用例 #{call_args.get('case_id')}"
+                    elif name.startswith("desktop_"):
+                        _ce_tgt = str(call_args.get("description") or call_args.get("app_name") or call_args.get("text") or name)[:120]
+                    else:
+                        _ce_tgt = name[:120]
+                    _ce_status = "success" if _ce_ok else "failed"
+                    yield (
+                        "action_records",
+                        [
+                            {
+                                "action_type": name,
+                                "target": _ce_tgt,
+                                "status": _ce_status,
+                                "result": (result_text or "")[:100],
+                                "has_vision": False,
+                                "env_verify": None,
+                            }
+                        ],
+                    )
+                except Exception:
+                    pass
             elif name == "api_call":
                 # api_call: API执行通道（流式路径）
                 try:

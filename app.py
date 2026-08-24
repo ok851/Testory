@@ -8456,10 +8456,13 @@ def api_ai_task_execute():
                 context=task_ctx.to_public_dict(),
             )
 
-            browser_ready_holder = {"ready": False}
+            browser_ready_holder = {"ready": False, "nav_done": False}
 
             def _ensure_browser_before_agent():
-                """Web 需要时拉起浏览器；起始 URL 从任务原文解析，禁止依赖已移除的 URL 输入框。"""
+                """Web 需要时拉起浏览器；起始 URL 从任务原文解析，禁止依赖已移除的 URL 输入框。
+                
+                关键修复：一旦浏览器已导航到目标页并开始操作，禁止再次 navigate（避免表单清空）。
+                """
                 from agent_intent import extract_task_url, message_needs_browser
 
                 needs_br = message_needs_browser(task) or (run_platform == "web")
@@ -8469,11 +8472,12 @@ def api_ai_task_execute():
                 if browser_ready_holder["ready"]:
                     from hermes_config import hermes_cdp_attached
                     if hermes_cdp_attached():
-                        if nav_url:
+                        # 关键修复：已完成导航后，不再重新 navigate
+                        if nav_url and not browser_ready_holder.get("nav_done"):
                             try:
                                 from ai_external_browser_bridge import ensure_browser
-
                                 ensure_browser(headless=False, url=nav_url, browser="edge")
+                                browser_ready_holder["nav_done"] = True
                             except Exception:
                                 pass
                         return True, ""
@@ -8490,10 +8494,13 @@ def api_ai_task_execute():
                             if run_platform == "auto":
                                 return True, ""
                             return False, "本机浏览器启动失败，请确认已安装 Edge/Chrome"
-                    elif nav_url:
-                        # 已有会话时仍导航到任务目标 URL，避免卡在 about:blank
+                        if nav_url:
+                            browser_ready_holder["nav_done"] = True
+                    elif nav_url and not browser_ready_holder.get("nav_done"):
+                        # 已有会话：仅首次导航，后续不再重复
                         try:
                             ensure_browser(headless=False, url=nav_url, browser="edge")
+                            browser_ready_holder["nav_done"] = True
                         except Exception:
                             pass
                     browser_ready_holder["ready"] = True
@@ -9004,15 +9011,24 @@ def api_ai_task_execute():
                                 else:
                                     hermes_partial = True
                             from agent_hitl import looks_like_hitl_needed, set_need_user_action
-                            if looks_like_hitl_needed(result_preview):
-                                need_user_action = set_need_user_action(
-                                    user_id,
-                                    session_id=task_ctx.session_id,
-                                    reason="需要人工确认或登录",
-                                    hint=result_preview[:200],
-                                )
-                                task_ctx.request_hitl(need_user_action["reason"], need_user_action.get("hint") or "")
-                                yield send('need_user_action', **need_user_action)
+                            # 【关键】中间轮次 ONLY 接受显式 NEED_USER_ACTION: 前缀，
+                            # 绝不因「验证码」「登录」等关键词在中途停下——AI 还有工具可用。
+                            if (result_preview or "").startswith("NEED_USER_ACTION:") or "NEED_USER_ACTION:" in (result_preview or ""):
+                                _tools_used = [str(tr.get("tool") or "") for tr in task_ctx.tool_trace]
+                                _ce_vars = dict(task_ctx.vars)
+                                if looks_like_hitl_needed(
+                                    result_preview,
+                                    tools_used=_tools_used,
+                                    cross_end_vars=_ce_vars,
+                                ):
+                                    need_user_action = set_need_user_action(
+                                        user_id,
+                                        session_id=task_ctx.session_id,
+                                        reason="需要人工确认或登录",
+                                        hint=result_preview[:200],
+                                    )
+                                    task_ctx.request_hitl(need_user_action["reason"], need_user_action.get("hint") or "")
+                                    yield send('need_user_action', **need_user_action)
                             if (
                                 not hermes_failed
                                 and (
@@ -9151,13 +9167,23 @@ def api_ai_task_execute():
                         for rec in (evt_data if isinstance(evt_data, list) else []):
                             yield send('action_record', **rec)
                             st = (rec.get('status') or '').lower()
-                            # 实时用例只收录成功步骤；失败/取消留在「执行动作」
+                            # 实时用例收录条件（放宽）：
+                            # - success/ok/done/completed → verified=True（已验证成功）
+                            # - warning（已执行但未验证）→ verified=False（仍可复用，用户可再调）
+                            # 不收录 failed/running/skipped
                             if st in ('success', 'ok', 'done', 'completed', 'complete'):
                                 yield send(
                                     'case_step',
                                     action=rec.get('action_type', '操作'),
                                     target=rec.get('target', '目标'),
                                     verified=True,
+                                )
+                            elif st in ('warning',):
+                                yield send(
+                                    'case_step',
+                                    action=rec.get('action_type', '操作'),
+                                    target=rec.get('target', '目标'),
+                                    verified=False,
                                 )
 
                     elif evt_type == "vision_start":
@@ -9175,15 +9201,25 @@ def api_ai_task_execute():
                         if reply_text and reply_text.strip() != last_reply_sent.strip():
                             last_reply_sent = reply_text
                             yield send('reply', text=reply_text)
-                            from agent_hitl import looks_like_hitl_needed, set_need_user_action
-                            if looks_like_hitl_needed(reply_text):
-                                need_user_action = set_need_user_action(
-                                    user_id,
-                                    session_id=task_ctx.session_id,
-                                    reason="需要人工确认",
-                                    hint=reply_text[:200],
-                                )
-                                yield send('need_user_action', **need_user_action)
+                            # 【关键】reply 事件的 HITL 检查：
+                            # 1. ONLY 接受显式 NEED_USER_ACTION: 前缀（与 hermes_execute 中间轮次规则统一）
+                            # 2. 必须传递 tools_used 和 cross_end_vars，避免 AI 有自动处理能力时误触发
+                            if (reply_text or "").startswith("NEED_USER_ACTION:") or "NEED_USER_ACTION:" in (reply_text or ""):
+                                from agent_hitl import looks_like_hitl_needed, set_need_user_action
+                                _tools_used = [str(tr.get("tool") or "") for tr in task_ctx.tool_trace]
+                                _ce_vars = dict(task_ctx.vars)
+                                if looks_like_hitl_needed(
+                                    reply_text,
+                                    tools_used=_tools_used,
+                                    cross_end_vars=_ce_vars,
+                                ):
+                                    need_user_action = set_need_user_action(
+                                        user_id,
+                                        session_id=task_ctx.session_id,
+                                        reason="需要人工确认",
+                                        hint=reply_text[:200],
+                                    )
+                                    yield send('need_user_action', **need_user_action)
 
                     elif evt_type == "done":
                         plan = evt_data.get('plan', {}) if isinstance(evt_data, dict) else {}
@@ -9196,10 +9232,15 @@ def api_ai_task_execute():
                             hermes_failed = hermes_failed or bool(done_meta.get("hermes_failed") or done_meta.get("failed"))
                         if evt_data.get("failed") if isinstance(evt_data, dict) else False:
                             hermes_failed = True
+                        # mobile_partial: 手机端失败但浏览器端可能已成功
+                        mobile_partial = bool(
+                            (evt_data.get("mobile_partial") if isinstance(evt_data, dict) else False)
+                            or done_meta.get("mobile_partial")
+                        )
                         if plan and not hermes_failed:
                             final_plan = plan
-                        elif hermes_failed:
-                            # 失败时丢弃模型编造的 plan，避免弹出「可保存用例」
+                        elif hermes_failed and not mobile_partial:
+                            # 失败时丢弃模型编造的 plan；手机端失败时保留给热路径处理
                             final_plan = None
                         reply_text = (evt_data.get('reply') or "").strip() if isinstance(evt_data, dict) else ""
                         # 避免 reply + done.reply 重复刷同一段说明
@@ -9230,12 +9271,10 @@ def api_ai_task_execute():
                             last_reply_sent = reply_text
                             yield send('reply', text=reply_text)
 
-                        # 热路径：ActionRecorder → normalize；失败时不生成可保存 plan
+                        # 热路径：ActionRecorder → normalize；失败时仍尝试从成功记录生成部分用例
                         norm_warnings = []
                         try:
-                            if hermes_failed:
-                                final_plan = None
-                            elif generate_case_after_run and recorder and getattr(recorder, "records", None):
+                            if generate_case_after_run and recorder and getattr(recorder, "records", None):
                                 built, norm_warnings = recorder.build_normalized_plan(
                                     case_name=(final_plan or {}).get("case_name") or task[:60],
                                     case_url=url or (final_plan or {}).get("case_url") or "",
@@ -9248,19 +9287,24 @@ def api_ai_task_execute():
                                     built["meta"]["session_id"] = task_ctx.session_id
                                     built["meta"]["vars"] = dict(task_ctx.vars)
                                     built["meta"]["trace_count"] = len(task_ctx.tool_trace)
+                                    if hermes_failed:
+                                        built["meta"]["partial"] = True
+                                        built["meta"]["source"] = "partial_success"
                                     final_plan = built
+                                    step_count = len(built["steps"])
+                                    partial_hint = "（部分完成）" if hermes_failed else ""
                                     yield send(
                                         'think',
-                                        text=f'已将 {len(built["steps"])} 步动作规范化为可维护用例',
+                                        text=f'已将 {step_count} 步动作规范化为可维护用例{partial_hint}',
                                         status='done',
                                     )
+                            elif hermes_failed:
+                                final_plan = None
                             elif (
                                 generate_case_after_run
-                                and not hermes_failed
                                 and task_ctx.tool_trace
                                 and (not final_plan or not final_plan.get("steps"))
                             ):
-                                # 仅非失败时：用真实 tool_trace 生成占位 plan（仍默认不强制可保存）
                                 steps = []
                                 for tr in task_ctx.tool_trace:
                                     tool_name_tr = (tr.get("tool") or "").strip()
@@ -9290,28 +9334,25 @@ def api_ai_task_execute():
                             uat_logger.debug("hot-path normalize failed: %s", ex)
 
                         savable = False
-                        if (
-                            not hermes_failed
-                            and final_plan
-                            and isinstance(final_plan, dict)
-                            and final_plan.get("steps")
-                        ):
+                        if final_plan and isinstance(final_plan, dict) and final_plan.get("steps"):
                             meta_fp = final_plan.get("meta") if isinstance(final_plan.get("meta"), dict) else {}
+                            is_partial_success = meta_fp.get("source") == "partial_success"
                             if not meta_fp.get("unsavable") and meta_fp.get("source") != "hermes_trace":
-                                savable = True
-                                try:
-                                    from hermes_skill_loop import record_execution_success
-                                    record_execution_success(
-                                        final_plan,
-                                        case_url=url or final_plan.get('case_url', ''),
-                                        instruction=task,
-                                        outcome='ok' if not hermes_partial else 'partial',
-                                    )
-                                except Exception:
-                                    pass
+                                if not hermes_failed or is_partial_success:
+                                    savable = True
+                                    try:
+                                        from hermes_skill_loop import record_execution_success
+                                        record_execution_success(
+                                            final_plan,
+                                            case_url=url or final_plan.get('case_url', ''),
+                                            instruction=task,
+                                            outcome='partial' if (hermes_failed or hermes_partial) else 'ok',
+                                        )
+                                    except Exception:
+                                        pass
 
                         if hermes_failed:
-                            done_msg = '执行失败'
+                            done_msg = '部分完成' if savable else '执行失败'
                         elif hermes_partial or need_user_action:
                             done_msg = '部分完成'
                         else:
@@ -9320,8 +9361,8 @@ def api_ai_task_execute():
                             'message': done_msg,
                             'plan': final_plan or {},
                             'session_id': task_ctx.session_id,
-                            'partial': bool(not hermes_failed and (hermes_partial or need_user_action)),
-                            'failed': bool(hermes_failed),
+                            'partial': bool((hermes_failed and savable) or hermes_partial or need_user_action),
+                            'failed': bool(hermes_failed and not savable),
                             'savable': bool(savable),
                         }
                         if need_user_action:

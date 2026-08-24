@@ -136,8 +136,8 @@ def web_browser_cdp_hint() -> str:
         "- **禁止** terminal / curl / bash / windows_* / 桌面 MCP。\n",
         "- **禁止** 新开空白标签页；平台已导航则 **禁止 browser_navigate**（重复造轮子）。\n",
         "- **DOM 优先**：指令内「页面 DOM/可交互控件」是主定位源；"
-        "browser_snapshot=无障碍树/DOM ref（不是截图），仅难定位时用一次；"
-        "视觉/截图仅最终兜底。\n",
+        "browser_snapshot=无障碍树/DOM ref（不是截图）：click/type 前需先 snapshot 一次建立会话，"
+        "此后仅在难定位时再用（全程最多 2 次，禁止连续反复）；视觉/截图仅最终兜底。\n",
     ]
     if cdp:
         lines.append("- CDP 已同步；勿再探测调试端口。\n")
@@ -146,7 +146,7 @@ def web_browser_cdp_hint() -> str:
             "- 正确顺序：读 DOM 清单 → browser_click / browser_type / browser_fill → "
             "必要时再 snapshot 核验。\n",
             "- **备选方案**：若 DOM 清单不足且 snapshot 也无法定位，"
-            "使用 browser_evaluate 执行 JavaScript 直接操作 DOM：\n"
+            "使用 browser_console(expression=\"...\") 执行 JavaScript 直接操作 DOM：\n"
             "  - document.querySelector / getElementById 定位元素\n"
             "  - element.click() / element.value = text / element.dispatchEvent 触发事件\n"
             "  - document.querySelectorAll 获取元素列表\n",
@@ -207,12 +207,12 @@ def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = Non
             "【元素定位策略 — 按优先级】\n"
             "  1. 优先使用下方「页面 DOM/可交互控件」清单中的 ref ID\n"
             "  2. 若清单不足，使用一次 browser_snapshot 获取最新 ref ID\n"
-            "  3. 若 snapshot 仍无法定位，使用 browser_evaluate 执行 JavaScript：\n"
+            "  3. 若 snapshot 仍无法定位，使用 browser_console(expression=\"...\") 执行 JavaScript：\n"
             "     - document.querySelector('#id') 或 document.querySelector('.class') 定位\n"
             "     - element.click() / element.focus() / element.value = 'text' 操作\n"
             "     - 触发 React/Vue 事件：element.dispatchEvent(new Event('input', {bubbles:true}))\n"
             "     - 获取所有匹配：document.querySelectorAll('selector')\n"
-            "  禁止反复调用 browser_snapshot（最多 1 次）\n"
+            "  禁止连续反复调用 browser_snapshot（全程最多 2 次）\n"
             "DOM 优先，snapshot 兜底，JavaScript 最终手段；未核验勿声称已登录/已搜索。\n"
             "若遇 401/空流：立刻停止并说明原因。\n"
             "若需要验证码/扫码，回复 NEED_USER_ACTION:<原因>。\n\n"

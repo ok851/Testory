@@ -273,12 +273,19 @@ def pair_code_payload(user_id: int, tenant_id: Optional[int] = None) -> Dict[str
 def resolve_device_token() -> Tuple[Optional[Dict[str, Any]], Optional[Any]]:
     token = (request.headers.get("X-Mobile-Device-Token") or "").strip()
     if not token:
+        # fallback: Authorization: Bearer <token>
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+    if not token:
         return None, (jsonify({"success": False, "error": "缺少设备 token"}), 401)
     with _LOCK:
         meta = _DEVICE_TOKENS.get(token)
     if not meta:
         return None, (jsonify({"success": False, "error": "设备 token 无效"}), 401)
-    return dict(meta), None
+    out = dict(meta)
+    out["token"] = token  # 保留 raw token 供 touch_device_poll 使用
+    return out, None
 
 
 def list_paired_devices_for_user(user_id: int) -> List[Dict[str, Any]]:
@@ -1445,23 +1452,16 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         if err:
             return err
         # 无论有无 job，都记心跳：证明无障碍内 PcRunJobPoller 在跑
+        # resolve_device_token 现在返回 raw token 在 meta["token"] 中
+        _poll_token = str(meta.get("token") or "")
+        _poll_device_id = str(meta.get("device_id") or "")
+        _poll_user_id = int(meta.get("user_id") or 0)
         try:
             touch_device_poll(
-                meta.get("device_id") or "",
-                user_id=int(meta.get("user_id") or 0),
-                token=str(meta.get("token") or meta.get("device_token") or ""),
+                _poll_device_id,
+                user_id=_poll_user_id,
+                token=_poll_token,
             )
-        except Exception:
-            pass
-        # resolve_device_token 返回的 meta 未必带 raw token；用 Authorization 再触一次
-        try:
-            auth = (request.headers.get("Authorization") or "").strip()
-            if auth.lower().startswith("bearer "):
-                touch_device_poll(
-                    meta.get("device_id") or "",
-                    user_id=int(meta.get("user_id") or 0),
-                    token=auth[7:].strip(),
-                )
         except Exception:
             pass
         job_kind = (request.args.get("job_kind") or "").strip()
@@ -1508,6 +1508,33 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
             except Exception:
                 continue
         return jsonify({"success": True, "bundles": bundles})
+
+    @app.route("/api/mobile/sync/heartbeat-status", methods=["GET"])
+    def api_mobile_sync_heartbeat_status():
+        """诊断端点：返回所有已配对设备的心跳状态。"""
+        from flask_login import current_user
+        uid = 0
+        try:
+            uid = int(getattr(current_user, "id", 0) or 0)
+        except Exception:
+            uid = 0
+        status = device_poller_status_for_user(uid)
+        return jsonify({
+            "success": True,
+            "user_id": uid,
+            "paired_count": status.get("paired_count", 0),
+            "alive_count": status.get("alive_count", 0),
+            "stale_sec": status.get("stale_sec", 45),
+            "devices": [
+                {
+                    "device_id": d.get("device_id"),
+                    "poller_alive": d.get("poller_alive"),
+                    "last_poll_at": d.get("last_poll_at"),
+                    "stale_sec": round(time.time() - float(d.get("last_poll_at") or 0), 1) if d.get("last_poll_at") else None,
+                }
+                for d in (status.get("candidates") or [])
+            ],
+        })
 
     @app.route("/api/mobile/sync/run/events", methods=["POST"])
     @api_error_handler

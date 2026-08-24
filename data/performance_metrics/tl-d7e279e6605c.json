@@ -1,0 +1,19 @@
+{
+  "run_id": "tl-d7e279e6605c",
+  "plan_id": "hitl-plan-1",
+  "scenario": "hitl timeout",
+  "started_at": "2026-08-24T07:26:26.717972+00:00",
+  "finished_at": "2026-08-24T07:26:27.024109+00:00",
+  "total_ms": 307.0,
+  "success": false,
+  "stage_metrics": [],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 307.0,
+  "bottleneck": {
+    "type": "none"
+  },
+  "summary": {}
+}

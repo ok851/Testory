@@ -1,0 +1,32 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-1f951ba0",
+    "content_hash": "fca04237b720",
+    "created_at": "2026-08-24T07:27:03.122314+00:00",
+    "message": "??????? (run imp-2)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "imp-2",
+      "scenario": "lock test",
+      "stages": [
+        {
+          "id": "h1",
+          "layer": "hitl",
+          "prompt": "x",
+          "timeout_s": 0.2,
+          "poll_interval_s": 0.05,
+          "sync_point": "done"
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "hitl"
+    ]
+  }
+]

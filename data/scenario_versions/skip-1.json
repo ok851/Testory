@@ -1,0 +1,32 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-7e231077",
+    "content_hash": "db819c040cee",
+    "created_at": "2026-08-24T07:27:03.140996+00:00",
+    "message": "??????? (run skip-1)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "skip-1",
+      "scenario": "lock test",
+      "stages": [
+        {
+          "id": "h1",
+          "layer": "hitl",
+          "prompt": "x",
+          "timeout_s": 0.2,
+          "poll_interval_s": 0.05,
+          "sync_point": "done"
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "hitl"
+    ]
+  }
+]

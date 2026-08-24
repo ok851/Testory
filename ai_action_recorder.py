@@ -50,6 +50,72 @@ _BAD_TARGETS = frozenset(
         "status",
     }
 )
+# 浏览器工具 result 中属于 UI 元数据/状态观察的噪声后缀，应从 target 中剥离
+_NOISE_PAREN_SUFFIXES = [
+    r"[（(]\s*class\s*[)）]",
+    r"[（(]\s*已聚焦\s*[)）]",
+    r"[（(]\s*已禁用\s*[)）]",
+    r"[（(]\s*可见\s*[)）]",
+    r"[（(]\s*不可见\s*[)）]",
+    r"[（(]\s*disabled\s*[)）]",
+    r"[（(]\s*visible\s*[)）]",
+]
+_NOISE_PAREN_RE = re.compile("|".join(_NOISE_PAREN_SUFFIXES), re.IGNORECASE)
+# 状态观察文本：不应作为独立 action 目标
+_STATE_OBSERVATION_PATTERNS = [
+    re.compile(r"^后变为", re.IGNORECASE),
+    re.compile(r"^变为", re.IGNORECASE),
+    re.compile(r"^状态[：:]", re.IGNORECASE),
+    re.compile(r"^state[：:]", re.IGNORECASE),
+    re.compile(r"^\s*disabled\s*$", re.IGNORECASE),
+    re.compile(r"^\s*enabled\s*$", re.IGNORECASE),
+    re.compile(r"^\s*visible\s*$", re.IGNORECASE),
+]
+# 错误/负向文本片段（fallback 解析时应跳过）
+_ERROR_NEGATIVE_SNIPPETS = [
+    "失败",
+    "错误",
+    "风险点",
+    "异常",
+    "error",
+    "fail",
+    "failed",
+    "exception",
+    "traceback",
+    "stacktrace",
+    "未找到",
+    "不可用",
+    "未执行",
+]
+
+
+def sanitize_target(target: str) -> str:
+    """清理浏览器工具 result 中的 UI 噪声后缀，如 (class)、(已聚焦) 等。"""
+    if not target:
+        return ""
+    t = str(target).strip()
+    t = _NOISE_PAREN_RE.sub("", t).strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def is_state_observation(target: str) -> bool:
+    """判断 target 是否是状态观察而非实际操作目标。"""
+    if not target:
+        return True
+    t = str(target).strip()
+    for pat in _STATE_OBSERVATION_PATTERNS:
+        if pat.match(t):
+            return True
+    return False
+
+
+def contains_negative_snippet(text: str) -> bool:
+    """判断文本是否包含明显的错误/负向片段。"""
+    if not text:
+        return False
+    low = str(text).lower()
+    return any(s in low for s in _ERROR_NEGATIVE_SNIPPETS)
 
 
 def _status_from_flags(*, ok: Optional[bool] = None, verified: Optional[bool] = None) -> str:
@@ -107,13 +173,22 @@ class ActionRecorder:
         result: Any = None,
         status: str = "",
     ) -> List[ActionRecord]:
-        """从 Hermes SSE 工具进度或真实 windows_* 结果写入一条可信记录。"""
+        """从 Hermes SSE 工具进度或真实工具结果写入一条可信记录。
+        
+        支持所有平台工具：Web (browser_*)、桌面 (windows_*)、移动端 (mobile_*)。
+        对各平台工具的 target 做清理，剥离 UI 噪声和状态观察。
+        """
         args = args if isinstance(args, dict) else {}
         name = (name or "tool").strip() or "tool"
         ok: Optional[bool] = None
         verified: Optional[bool] = None
         summary = ""
         target = ""
+        is_browser_tool = name.startswith("browser_")
+        is_desktop_tool = name.startswith("windows_")
+        is_mobile_tool = name.startswith("mobile_")
+        is_platform_tool = is_browser_tool or is_desktop_tool or is_mobile_tool
+        
         if isinstance(result, dict):
             if result.get("ok") is False or result.get("success") is False:
                 ok = False
@@ -126,18 +201,87 @@ class ActionRecorder:
                 or result.get("reply")
                 or result.get("message")
                 or result.get("effect")
+                or result.get("status")
                 or ""
             )[:200]
-            target = str(
-                result.get("matched")
-                or result.get("app_name")
-                or result.get("description")
-                or result.get("key")
-                or args.get("app")
-                or args.get("text")
-                or args.get("instruction")
-                or ""
-            )[:80]
+            
+            # ── 浏览器工具：优先用 matched/selector/ref 等 DOM 元素标识 ──
+            if is_browser_tool:
+                raw_target = str(
+                    result.get("matched")
+                    or result.get("selector")
+                    or result.get("ref")
+                    or result.get("element")
+                    or result.get("key")
+                    or result.get("url")
+                    or ""
+                )[:80]
+                if not raw_target:
+                    raw_target = str(
+                        args.get("ref")
+                        or args.get("text")
+                        or args.get("selector")
+                        or args.get("url")
+                        or args.get("element")
+                        or ""
+                    )[:80]
+                target = sanitize_target(raw_target)
+            
+            # ── 桌面工具：优先用 app_name/title/label 等窗口标识 ──
+            elif is_desktop_tool:
+                raw_target = str(
+                    result.get("app_name")
+                    or result.get("title")
+                    or result.get("label")
+                    or result.get("matched")
+                    or result.get("description")
+                    or ""
+                )[:80]
+                if not raw_target:
+                    raw_target = str(
+                        args.get("app")
+                        or args.get("text")
+                        or args.get("app_name")
+                        or args.get("title")
+                        or args.get("path")
+                        or ""
+                    )[:80]
+                target = sanitize_target(raw_target)
+            
+            # ── 移动端工具：优先用 package_name/text/resource_id 等元素标识 ──
+            elif is_mobile_tool:
+                raw_target = str(
+                    result.get("text")
+                    or result.get("resource_id")
+                    or result.get("content_desc")
+                    or result.get("package_name")
+                    or result.get("app_name")
+                    or result.get("description")
+                    or ""
+                )[:80]
+                if not raw_target:
+                    raw_target = str(
+                        args.get("text")
+                        or args.get("selector")
+                        or args.get("package")
+                        or args.get("app")
+                        or args.get("resource_id")
+                        or ""
+                    )[:80]
+                target = sanitize_target(raw_target)
+            
+            # ── 其他跨端/通用工具 ──
+            else:
+                target = sanitize_target(str(
+                    result.get("matched")
+                    or result.get("app_name")
+                    or result.get("description")
+                    or result.get("key")
+                    or args.get("app")
+                    or args.get("text")
+                    or args.get("instruction")
+                    or ""
+                )[:80])
         elif result is not None:
             summary = str(result)[:200]
             low = summary.lower()
@@ -146,18 +290,46 @@ class ActionRecorder:
             elif '"ok": true' in low or '"success": true' in low:
                 ok = True
         if not target:
-            target = str(
+            raw_target = str(
                 args.get("app")
                 or args.get("text")
                 or args.get("element")
                 or args.get("action")
                 or args.get("name")
+                or args.get("url")
+                or args.get("title")
+                or args.get("package")
                 or name
             )[:80]
+            target = sanitize_target(raw_target)
+        # 跳过：target 是状态观察文本（如"后变为禁用态"），不应作为独立步骤
+        if is_state_observation(target) and is_platform_tool:
+            # 平台工具的状态观察：用 args 构造一个有意义的 target
+            if is_browser_tool:
+                alt = str(args.get("ref") or args.get("text") or args.get("selector") or "")[:60]
+            elif is_desktop_tool:
+                alt = str(args.get("app") or args.get("text") or args.get("title") or "")[:60]
+            elif is_mobile_tool:
+                alt = str(args.get("text") or args.get("selector") or args.get("package") or "")[:60]
+            else:
+                alt = ""
+            if alt:
+                target = sanitize_target(alt)
+            else:
+                target = name.replace("browser_", "", 1).replace("windows_", "", 1).replace("mobile_", "", 1)
         if self._is_bad_target(target):
             target = name
+        # 跳过负向片段污染的 target（如包含"失败或风险点"）
+        if contains_negative_snippet(target) and is_platform_tool:
+            if is_browser_tool:
+                target = sanitize_target(str(args.get("ref") or args.get("text") or name)[:60])
+            elif is_desktop_tool:
+                target = sanitize_target(str(args.get("app") or args.get("text") or name)[:60])
+            elif is_mobile_tool:
+                target = sanitize_target(str(args.get("text") or args.get("selector") or name)[:60])
+            else:
+                target = sanitize_target(str(args.get("text") or name)[:60])
         st = (status or "").strip().lower()
-        # Hermes SSE 常用 running / completed；completed 需结合 result 判定，不能原样保留
         if st in ("running", "in_progress", "started", "progress"):
             st = "running"
         elif st in ("error", "failed", "fail"):
@@ -243,17 +415,75 @@ class ActionRecorder:
     @staticmethod
     def _normalize_action_type(name: str, args: Dict[str, Any]) -> str:
         n = (name or "").strip()
+        # Web 浏览器工具
+        if n.startswith("browser_"):
+            return n.replace("browser_", "", 1)
+        # 桌面工具
         if n.startswith("windows_"):
-            return n.replace("windows_", "", 1)
-        # 跨端工具：映射为统一 action 名（与 normalize_ai_step 的 allowed_actions 对齐）
-        if n == "mobile_extract_otp":
-            return "extract_otp"
-        if n == "desktop_type_text":
-            return "input"
-        if n == "api_call":
-            return "api_call"
+            base = n.replace("windows_", "", 1)
+            # 映射桌面工具到标准步骤类型
+            _DESKTOP_MAP = {
+                "launch_app": "launch_app",
+                "focus_app": "launch_app",
+                "click_text": "click",
+                "click": "click",
+                "type_text": "input",
+                "input": "input",
+                "press_key": "hotkey",
+                "screenshot": "screenshot",
+                "get_screen_text": "extract_text",
+                "scroll": "scroll",
+            }
+            return _DESKTOP_MAP.get(base, base)
+        # 移动端工具
+        if n.startswith("mobile_"):
+            base = n.replace("mobile_", "", 1)
+            _MOBILE_MAP = {
+                "open_app": "open_app",
+                "launch_app": "open_app",
+                "tap": "tap",
+                "click": "tap",
+                "input_text": "input_text",
+                "input": "input_text",
+                "swipe": "swipe",
+                "scroll": "scroll",
+                "screenshot": "screenshot",
+                "extract_otp": "extract_otp",
+                "extract_text": "extract_text",
+                "press_key": "hotkey",
+                "back": "back",
+                "home": "home",
+            }
+            return _MOBILE_MAP.get(base, base)
+        # scrcpy 视觉/控制工具
+        if n.startswith("scrcpy_"):
+            base = n.replace("scrcpy_", "", 1)
+            _SCRCPY_MAP = {
+                "tap": "tap",
+                "swipe": "swipe",
+                "type_text": "input_text",
+                "screenshot": "screenshot",
+                "ocr_device": "extract_text",
+                "extract_otp": "extract_otp",
+                "ensure_session": "screenshot",
+                "navigate_to_messages": "open_app",
+                "capture_frame": "screenshot",
+            }
+            return _SCRCPY_MAP.get(base, base)
+        # 跨端工具
+        _CROSS_END_MAP = {
+            "mobile_extract_otp": "extract_otp",
+            "desktop_type_text": "input",
+            "api_call": "api_call",
+        }
+        if n in _CROSS_END_MAP:
+            return _CROSS_END_MAP[n]
+        # 计算机使用工具
         if n == "computer_use":
             return str(args.get("action") or "computer_use")[:40]
+        # 技能视图工具
+        if n == "skill_view":
+            return "screenshot"
         return n[:40] or "tool"
 
     def to_case_steps(self) -> List[Dict[str, Any]]:

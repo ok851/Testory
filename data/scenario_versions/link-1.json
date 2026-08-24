@@ -1,0 +1,53 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-931f3cfb",
+    "content_hash": "6af8a142871a",
+    "created_at": "2026-08-24T06:16:22.210899+00:00",
+    "message": "??????? (run link-1)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "link-1",
+      "scenario": "api then use var",
+      "stages": [
+        {
+          "id": "a1",
+          "layer": "api",
+          "sync_point": "created",
+          "request": {
+            "method": "GET",
+            "url": "https://example.invalid/x"
+          },
+          "extract": {
+            "order_id": {
+              "json_path": "$.id",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "id": "w1",
+          "layer": "web",
+          "depends_on": [
+            "created"
+          ],
+          "steps": [
+            {
+              "action": "wait",
+              "value": "0"
+            }
+          ]
+        }
+      ]
+    },
+    "stage_count": 2,
+    "layers": [
+      "web",
+      "api"
+    ]
+  }
+]

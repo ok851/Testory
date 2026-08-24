@@ -1,0 +1,32 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-baa0ab93",
+    "content_hash": "7862f42d60eb",
+    "created_at": "2026-08-24T07:27:03.383488+00:00",
+    "message": "??????? (run held-1)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "held-1",
+      "scenario": "lock test",
+      "stages": [
+        {
+          "id": "h1",
+          "layer": "hitl",
+          "prompt": "x",
+          "timeout_s": 0.2,
+          "poll_interval_s": 0.05,
+          "sync_point": "done"
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "hitl"
+    ]
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-62b267d8",
+    "content_hash": "c8f1794e4587",
+    "created_at": "2026-08-24T06:16:29.785788+00:00",
+    "message": "??????? (run p-hermes)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "p-hermes",
+      "default_ui_executor": "hermes",
+      "stages": [
+        {
+          "id": "stage-1",
+          "layer": "web",
+          "sync_point": "done",
+          "description": "点一下登录"
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "web"
+    ]
+  }
+]

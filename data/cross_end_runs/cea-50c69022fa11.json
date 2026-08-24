@@ -1,0 +1,77 @@
+{
+  "audit_id": "cea-50c69022fa11",
+  "created_at": "2026-08-24T07:27:03.865728+00:00",
+  "status": "failed",
+  "duration": 0.0,
+  "error": "HERMES_UNAVAILABLE | 本阶段指定了 Hermes 执行器，但 Gateway 未配置或健康检查未通过，不会静默改用经典步骤执行",
+  "flow_name": "未命名场景",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"p-hermes\", \"scenario\": \"未命名场景\", \"test_type\": \"cross_end\", \"user_id\": \"\", \"project_id\": null, \"trigger_source\": \"ui\", \"agent_run_id\": \"\", \"error_code\": \"HERMES_UNAVAILABLE\", \"gate_passed\": false, \"success\": false, \"lock\": \"skipped\", \"assertion_passed\": 0, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {}, \"stage_count\": 1, \"risk\": [{\"stage_id\": \"stage-1\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 1, \"ok_assert\": false}]}",
+  "expected_text": "{\"plan_id\": \"p-hermes\", \"project_id\": null, \"agent_run_id\": \"\", \"audit_id\": \"cea-50c69022fa11\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": false,
+      "error": "本阶段指定了 Hermes 执行器，但 Gateway 未配置或健康检查未通过，不会静默改用经典步骤执行",
+      "elapsed_ms": 0.0,
+      "stage_id": "stage-1",
+      "layer": "web",
+      "executor": "hermes",
+      "steps_executed": 0,
+      "steps_planned": 0,
+      "error_code": "HERMES_UNAVAILABLE",
+      "user_hint": "Hermes 执行器不可用：本阶段指定了 Hermes，但 Gateway 未配置或未就绪。请先启动 Hermes，或去掉 executor/use_hermes 改用经典步骤执行。",
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "risk_events": [
+        {
+          "at": 1787556423.8647218,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L1",
+          "stage_id": "stage-1",
+          "detail": {
+            "auto": true
+          }
+        }
+      ],
+      "recovery_action": "abort",
+      "error_message": "本阶段指定了 Hermes 执行器，但 Gateway 未配置或健康检查未通过，不会静默改用经典步骤执行",
+      "extracted": {},
+      "warnings": [],
+      "evidence": [],
+      "schema": "testory.stage_result/v1"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "p-hermes",
+    "scenario": "未命名场景",
+    "test_type": "cross_end",
+    "user_id": "",
+    "project_id": null,
+    "trigger_source": "ui",
+    "agent_run_id": "",
+    "error_code": "HERMES_UNAVAILABLE",
+    "gate_passed": false,
+    "success": false,
+    "lock": "skipped",
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {},
+    "stage_count": 1,
+    "risk": [
+      {
+        "stage_id": "stage-1",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 1,
+        "ok_assert": false
+      }
+    ]
+  }
+}

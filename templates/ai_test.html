@@ -2110,15 +2110,71 @@
         updateReportCard();
     }
 
+    // 从思考步骤文本中提取工具类型，用于去重折叠
+    function extractThinkType(text) {
+        if (!text) return 'other';
+        var t = String(text);
+        // 优先匹配 browser_xxx / mobile_xxx / desktop_xxx / windows_xxx 等工具名
+        var m = t.match(/\b(browser|mobile|desktop|windows|skill|api|terminal|bash|shell|hermes)_[a-zA-Z0-9_]+/i);
+        if (m) return m[0].toLowerCase();
+        // 常见的概括性关键词
+        if (/snapshot|快照/.test(t)) return 'browser_snapshot';
+        if (/click|点击/i.test(t)) return 'browser_click';
+        if (/type|输入|填写/i.test(t)) return 'browser_type';
+        if (/console|控制台|javascript|js/i.test(t)) return 'browser_console';
+        if (/scroll|滚动/i.test(t)) return 'browser_scroll';
+        if (/navigate|导航/i.test(t)) return 'browser_navigate';
+        if (/get_images|截图|图片/i.test(t)) return 'browser_get_images';
+        if (/press|按键/i.test(t)) return 'browser_press';
+        if (/extract_otp|验证码|短信/i.test(t)) return 'mobile_extract_otp';
+        if (/手机|mobile/i.test(t)) return 'mobile_tool';
+        if (/桌面|desktop|windows/i.test(t)) return 'desktop_tool';
+        return 'other';
+    }
+
+    // 折叠思考步骤：每种类型连续最多显示 1 条，其余折叠为 "...+N 条同类步骤"
+    function dedupThinkSteps(steps) {
+        if (!steps || steps.length === 0) return [];
+        var out = [];
+        var maxSame = 1;
+        var i = 0;
+        while (i < steps.length) {
+            var s = steps[i];
+            var typeKey = extractThinkType(s.text);
+            var run = [s];
+            var j = i + 1;
+            while (j < steps.length && extractThinkType(steps[j].text) === typeKey) {
+                run.push(steps[j]);
+                j++;
+            }
+            var keep = Math.min(run.length, maxSame);
+            for (var k = 0; k < keep; k++) out.push(run[k]);
+            if (run.length > maxSame) {
+                out.push({
+                    step: '...',
+                    text: '... 还有 ' + (run.length - maxSame) + ' 条同类步骤（' + typeKey + '）',
+                    status: 'done',
+                    folded: true,
+                    foldedCount: run.length - maxSame
+                });
+            }
+            i = j;
+        }
+        return out;
+    }
+
     function updateThinkCard() {
         var count = document.getElementById('aiThinkCount');
         var body = document.getElementById('aiThinkCardBody');
-        count.textContent = AI_TEST_STATE.thinkSteps.length;
-        if (AI_TEST_STATE.thinkSteps.length === 0) {
+        var displaySteps = dedupThinkSteps(AI_TEST_STATE.thinkSteps);
+        count.textContent = displaySteps.length;
+        if (displaySteps.length === 0) {
             body.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px 0; font-size: 12px;">暂无思考步骤</div>';
         } else {
-            body.innerHTML = AI_TEST_STATE.thinkSteps.map(function(s) {
-                return '<div class="ai-think-item ' + s.status + '"><span class="ai-think-item__step">' + (s.status === 'done' ? '✓' : s.step) + '</span><span class="ai-think-item__text">' + escapeHtml(s.text) + '</span></div>';
+            body.innerHTML = displaySteps.map(function(s) {
+                var stepLabel = s.folded ? '...' : (s.status === 'done' ? '✓' : s.step);
+                var itemClass = 'ai-think-item ' + (s.folded ? 'done folded' : s.status);
+                return '<div class="' + itemClass + '"><span class="ai-think-item__step">' + stepLabel + '</span><span class="ai-think-item__text">' + escapeHtml(s.text) + '</span></div>';
             }).join('');
         }
     }

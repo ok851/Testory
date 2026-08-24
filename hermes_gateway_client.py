@@ -216,7 +216,8 @@ class HermesGatewayClient:
             "【最高优先级】你是 Testory 跨层自动化执行代理。"
             "网页：CDP 已 attach 且平台常已预导航；禁止再 browser_navigate / 新开空白标签；"
             "优先用指令内 DOM 控件清单 click/type；"
-            "browser_snapshot 是 DOM/a11y ref（非截图），仅难定位时用一次；视觉仅兜底。"
+            "browser_snapshot 是 DOM/a11y ref（非截图）：click/type 前先 snapshot 一次建立会话，"
+            "此后仅难定位时再用（全程最多 2 次，禁止连续反复）；视觉仅兜底。"
             "禁止 skill_view / terminal。"
             "Windows 桌面优先 MCP windows_* / get_screen_*。"
             "未核验勿声称已完成。同一工具连续无进展超过 2 次必须换策略或 NEED_USER_ACTION。"
@@ -614,12 +615,28 @@ def _normalize_hermes_tool_progress(
     status = _norm(
         data.get("status")
         or data.get("phase")
+        or data.get("state")
         or ("completed" if "completed" in (sse_event or "") else "running")
     )
-    result = data.get("result") or data.get("output") or data.get("content")
+    # 扩大 result 提取范围：兼容多种字段名（不同版本/不同网关实现命名不一）
+    result = (
+        data.get("result")
+        or data.get("output")
+        or data.get("content")
+        or data.get("response")
+        or data.get("value")
+        or data.get("data")
+        or data.get("reply")
+    )
+    # 若仍是 None，但 data 里有 ok/success 布尔，至少存一个非空结果占位，避免后续被误过滤
+    if result is None:
+        for _ok_key in ("ok", "success", "succeeded"):
+            if _ok_key in data and data.get(_ok_key) is not None:
+                result = {"ok": bool(data.get(_ok_key) is not False)}
+                break
     summary = _norm(data.get("message") or data.get("summary") or "")
     if not summary:
-        act = args.get("action") or args.get("app") or args.get("text") or ""
+        act = args.get("action") or args.get("app") or args.get("text") or args.get("ref") or args.get("url") or ""
         summary = f"{name}" + (f"({act})" if act else "")
     return {
         "name": name,

@@ -1,0 +1,19 @@
+{
+  "run_id": "tl-b3b774390829",
+  "plan_id": "hitl-plan-2",
+  "scenario": "hitl ok",
+  "started_at": "2026-08-24T07:26:27.078350+00:00",
+  "finished_at": "2026-08-24T07:26:27.230088+00:00",
+  "total_ms": 151.6,
+  "success": true,
+  "stage_metrics": [],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 151.6,
+  "bottleneck": {
+    "type": "none"
+  },
+  "summary": {}
+}

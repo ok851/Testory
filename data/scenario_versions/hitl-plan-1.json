@@ -1,0 +1,32 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-653cf987",
+    "content_hash": "d1c6832e5196",
+    "created_at": "2026-08-24T07:26:26.716038+00:00",
+    "message": "??????? (run hitl-plan-1)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "hitl-plan-1",
+      "scenario": "hitl timeout",
+      "stages": [
+        {
+          "id": "h1",
+          "layer": "hitl",
+          "prompt": "请输入验证码",
+          "timeout_s": 0.3,
+          "poll_interval_s": 0.05,
+          "sync_point": "hitl_done"
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "hitl"
+    ]
+  }
+]

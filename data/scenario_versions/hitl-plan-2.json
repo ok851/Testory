@@ -1,0 +1,33 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-99eaea43",
+    "content_hash": "9614ed211343",
+    "created_at": "2026-08-24T07:26:27.075859+00:00",
+    "message": "??????? (run hitl-plan-2)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "hitl-plan-2",
+      "scenario": "hitl ok",
+      "stages": [
+        {
+          "id": "h2",
+          "layer": "hitl",
+          "gate_id": "orch-gate-2",
+          "prompt": "确认登录",
+          "timeout_s": 2.0,
+          "poll_interval_s": 0.05,
+          "sync_point": "hitl_done"
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "hitl"
+    ]
+  }
+]

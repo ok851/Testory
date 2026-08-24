@@ -1,0 +1,64 @@
+{
+  "run_id": "tl-d48912b6dbe8",
+  "plan_id": "link-1",
+  "scenario": "api then use var",
+  "started_at": "2026-08-24T06:29:39.674925+00:00",
+  "finished_at": "2026-08-24T06:29:39.677445+00:00",
+  "total_ms": 2.1,
+  "success": true,
+  "stage_metrics": [
+    {
+      "stage_id": "a1",
+      "layer": "api",
+      "elapsed_ms": 0.0,
+      "ok": true,
+      "steps_executed": 0,
+      "executor": "",
+      "sync_wait_ms": 0
+    },
+    {
+      "stage_id": "w1",
+      "layer": "web",
+      "elapsed_ms": 1.0,
+      "ok": true,
+      "steps_executed": 1,
+      "executor": "",
+      "sync_wait_ms": 0
+    }
+  ],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 1.1,
+  "bottleneck": {
+    "type": "distributed",
+    "detail": {
+      "stage_id": "w1",
+      "layer": "web",
+      "elapsed_ms": 1.0,
+      "percentage": 47.6
+    }
+  },
+  "summary": {
+    "stage_count": 2,
+    "total_stage_ms": 1.0,
+    "avg_stage_ms": 0.5,
+    "max_stage_ms": 1.0,
+    "min_stage_ms": 0.0,
+    "layer_summary": {
+      "api": {
+        "count": 1,
+        "total_ms": 0.0,
+        "avg_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "web": {
+        "count": 1,
+        "total_ms": 1.0,
+        "avg_ms": 1.0,
+        "max_ms": 1.0
+      }
+    }
+  }
+}

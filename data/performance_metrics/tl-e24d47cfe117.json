@@ -1,0 +1,19 @@
+{
+  "run_id": "tl-e24d47cfe117",
+  "plan_id": "skip-1",
+  "scenario": "lock test",
+  "started_at": "2026-08-24T09:45:09.987866+00:00",
+  "finished_at": "2026-08-24T09:45:10.193972+00:00",
+  "total_ms": 206.1,
+  "success": false,
+  "stage_metrics": [],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 206.1,
+  "bottleneck": {
+    "type": "none"
+  },
+  "summary": {}
+}

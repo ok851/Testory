@@ -19,6 +19,49 @@ _last_screenshot = b""  # 最新截图缓存
 _screen_share_active = False  # 共享屏幕开关
 _screen_share_interval = 3    # 共享屏幕截图间隔（秒）
 
+# DOM 快照短 TTL 缓存（避免同一页面在 8 秒内被 hermes_execute 反复重取）
+# 每次导航/新标签会自动因 _cache_key 变化而失效
+_DOM_CACHE_TTL_SEC = 8.0
+_dom_cache: Dict[str, Dict[str, Any]] = {}
+import time as _time_mod
+
+
+def _dom_cache_get(key: str) -> Optional[str]:
+    try:
+        entry = _dom_cache.get(key)
+        if not entry:
+            return None
+        if _time_mod.monotonic() - float(entry.get("ts", 0)) > _DOM_CACHE_TTL_SEC:
+            _dom_cache.pop(key, None)
+            return None
+        val = entry.get("value")
+        return val if isinstance(val, str) else None
+    except Exception:
+        return None
+
+
+def _dom_cache_set(key: str, value: str) -> None:
+    try:
+        _dom_cache[key] = {"ts": _time_mod.monotonic(), "value": value}
+        # 简单清理：超过 20 条时丢弃最旧的
+        if len(_dom_cache) > 20:
+            oldest_k = min(
+                _dom_cache.keys(),
+                key=lambda k: float((_dom_cache.get(k) or {}).get("ts", 0)),
+            )
+            _dom_cache.pop(oldest_k, None)
+    except Exception:
+        pass
+
+
+def _dom_cache_key_for_page(suffix: str = "") -> str:
+    try:
+        pu = _page.url if _page and not _page.is_closed() else ""
+        pt = _page.title() if _page and not _page.is_closed() else ""
+        return f"{suffix}|{pu}|{pt}"
+    except Exception:
+        return suffix
+
 
 def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edge", force_new: bool = False) -> bool:
     """
@@ -296,9 +339,14 @@ def get_page_snapshot() -> str:
     """
     获取当前页面快照文本（供 _build_system_prompt 使用）。
     复用 ai_page_probe 的 JS 探测逻辑，但操作已启动的 Page 对象。
+    + 8 秒 TTL 缓存（同一 URL/标题 不重复 evaluate）。
     """
     if not _page or _page.is_closed():
         return ""
+    _ck = _dom_cache_key_for_page("snap")
+    _cached = _dom_cache_get(_ck)
+    if _cached:
+        return _cached
     try:
         from ai_page_probe import _COLLECT_INTERACTIVE_JS_FLAT, _format_summary_lines
 
@@ -311,10 +359,16 @@ def get_page_snapshot() -> str:
 
         registry = _build_registry_from_rows(rows or [])
         text = _format_summary_lines(title, url, registry, max_lines=90, max_chars=18000)
-        return text or f"URL: {url}\nTitle: {title}"
+        result = text or f"URL: {url}\nTitle: {title}"
+        if result:
+            _dom_cache_set(_ck, result)
+        return result
     except Exception:
         try:
-            return f"URL: {_page.url}\nTitle: {_page.title()}"
+            result = f"URL: {_page.url}\nTitle: {_page.title()}"
+            if result:
+                _dom_cache_set(_ck, result)
+            return result
         except Exception:
             return ""
 
@@ -382,11 +436,17 @@ def get_dom_context_pack() -> str:
     """获取 DOM 上下文包（供 _build_system_prompt 使用）。
     
     改进：增加等待页面加载和重试机制，确保获取到有效的 DOM 信息。
+    + 8 秒 TTL 缓存（同一 URL/标题 不重复采集）。
     """
     global _page
     if not _page or _page.is_closed():
         return ""
     
+    _ck = _dom_cache_key_for_page("ctx")
+    _cached = _dom_cache_get(_ck)
+    if _cached:
+        return _cached
+
     # 等待页面就绪
     _wait_for_page_ready(timeout_ms=3000)
     
@@ -399,13 +459,17 @@ def get_dom_context_pack() -> str:
         try:
             result = collect_fn()
             if result and len(result.strip()) > 10:
+                _dom_cache_set(_ck, result)
                 return result
         except Exception:
             continue
     
     # 所有策略都失败，返回基本页面信息
     try:
-        return _get_basic_page_info()
+        result = _get_basic_page_info()
+        if result:
+            _dom_cache_set(_ck, result)
+        return result
     except Exception:
         return ""
 
@@ -632,10 +696,10 @@ def get_rich_page_context(task_instruction: str = "") -> str:
 
 
 def _generate_js_suggestion(task_instruction: str, has_dom: bool) -> str:
-    """根据任务指令生成完整的 JavaScript 操作代码（可直接用于 browser_evaluate）。
-    
+    """根据任务指令生成完整的 JavaScript 操作代码（可直接用于 browser_console）。
+
     生成的代码是可直接执行的完整 JavaScript 代码块，Agent 可以直接调用：
-    browser_evaluate(expression=<代码>)
+    browser_console(expression=<代码>)
     """
     if not task_instruction:
         return ""
@@ -813,17 +877,17 @@ def _generate_js_suggestion(task_instruction: str, has_dom: bool) -> str:
 })()"""
         )
     
-    suggestions.append("【可直接执行的 JavaScript 代码（用于 browser_evaluate）】")
+    suggestions.append("【可直接执行的 JavaScript 代码（用于 browser_console）】")
     suggestions.extend(code_blocks)
     suggestions.append("")
     suggestions.append("【使用方法】")
-    suggestions.append("直接调用 browser_evaluate(expression=<上述代码>) 即可获取结果")
+    suggestions.append("直接调用 browser_console(expression=<上述代码>) 即可获取结果")
     suggestions.append("根据返回的元素列表，选择目标元素的 cssSelector")
-    suggestions.append("然后使用 browser_evaluate 执行操作代码")
+    suggestions.append("然后使用 browser_console(expression=...) 执行操作代码")
     suggestions.append("")
     suggestions.append("【操作代码模板】")
-    suggestions.append("// 点击元素：browser_evaluate(expression='document.querySelector(SELECTOR).click()')")
-    suggestions.append("// 输入文本：browser_evaluate(expression='const el=document.querySelector(SELECTOR);el.value=TEXT;el.dispatchEvent(new Event(\"input\",{bubbles:true}))')")
+    suggestions.append("// 点击元素：browser_console(expression='document.querySelector(SELECTOR).click()')")
+    suggestions.append("// 输入文本：browser_console(expression='const el=document.querySelector(SELECTOR);el.value=TEXT;el.dispatchEvent(new Event(\"input\",{bubbles:true}))')")
     
     return "\n".join(suggestions)
 
@@ -833,18 +897,18 @@ def _build_element_locating_strategy(has_dom: bool) -> str:
     if has_dom:
         return (
             "【元素定位策略 - 必须严格遵守】\n"
-            "  ⚠️ 最重要规则：你必须使用 browser_evaluate 执行上方提供的 JavaScript 代码！\n"
-            "  ⚠️ 禁止调用 browser_snapshot（最多 0 次）！\n"
+            "  ⚠️ 最重要规则：你必须使用 browser_console(expression=...) 执行上方提供的 JavaScript 代码！\n"
+            "  ⚠️ browser_snapshot 全程最多 2 次、禁止连续反复调用！\n"
             "\n"
             "  执行步骤：\n"
-            "  1. 直接调用 browser_evaluate(expression=上方的通用 DOM 分析代码)\n"
+            "  1. 直接调用 browser_console(expression=上方的通用 DOM 分析代码)\n"
             "  2. 分析返回的元素列表，找到目标元素的 cssSelector\n"
-            "  3. 再次调用 browser_evaluate(expression='document.querySelector(cssSelector).click()')\n"
-            "  4. 对输入框使用：browser_evaluate(expression='const el=document.querySelector(cssSelector);el.value=text;el.dispatchEvent(new Event(\"input\",{bubbles:true}))')\n"
+            "  3. 再次调用 browser_console(expression='document.querySelector(cssSelector).click()')\n"
+            "  4. 对输入框使用：browser_console(expression='const el=document.querySelector(cssSelector);el.value=text;el.dispatchEvent(new Event(\"input\",{bubbles:true}))')\n"
             "\n"
             "  示例（不要使用这些具体选择器，先执行上方的代码获取实际选择器）：\n"
-            "  browser_evaluate(expression=\"const el=document.querySelector('#username');el.value='test';el.dispatchEvent(new Event('input',{bubbles:true}))\")\n"
-            "  browser_evaluate(expression=\"document.querySelector('button.login-btn').click()\")\n"
+            "  browser_console(expression=\"const el=document.querySelector('#username');el.value='test';el.dispatchEvent(new Event('input',{bubbles:true}))\")\n"
+            "  browser_console(expression=\"document.querySelector('button.login-btn').click()\")\n"
             "\n"
             "  React/Vue 特别注意：\n"
             "  - 必须使用 dispatchEvent 触发事件\n"
@@ -854,21 +918,21 @@ def _build_element_locating_strategy(has_dom: bool) -> str:
     else:
         return (
             "【元素定位策略 - DOM 不可用】\n"
-            "  ⚠️ 最重要规则：你必须使用 browser_evaluate 执行上方提供的 JavaScript 代码！\n"
-            "  ⚠️ 禁止调用 browser_snapshot（最多 0 次）！\n"
+            "  ⚠️ 最重要规则：你必须使用 browser_console(expression=...) 执行上方提供的 JavaScript 代码！\n"
+            "  ⚠️ browser_snapshot 全程最多 2 次、禁止连续反复调用！\n"
             "\n"
             "  执行步骤：\n"
-            "  1. 直接调用 browser_evaluate(expression=上方的通用 DOM 分析代码)\n"
+            "  1. 直接调用 browser_console(expression=上方的通用 DOM 分析代码)\n"
             "  2. 根据返回的元素列表和视觉描述，找到目标元素\n"
-            "  3. 使用 browser_evaluate 执行操作：\n"
+            "  3. 使用 browser_console(expression=...) 执行操作：\n"
             "     - document.querySelector('input[name=\"xxx\"]').click() 点击\n"
             "     - const el=document.querySelector('input[name=\"xxx\"]');el.value='text';el.dispatchEvent(new Event('input',{bubbles:true})) 输入\n"
-            "  4. 仅当 JavaScript 也完全无法定位时，使用一次 browser_snapshot（最多 1 次）\n"
+            "  4. 仅当 JavaScript 也完全无法定位时，才使用 browser_snapshot（全程最多 2 次）\n"
             "\n"
             "  绝对禁止：\n"
-            "  - 禁止在不尝试 browser_evaluate 的情况下直接调用 browser_snapshot\n"
-            "  - 禁止连续调用 browser_snapshot\n"
-            "  - 禁止反复调用 browser_console 或其他工具来获取页面信息"
+            "  - 禁止在不尝试 browser_console 执行 JavaScript 的情况下直接调用 browser_snapshot\n"
+            "  - 禁止连续反复调用 browser_snapshot\n"
+            "  - 禁止反复调用 browser_snapshot / browser_get_images 等只读工具空转"
         )
 
 

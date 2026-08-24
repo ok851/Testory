@@ -3,6 +3,11 @@
 
 Agent（大脑）调用本模块；手机 APK（双手）拉取 job 并本机执行后上报。
 桌面侧仍用 windows_*；本模块提供 desktop_* 别名便于统一工具面。
+
+三级 OTP 获取策略：
+1. 通知监听（APK 本机 extract_otp）— 主路径
+2. scrcpy 视觉（屏幕截图 + OCR）— 快速兜底
+3. 手动兜底 — 用户输入
 """
 from __future__ import annotations
 
@@ -90,6 +95,7 @@ def wait_mobile_job(
     timeout_sec: float = 120.0,
     abort_event: Any = None,
     on_tick: Any = None,
+    poll_interval_sec: float = 1.0,
 ) -> Dict[str, Any]:
     from mobile_sync_store import wait_for_run_job
 
@@ -98,11 +104,21 @@ def wait_mobile_job(
         timeout_sec=timeout_sec,
         abort_event=abort_event,
         on_tick=on_tick,
+        poll_interval_sec=poll_interval_sec,
     )
 
 
-def ensure_mobile_hand_ready(user_id: int = 0, device_id: str = "") -> Optional[Dict[str, Any]]:
-    """无配对手机或无障碍轮询心跳过期时立刻失败，避免 enqueue 后空等。"""
+def ensure_mobile_hand_ready(
+    user_id: int = 0,
+    device_id: str = "",
+    *,
+    poller_retry: int = 0,
+) -> Optional[Dict[str, Any]]:
+    """无配对手机或无障碍轮询心跳过期时失败，避免 enqueue 后空等。
+
+    poller_retry: 心跳过期时额外重试次数（每次等 5s），默认 0 = 不重试。
+    内部 mobile_extract_otp / mobile_run_steps 调用时自动传入 3 次重试。
+    """
     try:
         from mobile_sync_store import device_poller_status_for_user, list_paired_devices_for_user
 
@@ -129,7 +145,6 @@ def ensure_mobile_hand_ready(user_id: int = 0, device_id: str = "") -> Optional[
             "paired_devices": [d.get("device_id") for d in devices],
         }
 
-    # 跳过心跳：CI / 显式放行；有 OTP mock 时也不强卡 poller
     skip_poller = (os.environ.get("MOBILE_HAND_SKIP_POLLER") or "").strip().lower() in (
         "1",
         "true",
@@ -139,25 +154,33 @@ def ensure_mobile_hand_ready(user_id: int = 0, device_id: str = "") -> Optional[
     if skip_poller:
         return None
 
-    try:
-        status = device_poller_status_for_user(int(user_id or 0), want)
-    except Exception:
-        status = {"alive_count": 0, "stale_sec": 45}
-    if int(status.get("alive_count") or 0) <= 0:
-        stale = status.get("stale_sec") or 45
-        return {
-            "success": False,
-            "ok": False,
-            "error": (
-                f"手机已配对，但近 {int(stale)}s 内无任务轮询心跳。"
-                "请打开 APK 无障碍服务（PcRunJobPoller 仅在无障碍内运行），"
-                "确认界面显示已连接后再试。"
-            ),
-            "error_code": "MOBILE_POLLER_STALE",
-            "poller_status": status,
-            "paired_devices": [d.get("device_id") for d in devices],
-        }
-    return None
+    max_attempts = 1 + max(0, int(poller_retry))
+    last_status: Dict[str, Any] = {}
+    for attempt in range(max_attempts):
+        try:
+            status = device_poller_status_for_user(int(user_id or 0), want)
+        except Exception:
+            status = {"alive_count": 0, "stale_sec": 45}
+        last_status = status
+        if int(status.get("alive_count") or 0) > 0:
+            return None
+        if attempt < max_attempts - 1:
+            # 原 8.0s 等待过长，导致短信验证码时效性丢失；降至 2.5s（3次重试=等待约5s，仍有充分时间让 APK 回发心跳）
+            time.sleep(2.5)
+
+    stale = last_status.get("stale_sec") or 45
+    return {
+        "success": False,
+        "ok": False,
+        "error": (
+            f"手机已配对，但近 {int(stale)}s 内无任务轮询心跳（已等待重试 {max_attempts} 次）。"
+            "请打开 APK 无障碍服务（PcRunJobPoller 仅在无障碍内运行），"
+            "确认界面显示已连接后再试。"
+        ),
+        "error_code": "MOBILE_POLLER_STALE",
+        "poller_status": last_status,
+        "paired_devices": [d.get("device_id") for d in devices],
+    }
 
 
 def mobile_extract_otp(
@@ -170,10 +193,13 @@ def mobile_extract_otp(
     mock_allowed: bool = True,
     abort_event: Any = None,
     on_tick: Any = None,
+    allow_scrcpy_vision: bool = True,
 ) -> Dict[str, Any]:
-    """高层工具：等待手机本机提取短信/通知验证码，写入 sms_otp。
+    """高层工具：三级 OTP 获取策略
 
-    CI / 无真机：设置环境变量 MOBILE_OTP_MOCK=123456 可立即返回（不 enqueue）。
+    1. 通知监听（APK 本机 extract_otp）— 主路径
+    2. scrcpy 视觉（屏幕截图 + OCR）— 快速兜底
+    3. 手动兜底 — 用户输入
     """
     mock = _mock_otp() if mock_allowed else ""
     if mock:
@@ -187,8 +213,22 @@ def mobile_extract_otp(
         }
 
     device_id = ""
-    hand_err = ensure_mobile_hand_ready(user_id, device_id)
+    evidence: List[Dict[str, Any]] = []
+
+    # 一级：通知监听（APK 本机）
+    hand_err = ensure_mobile_hand_ready(user_id, device_id, poller_retry=2)
     if hand_err:
+        evidence.append({"type": "hand_check", "ok": False, "error": hand_err.get("error", "")})
+        # 手机未就绪时，直接尝试 scrcpy 视觉路径
+        if allow_scrcpy_vision:
+            scrcpy_result = _try_scrcpy_vision_otp(
+                user_id=user_id,
+                sender_hint=sender_hint,
+                pattern=pattern,
+            )
+            if scrcpy_result.get("success"):
+                scrcpy_result["evidence"] = evidence + scrcpy_result.get("evidence", [])
+                return scrcpy_result
         return hand_err
 
     job_meta = {
@@ -197,7 +237,6 @@ def mobile_extract_otp(
         "pattern": (pattern or "").strip(),
         "timeout_sec": float(timeout_sec),
     }
-    # 给手机一个可识别步骤（APK 看到 action=extract_otp 即走取码逻辑）
     steps = [
         {
             "action": "extract_otp",
@@ -221,6 +260,7 @@ def mobile_extract_otp(
         timeout_sec=timeout_sec,
         abort_event=abort_event,
         on_tick=on_tick,
+        poll_interval_sec=0.5,
     )
     payload = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
     vars_out = {}
@@ -234,7 +274,6 @@ def mobile_extract_otp(
     if not otp and isinstance(payload.get("extracted"), dict):
         otp = payload["extracted"].get("sms_otp") or ""
         vars_out.update(payload["extracted"])
-    # 手机可能把原文放在 results[0].extractedText
     if not otp:
         results = payload.get("results") if isinstance(payload.get("results"), list) else []
         for r in results:
@@ -262,8 +301,21 @@ def mobile_extract_otp(
             "variables": vars_out,
             "job_id": job_id,
             "source": "device_await",
-            "evidence": [{"type": "mobile_extract_otp", "job_id": job_id}],
+            "evidence": evidence + [{"type": "mobile_extract_otp", "job_id": job_id}],
         }
+
+    # 二级：scrcpy 视觉兜底
+    if allow_scrcpy_vision:
+        scrcpy_result = _try_scrcpy_vision_otp(
+            user_id=user_id,
+            sender_hint=sender_hint,
+            pattern=pattern,
+        )
+        if scrcpy_result.get("success"):
+            scrcpy_result["evidence"] = evidence + scrcpy_result.get("evidence", [])
+            return scrcpy_result
+
+    # 三级：手动兜底
     return {
         "success": False,
         "ok": False,
@@ -275,7 +327,48 @@ def mobile_extract_otp(
         or ("未解析到验证码" if not otp else "手机本机取码未成功"),
         "error_code": job.get("error_code") or "MOBILE_OTP_EXTRACT_FAILED",
         "source": "device_await",
+        "evidence": evidence,
+        "manual_fallback_needed": True,
+        "hint": "请查看手机短信/通知并手动输入验证码",
     }
+
+
+def _try_scrcpy_vision_otp(
+    *,
+    user_id: int = 0,
+    sender_hint: str = "",
+    pattern: str = "",
+) -> Dict[str, Any]:
+    """尝试 scrcpy 视觉路径提取验证码。
+
+    当 APK 通知监听失败或手机未就绪时，直接通过 ADB 截图 + OCR 获取验证码。
+    速度优势：无需 APK enqueue/await 轮询，直接获取屏幕内容进行识别。
+    """
+    try:
+        from mobile_scrcpy_vision import (
+            get_device_serial_for_user,
+            extract_otp_from_device,
+        )
+    except ImportError:
+        return {"success": False, "source": "scrcpy_vision", "error": "scrcpy_vision not available"}
+
+    serial = get_device_serial_for_user(user_id)
+    if not serial:
+        return {
+            "success": False,
+            "source": "scrcpy_vision",
+            "error": "无可用设备 serial",
+        }
+
+    result = extract_otp_from_device(
+        serial,
+        sender_hint=sender_hint,
+        pattern=pattern,
+        user_id=user_id,
+        navigate_to_messages=True,
+    )
+    result["source"] = "scrcpy_vision"
+    return result
 
 
 
@@ -296,7 +389,7 @@ def mobile_run_steps(
     # 不信任调用方/模型传入的 device_id，避免绑到历史设备
     device_id = ""
     if not skip_hand_check:
-        hand_err = ensure_mobile_hand_ready(user_id, device_id)
+        hand_err = ensure_mobile_hand_ready(user_id, device_id, poller_retry=5)
         if hand_err:
             return hand_err
     job_id = enqueue_mobile_job(

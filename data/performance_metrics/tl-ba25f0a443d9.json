@@ -1,0 +1,49 @@
+{
+  "run_id": "tl-ba25f0a443d9",
+  "plan_id": "p-hermes",
+  "scenario": "未命名场景",
+  "started_at": "2026-08-24T06:59:30.790901+00:00",
+  "finished_at": "2026-08-24T06:59:30.794823+00:00",
+  "total_ms": 3.2,
+  "success": false,
+  "stage_metrics": [
+    {
+      "stage_id": "stage-1",
+      "layer": "web",
+      "elapsed_ms": 0.0,
+      "ok": false,
+      "steps_executed": 0,
+      "executor": "hermes",
+      "sync_wait_ms": 0
+    }
+  ],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 3.2,
+  "bottleneck": {
+    "type": "distributed",
+    "detail": {
+      "stage_id": "stage-1",
+      "layer": "web",
+      "elapsed_ms": 0.0,
+      "percentage": 0.0
+    }
+  },
+  "summary": {
+    "stage_count": 1,
+    "total_stage_ms": 0.0,
+    "avg_stage_ms": 0.0,
+    "max_stage_ms": 0.0,
+    "min_stage_ms": 0.0,
+    "layer_summary": {
+      "web": {
+        "count": 1,
+        "total_ms": 0.0,
+        "avg_ms": 0.0,
+        "max_ms": 0.0
+      }
+    }
+  }
+}

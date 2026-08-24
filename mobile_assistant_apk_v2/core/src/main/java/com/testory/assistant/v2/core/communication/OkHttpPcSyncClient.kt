@@ -109,6 +109,28 @@ class OkHttpPcSyncClient @Inject constructor(
         val savedPort = prefs.getInt("pc_port", 0)
         if (savedHost.isNotBlank() && savedPort > 0) {
             baseUrl = "http://$savedHost:$savedPort"
+            // 有缓存的 token 和 baseUrl → 尝试恢复连接状态
+            // PcRunJobPoller 仅在 state==CONNECTED 时轮询，不恢复会导致心跳超时
+            if (deviceToken.isNotBlank()) {
+                _state.value = PcConnectionState.CONNECTING
+                // 异步 ping 确认可达后恢复 CONNECTED
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val request = Request.Builder()
+                            .url("$baseUrl/api/ping")
+                            .get()
+                            .build()
+                        val response = client.newCall(request).execute()
+                        if (response.isSuccessful) {
+                            _state.value = PcConnectionState.CONNECTED
+                        } else {
+                            _state.value = PcConnectionState.DISCONNECTED
+                        }
+                    } catch (_: Exception) {
+                        _state.value = PcConnectionState.DISCONNECTED
+                    }
+                }
+            }
         }
     }
 

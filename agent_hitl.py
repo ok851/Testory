@@ -513,15 +513,25 @@ def reset_hitl_state_for_tests() -> None:
         _EVENTS.clear()
 
 
-def looks_like_hitl_needed(text: str) -> bool:
-    """仅在真正需要用户介入时返回 True（验证码/扫码登录等）。
+def looks_like_hitl_needed(
+    text: str,
+    *,
+    tools_used: Optional[List[str]] = None,
+    cross_end_vars: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """仅在真正需要用户介入时返回 True。
 
-    勿匹配「可先手动完成」这类失败建议，否则会把桌面兜底 JSON 误标成 HITL。
+    关键排除条件（AI 有能力自动处理时不触发 HITL）：
+    - 有 sms_otp 变量（mobile_extract_otp 已成功取码）→ 验证码关键词不触发
+    - 有 mobile_extract_otp 工具调用过 → 验证码/登录相关关键词不触发
+    - 只有 NEED_USER_ACTION 显式标记 或 扫码/人机验证（AI 无法自动处理的）才触发
     """
     raw = text or ""
     t = raw.lower()
-    # 显式标记优先
-    if "NEED_USER_ACTION:" in raw or "need_user_action" in t:
+    # 显式 NEED_USER_ACTION 标记才触发最高优先级
+    if "NEED_USER_ACTION:" in raw:
+        return True
+    if "need_user_action" in t and ("need_user_action:" in t or "NEED_USER_ACTION" in raw):
         return True
     # 鉴权/兜底失败不是 HITL
     if any(
@@ -536,13 +546,25 @@ def looks_like_hitl_needed(text: str) -> bool:
         )
     ):
         return False
-    keys = (
+    # AI 可自动处理的条件：已成功调用 mobile_extract_otp 或已有 sms_otp
+    tools_used = tools_used or []
+    cross_end_vars = cross_end_vars or {}
+    has_otp_capability = (
+        "mobile_extract_otp" in tools_used
+        or bool(cross_end_vars.get("sms_otp"))
+    )
+    # 扫码登录、人机验证（滑动/点选）AI 无法自动处理 → 触发
+    must_hitl_keys = ("人机验证", "captcha", "扫码登录")
+    if any(k in raw or k in t for k in must_hitl_keys):
+        return True
+    # 其他关键词只有在 AI 不具备自动处理能力时才触发
+    weak_keys = (
         "验证码",
-        "captcha",
-        "人机验证",
-        "扫码登录",
         "等待人工",
         "请先登录",
         "需要登录后",
     )
-    return any(k in raw or k in t for k in keys)
+    if any(k in raw or k in t for k in weak_keys):
+        if not has_otp_capability:
+            return True
+    return False

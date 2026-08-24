@@ -1,0 +1,32 @@
+[
+  {
+    "version": 1,
+    "version_id": "v1-39a03478",
+    "content_hash": "e0905027cb58",
+    "created_at": "2026-08-24T07:27:03.105043+00:00",
+    "message": "??????? (run busy-1)",
+    "author": "system",
+    "tags": [
+      "auto",
+      "pre-exec"
+    ],
+    "plan": {
+      "plan_id": "busy-1",
+      "scenario": "lock test",
+      "stages": [
+        {
+          "id": "h1",
+          "layer": "hitl",
+          "prompt": "x",
+          "timeout_s": 0.2,
+          "poll_interval_s": 0.05,
+          "sync_point": "done"
+        }
+      ]
+    },
+    "stage_count": 1,
+    "layers": [
+      "hitl"
+    ]
+  }
+]
