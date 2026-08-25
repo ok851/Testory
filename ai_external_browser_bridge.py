@@ -432,11 +432,12 @@ def _wait_for_page_ready(timeout_ms: int = 5000) -> bool:
     return False
 
 
-def get_dom_context_pack() -> str:
+def get_dom_context_pack(*, skip_wait: bool = False, wait_timeout_ms: int = 3000) -> str:
     """获取 DOM 上下文包（供 _build_system_prompt 使用）。
     
     改进：增加等待页面加载和重试机制，确保获取到有效的 DOM 信息。
     + 8 秒 TTL 缓存（同一 URL/标题 不重复采集）。
+    skip_wait: 外层已 wait 过时传 True，避免双次 3s 等待。
     """
     global _page
     if not _page or _page.is_closed():
@@ -447,8 +448,9 @@ def get_dom_context_pack() -> str:
     if _cached:
         return _cached
 
-    # 等待页面就绪
-    _wait_for_page_ready(timeout_ms=3000)
+    # 等待页面就绪（可由 get_rich_page_context 跳过，避免双 wait）
+    if not skip_wait:
+        _wait_for_page_ready(timeout_ms=int(wait_timeout_ms or 0) or 3000)
     
     strategies = [
         _collect_dom_via_js,
@@ -620,15 +622,15 @@ def get_rich_page_context(task_instruction: str = "") -> str:
     结合 DOM 信息和视觉截图，为 Agent 提供完整的页面理解。
     
     改进：
-    1. 增加等待页面加载逻辑
-    2. 当 DOM 为空时，自动使用视觉辅助
+    1. 仅一次 page-ready wait（避免与 get_dom_context_pack 双等）
+    2. DOM 为空时默认不跑 VLM（仅屏幕观察开启或 AI_DOM_VLM_FALLBACK=1）
     3. 始终提供 JavaScript 定位建议
     """
-    global _page
+    global _page, _screen_share_active
     if not _page or _page.is_closed():
         return ""
     
-    # 等待页面就绪
+    # 等待页面就绪（仅一次）
     _wait_for_page_ready(timeout_ms=3000)
     
     context_parts = []
@@ -641,37 +643,42 @@ def get_rich_page_context(task_instruction: str = "") -> str:
     except Exception:
         context_parts.append("【页面状态】无法获取")
     
-    # 2. 获取 DOM 信息（含等待和重试）
-    dom_pack = get_dom_context_pack()
+    # 2. 获取 DOM 信息（外层已 wait，跳过二次等待）
+    dom_pack = get_dom_context_pack(skip_wait=True)
     has_dom = bool(dom_pack and len(dom_pack.strip()) > 10)
     
-    # 3. 添加 DOM 信息或视觉描述
+    # 3. 添加 DOM 信息；空 DOM 时条件化 VLM
     if has_dom:
         context_parts.append(f"【页面 DOM/可交互控件】\n{dom_pack}")
     else:
-        # DOM 为空，主动获取视觉描述
-        context_parts.append("【页面 DOM 采集结果】未获取到 DOM 信息，将使用视觉辅助定位")
-        try:
-            hint = task_instruction or "页面上的按钮、输入框、链接等可交互元素"
-            visual_desc = get_visual_description(hint)
-            if visual_desc:
-                context_parts.append(f"【页面视觉描述】\n{visual_desc}")
-            else:
-                # 视觉也失败了，提供通用建议
+        context_parts.append("【页面 DOM 采集结果】未获取到 DOM 信息")
+        allow_vlm = bool(_screen_share_active) or (
+            (os.environ.get("AI_DOM_VLM_FALLBACK") or "").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        if allow_vlm:
+            context_parts.append("将使用视觉辅助定位")
+            try:
+                hint = task_instruction or "页面上的按钮、输入框、链接等可交互元素"
+                visual_desc = get_visual_description(hint)
+                if visual_desc:
+                    context_parts.append(f"【页面视觉描述】\n{visual_desc}")
+                else:
+                    context_parts.append(
+                        "【定位建议】\n"
+                        "DOM/视觉均失败：请用 browser_console 执行 JS，或至多一次 browser_snapshot。"
+                    )
+            except Exception:
                 context_parts.append(
                     "【定位建议】\n"
-                    "由于 DOM 和视觉采集均失败，请使用 JavaScript 直接操作：\n"
-                    "  1. document.querySelectorAll('input, button, a, textarea') 获取所有可交互元素\n"
-                    "  2. 遍历元素，根据文字内容或属性定位目标\n"
-                    "  3. 使用 element.click() 或 element.value = 'text' 进行操作"
+                    "请使用 browser_console 直接操作 DOM，或至多一次 browser_snapshot。"
                 )
-        except Exception:
+        else:
             context_parts.append(
                 "【定位建议】\n"
-                "请使用 JavaScript 直接操作 DOM：\n"
-                "  1. document.querySelectorAll('input, button, a, textarea')\n"
-                "  2. 根据元素属性或文字内容定位目标\n"
-                "  3. element.click() 或 element.value = 'text' 进行操作"
+                "请优先用 browser_console(expression=...) 查询/点击；"
+                "难定位时再调用一次 browser_snapshot（全程最多 2 次）。"
+                "开启「允许观察屏幕」后才会自动做视觉描述兜底。"
             )
     
     # 4. 始终添加 JavaScript 定位建议

@@ -634,6 +634,19 @@ def ensure_hermes_home(*, force_env: bool = False) -> Path:
         sync_bundled_skills_to_hermes(force=False)
     except Exception:
         pass
+    # 幂等补丁 Hermes browser_snapshot/console 缓存（避免每次 CLI 子进程）
+    try:
+        from patch_venv_hermes_tools import apply_patches as _apply_hermes_tool_patches
+
+        _apply_hermes_tool_patches()
+    except Exception:
+        try:
+            import patch_venv_hermes_tools as _pvt
+
+            if hasattr(_pvt, "main"):
+                _pvt.main()
+        except Exception:
+            pass
     return home
 
 

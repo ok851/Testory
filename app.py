@@ -2655,6 +2655,49 @@ def mobile_testing_page():
     return render_template('mobile_testing.html', **template_kw)
 
 
+@app.route('/mobile-h264-player')
+@login_required
+def mobile_h264_player_page():
+    """手机 H.264 实时画面观察台（agent 同屏双端观察 / 内嵌 iframe 用）。
+
+    通过 scrcpy WebSocket 桥（mobile_scrcpy_bridge.py, 默认 :8767/scrcpy?serial=）
+    拉取 H.264 帧，前端 WebCodecs 解码渲染到 canvas。支持反控点击。
+    """
+    bridge_port = 8767
+    scrcpy_available = False
+    bridge_ok = False
+    bridge_message = ""
+    try:
+        from mobile_env_config import scrcpy_bridge_port, scrcpy_available as _scrcpy_available
+        bridge_port = scrcpy_bridge_port()
+        scrcpy_available = bool(_scrcpy_available())
+    except Exception:
+        pass
+    # 打开页面即确保 bridge 进程起来（避免前端 WS 探活一直离线）
+    try:
+        from mobile_scrcpy_bridge import ensure_bridge_started
+
+        bridge_ok, bridge_message = ensure_bridge_started()
+    except Exception as exc:
+        bridge_ok = False
+        bridge_message = str(exc)[:200]
+    serial = (request.args.get("serial") or request.args.get("udid") or "").strip()
+    if serial and bridge_ok:
+        try:
+            from mobile_scrcpy_bridge import warm_scrcpy_session
+
+            warm_scrcpy_session(serial)
+        except Exception:
+            pass
+    return render_template(
+        'mobile_h264_player.html',
+        bridge_port=bridge_port,
+        scrcpy_available=scrcpy_available,
+        bridge_ok=bridge_ok,
+        bridge_message=bridge_message or "",
+    )
+
+
 # 项目管理页面
 @app.route('/list_projects')
 @login_required
@@ -4519,6 +4562,30 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr, 
                     params=_ctp,
                     abort_event=abort_event,
                 )
+                if isinstance(tool_meta_extra, dict) and tool_meta_extra.get("chat_reply"):
+                    reply = (tool_meta_extra.get("reply_text") or "").strip()
+                    if not reply:
+                        from ai_chat_tool_loop import _nl_fallback_when_case_json
+
+                        reply = _nl_fallback_when_case_json()
+                    out = {
+                        "success": True,
+                        "provider": "local",
+                        "model": (profile or {}).get("label")
+                        or (profile or {}).get("model_id")
+                        or legacy_model
+                        or "",
+                        "chat_reply": True,
+                        "reply": reply,
+                        "plan": {},
+                        "warnings": [chat_dom_probe_warning] if chat_dom_probe_warning else [],
+                        "chat_tools": tool_meta_extra,
+                    }
+                    if tool_meta_extra.get("failed"):
+                        out["success"] = False
+                        out["error"] = reply
+                        out["_http"] = 422
+                    return out
             except (ValueError, TypeError, RuntimeError) as loop_err:
                 uat_logger.warning('AI chat tool loop failed, fallback to refine: %s', loop_err)
                 tool_meta_extra = {'fallback': 'refine_after_loop_error', 'error': str(loop_err)}
@@ -8010,6 +8077,12 @@ def api_ai_task_chat_stream():
                 test_scope=data.get('test_scope') or '',
                 embedded_session_id=embedded_sid or None,
                 platform_type=platform_type,
+                # 默认禁止把闲聊压成用例 JSON；仅显式生成/优化用例时开启
+                allow_refine_test_plan=bool(
+                    data.get('allow_refine_test_plan')
+                    or data.get('generate_case')
+                    or data.get('refine_plan')
+                ),
             )
 
             for evt_type, evt_data in run_ai_chat_with_tools_stream(
@@ -8339,10 +8412,38 @@ def api_ai_task_execute():
                         "请再发一次任务指令（或确认左栏为桌面/对应平台），不要声称「平台永远无法操作桌面应用」。\n\n"
                         f"用户：{task}"
                     )
-                    reply = (dispatch_chat(chat_prompt, profile, local_ai_service) or "").strip()
+                    reply = (
+                        dispatch_chat(
+                            chat_prompt, profile, local_ai_service, purpose="assistant"
+                        )
+                        or ""
+                    ).strip()
                     if not reply:
                         yield send('error', error='模型未返回内容，请检查推理引擎配置')
                         return
+                    # 兜底：若模型仍吐出用例 JSON，剥掉后给用户可读回复
+                    try:
+                        from ai_chat_tool_loop import (
+                            _strip_invented_case_json,
+                            _looks_like_case_json_blob,
+                            _nl_fallback_when_case_json,
+                            _looks_like_fake_completion_claim,
+                        )
+
+                        cleaned = _strip_invented_case_json(reply)
+                        if not cleaned or _looks_like_case_json_blob(reply):
+                            reply = _nl_fallback_when_case_json(reply)
+                        elif cleaned.strip() != reply.strip():
+                            reply = cleaned.strip()
+                        # 闲聊路径不应出现空口「完成」（常见于被 json_plan 系统提示污染）
+                        if _looks_like_fake_completion_claim(reply):
+                            reply = (
+                                "我这边是对话模式，没有执行任何自动化操作。"
+                                "若要操作浏览器/桌面/手机，请直接给出任务指令"
+                                "（例如「打开百度搜索 AI」）。"
+                            )
+                    except Exception:
+                        pass
                     yield send('reply', text=reply)
                     yield send('done', message='已回复')
                 except Exception as e:
@@ -9352,7 +9453,10 @@ def api_ai_task_execute():
                                         pass
 
                         if hermes_failed:
-                            done_msg = '部分完成' if savable else '执行失败'
+                            if done_meta.get("fake_complete") or done_meta.get("no_tool_case_json"):
+                                done_msg = '未真正执行'
+                            else:
+                                done_msg = '部分完成' if savable else '执行失败'
                         elif hermes_partial or need_user_action:
                             done_msg = '部分完成'
                         else:
@@ -9772,17 +9876,18 @@ _screen_share_states: Dict[str, Dict[str, Any]] = {}
 @login_required
 @api_error_handler
 def api_ai_screen_share_toggle():
-    """开启/关闭屏幕观察工具。开启后 Agent 工具列表包含 get_screen_text / get_screen_description。"""
+    """开启/关闭屏幕观察工具。状态立即返回；OCR/手机预热后台进行，避免 UI 卡住。"""
     data = request.get_json(silent=True) or {}
     enabled = bool(data.get('enabled', False))
     user_id = str(current_user.id)
-    interval = int(data.get('interval', 3))
+    uid_int = int(getattr(current_user, "id", 0) or 0)
+    interval = int(data.get('interval', 3) or 3)
     _screen_share_states[user_id] = {
         'enabled': enabled,
         'interval': interval,
+        'updated_at': time.time(),
     }
 
-    # 同步到 ai_external_browser_bridge 模块
     try:
         import ai_external_browser_bridge as _bridge
         with _bridge._bridge_lock:
@@ -9791,10 +9896,107 @@ def api_ai_screen_share_toggle():
     except Exception:
         pass
 
+    ocr_ok = None
+    ocr_engine = ""
+    ocr_error = ""
+    if enabled:
+        # 轻量 OCR 探测（通常 <100ms）；失败不阻断开关
+        try:
+            from desktop_ocr import engine_name, ocr_available
+
+            ocr_engine = engine_name() or ""
+            ocr_ok = bool(ocr_available() and ocr_engine != "none")
+            if not ocr_ok:
+                ocr_error = "OCR 引擎不可用（未安装 PaddleOCR/Tesseract），PC 屏幕文字观察将失败"
+        except Exception as exc:
+            ocr_ok = False
+            ocr_error = str(exc)[:160]
+        _screen_share_states[user_id]["ocr_ok"] = ocr_ok
+        _screen_share_states[user_id]["ocr_engine"] = ocr_engine
+        _screen_share_states[user_id]["ocr_error"] = ocr_error
+
+        # 手机预热放到后台，避免阻塞开关请求（warm 可达数秒～十余秒）
+        def _bg_warm_mobile() -> None:
+            try:
+                from mobile_scrcpy_vision import get_device_serial_for_user, capture_device_frame
+                from mobile_scrcpy_bridge import ensure_bridge_started, warm_scrcpy_session
+
+                serial = get_device_serial_for_user(uid_int) or ""
+                if not serial:
+                    return
+                ensure_bridge_started()
+                warm_ok, warm_err = warm_scrcpy_session(serial)
+                png = None
+                if warm_ok:
+                    try:
+                        png = capture_device_frame(serial)
+                    except Exception:
+                        png = None
+                st = _screen_share_states.get(user_id) or {}
+                if not st.get("enabled"):
+                    return
+                st["mobile_warm"] = {
+                    "serial": serial,
+                    "warm_ok": bool(warm_ok),
+                    "warm_error": "" if warm_ok else (warm_err or ""),
+                    "capture_ok": bool(png),
+                }
+                _screen_share_states[user_id] = st
+            except Exception as exc:
+                st = _screen_share_states.get(user_id) or {}
+                if st.get("enabled"):
+                    st["mobile_warm"] = {"warm_ok": False, "warm_error": str(exc)[:160]}
+                    _screen_share_states[user_id] = st
+
+        try:
+            import threading as _threading
+
+            _threading.Thread(target=_bg_warm_mobile, daemon=True, name="screen-share-warm").start()
+        except Exception:
+            pass
+    else:
+        st = _screen_share_states.get(user_id) or {}
+        st.pop("mobile_warm", None)
+        _screen_share_states[user_id] = st
+
+    msg = '已启用屏幕观察工具（按需调用）' if enabled else '已关闭屏幕观察工具'
+    if enabled and ocr_ok is False and ocr_error:
+        msg = f"{msg}；警告：{ocr_error}"
+
     return jsonify({
         'success': True,
         'enabled': enabled,
-        'message': '已启用屏幕观察工具（按需调用）' if enabled else '已关闭屏幕观察工具',
+        'message': msg,
+        'ocr_ok': ocr_ok,
+        'ocr_engine': ocr_engine,
+        'ocr_error': ocr_error,
+        'mobile_warm': None,  # 异步预热，前端勿等
+    })
+
+
+@app.route('/api/ai/screen-share/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_screen_share_status():
+    """查询当前用户屏幕观察开关状态（供页面刷新后同步 UI）。"""
+    user_id = str(current_user.id)
+    st = _screen_share_states.get(user_id) or {}
+    enabled = bool(st.get('enabled', False))
+    try:
+        import ai_external_browser_bridge as _bridge
+        with _bridge._bridge_lock:
+            if enabled != bool(getattr(_bridge, "_screen_share_active", False)):
+                _bridge._screen_share_active = enabled
+    except Exception:
+        pass
+    return jsonify({
+        'success': True,
+        'enabled': enabled,
+        'interval': int(st.get('interval') or 3),
+        'ocr_ok': st.get('ocr_ok'),
+        'ocr_engine': st.get('ocr_engine') or '',
+        'ocr_error': st.get('ocr_error') or '',
+        'mobile_warm': st.get('mobile_warm'),
     })
 
 

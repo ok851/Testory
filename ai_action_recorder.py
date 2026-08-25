@@ -88,6 +88,138 @@ _ERROR_NEGATIVE_SNIPPETS = [
     "未执行",
 ]
 
+# 观察/探活工具：不进实时用例、不进可回放 case steps（纯读 DOM/OCR/截图）
+_OBSERVATION_TOOL_NAMES = frozenset(
+    {
+        "browser_snapshot",
+        "browser_get_images",
+        "browser_vision",
+        "get_screen_text",
+        "get_screen_description",
+        "mobile_get_screen_text",
+        "mobile_scrcpy_screenshot",
+        "mobile_get_ui_tree",
+        "windows_screenshot",
+        "windows_get_screen_text",
+        "mobile_screenshot",
+        "snapshot",
+        "console",  # 仅当未提升为 click/input/navigate 时由逻辑丢弃
+    }
+)
+
+# 可写入「实时用例」的动作类型（提升后的标准化名）
+_REPLAYABLE_ACTION_TYPES = frozenset(
+    {
+        "navigate",
+        "goto",
+        "click",
+        "type",
+        "fill",
+        "input",
+        "input_text",
+        "scroll",
+        "wait",
+        "assert",
+        "launch_app",
+        "open_app",
+        "focus_app",
+        "tap",
+        "swipe",
+        "hotkey",
+        "press_key",
+        "extract_otp",
+        "api_call",
+        "back",
+        "home",
+        "select",
+        "hover",
+    }
+)
+
+# browser_console expression → 可回放步骤
+_CONSOLE_CLICK_RE = re.compile(
+    r"""(?:\.click\s*\(|click\s*\()""",
+    re.IGNORECASE,
+)
+_CONSOLE_INPUT_RE = re.compile(
+    r"""(?:\.value\s*=|setAttribute\s*\(\s*['\"]value['\"]|textContent\s*=|innerText\s*=|\.type\s*\()""",
+    re.IGNORECASE,
+)
+_CONSOLE_NAV_RE = re.compile(
+    r"""(?:location\.href\s*=|location\.assign\s*\(|window\.location\s*=|location\.replace\s*\()""",
+    re.IGNORECASE,
+)
+_CONSOLE_SELECTOR_RE = re.compile(
+    r"""(?:querySelector(?:All)?|getElementById)\s*\(\s*['\"]([^'\"]{1,120})['\"]""",
+    re.IGNORECASE,
+)
+_CONSOLE_URL_RE = re.compile(
+    r"""(?:location\.href\s*=|location\.assign\s*\(|location\.replace\s*\()\s*['\"]([^'\"]{2,240})['\"]""",
+    re.IGNORECASE,
+)
+_CONSOLE_VALUE_ASSIGN_RE = re.compile(
+    r"""\.value\s*=\s*['\"]([^'\"]{0,200})['\"]""",
+    re.IGNORECASE,
+)
+
+
+def is_observation_tool(name: str) -> bool:
+    """是否为纯观察/探活工具（默认不进实时用例）。"""
+    n = (name or "").strip()
+    if not n:
+        return False
+    if n in _OBSERVATION_TOOL_NAMES:
+        return True
+    # browser_console 可能被提升为操作，此处仅作粗判；细判见 lift_console_expression
+    if n == "browser_console":
+        return True
+    if n.endswith("_screenshot") or n.endswith("_get_images"):
+        return True
+    return False
+
+
+def lift_console_expression(expression: str) -> Optional[Dict[str, str]]:
+    """把 browser_console 的 JS 提升为 click/input/navigate；纯读则返回 None。"""
+    expr = (expression or "").strip()
+    if not expr:
+        return None
+    # 纯日志 / 读属性 → 丢弃
+    low = expr.lower()
+    if low.startswith("console.") and ".click" not in low and ".value" not in low:
+        return None
+    if _CONSOLE_NAV_RE.search(expr):
+        m = _CONSOLE_URL_RE.search(expr)
+        target = (m.group(1) if m else "")[:120] or "navigate"
+        return {"action_type": "navigate", "target": sanitize_target(target), "input_data": ""}
+    if _CONSOLE_INPUT_RE.search(expr):
+        sel_m = _CONSOLE_SELECTOR_RE.search(expr)
+        val_m = _CONSOLE_VALUE_ASSIGN_RE.search(expr)
+        target = (sel_m.group(1) if sel_m else "input")[:80]
+        input_data = (val_m.group(1) if val_m else "")[:500]
+        return {
+            "action_type": "input",
+            "target": sanitize_target(target),
+            "input_data": input_data,
+        }
+    if _CONSOLE_CLICK_RE.search(expr):
+        sel_m = _CONSOLE_SELECTOR_RE.search(expr)
+        target = (sel_m.group(1) if sel_m else "click")[:80]
+        return {"action_type": "click", "target": sanitize_target(target), "input_data": ""}
+    return None
+
+
+def is_replayable_action_type(action_type: str) -> bool:
+    """动作类型是否适合写入实时/可复用用例。"""
+    a = (action_type or "").strip().lower()
+    if not a:
+        return False
+    if a in _REPLAYABLE_ACTION_TYPES:
+        return True
+    # desktop/mobile aliases already normalized; allow unknown but non-observation names
+    if a in ("snapshot", "console", "screenshot", "extract_text", "get_ui_tree", "vision"):
+        return False
+    return a not in _OBSERVATION_TOOL_NAMES
+
 
 def sanitize_target(target: str) -> str:
     """清理浏览器工具 result 中的 UI 噪声后缀，如 (class)、(已聚焦) 等。"""
@@ -177,9 +309,19 @@ class ActionRecorder:
         
         支持所有平台工具：Web (browser_*)、桌面 (windows_*)、移动端 (mobile_*)。
         对各平台工具的 target 做清理，剥离 UI 噪声和状态观察。
+        观察类工具默认不入库；browser_console 若含 click/input/navigate 则提升为可回放步骤。
         """
         args = args if isinstance(args, dict) else {}
         name = (name or "tool").strip() or "tool"
+        lifted: Optional[Dict[str, str]] = None
+        if name == "browser_console":
+            expr = str(args.get("expression") or args.get("code") or args.get("script") or "")
+            lifted = lift_console_expression(expr)
+            if not lifted:
+                return []  # 纯读 console → 不进实时用例
+        elif is_observation_tool(name):
+            return []
+
         ok: Optional[bool] = None
         verified: Optional[bool] = None
         summary = ""
@@ -346,11 +488,22 @@ class ActionRecorder:
             st = _status_from_flags(ok=ok, verified=verified)
         else:
             st = _status_from_flags(ok=ok, verified=verified) if ok is not None else "warning"
+        # 失败步骤不进实时用例 / 记录器（与 UI verified 过滤对齐）
+        if st in ("fail", "failed", "error"):
+            return []
+        action_type = self._normalize_action_type(name, args)
+        input_data = str(args.get("text") or args.get("input_value") or "")[:500]
+        if lifted:
+            action_type = lifted["action_type"]
+            target = lifted["target"] or target
+            input_data = lifted.get("input_data") or input_data
+        if not is_replayable_action_type(action_type):
+            return []
         rec = ActionRecord(
             action_id=f"act_{len(self.records)}",
-            action_type=self._normalize_action_type(name, args),
+            action_type=action_type,
             target=target or name,
-            input_data=str(args.get("text") or args.get("input_value") or "")[:500],
+            input_data=input_data,
             result=summary or f"{name}",
             status=st,
             raw_text=json.dumps({"name": name, "args": args}, ensure_ascii=False)[:2000],
@@ -505,6 +658,18 @@ class ActionRecorder:
         steps = []
         for rec in self.records:
             if rec.status in ("fail", "failed", "error") and not rec.target:
+                continue
+            if not is_replayable_action_type(rec.action_type):
+                continue
+            # 丢弃 target 仍是工具名的噪声（如 console → browser_console）
+            tgt_low = (rec.target or "").strip().lower()
+            if tgt_low in (
+                "browser_console",
+                "browser_snapshot",
+                "console",
+                "snapshot",
+                "browser_get_images",
+            ):
                 continue
             step: Dict[str, Any] = {
                 "action": rec.action_type,

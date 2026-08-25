@@ -279,11 +279,13 @@ def _gateway_diagnostics() -> dict:
 def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dict[str, Any]:
     """构建投屏信息 payload，供 connect 响应与 mirror/start 复用。
 
-    已放弃内嵌画布方案：投屏统一由手机画面投屏承担（在用户本地电脑启动），
-    不再预热内嵌 scrcpy 会话、不再产出内嵌流地址。
+    外置 scrcpy 窗口与内嵌 H.264 WebSocket 并存：
+    - external_scrcpy_*：本机窗口投屏
+    - mirror_ws_url / warm：内嵌观察（cross_end / h264 player）所需
     """
-    _ = session_id, client_host  # 保留参数以兼容调用方
-    from mobile_env_config import scrcpy_available
+    from urllib.parse import quote
+
+    from mobile_env_config import scrcpy_available, scrcpy_bridge_url
     from mobile_mirror import external_scrcpy_status
 
     ext_status = external_scrcpy_status(udid)
@@ -291,11 +293,35 @@ def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dic
         "scrcpy_available": scrcpy_available(),
         "external_scrcpy_running": ext_status.get("running", False),
         "external_scrcpy_available": ext_status.get("available", False),
-        "client_mirror_hint": "投屏采用手机画面投屏（在本地电脑启动，已放弃内嵌画布方案）",
+        "client_mirror_hint": "投屏：外置窗口或内嵌 H.264（需 bridge :8767）",
+        "session_id": session_id or "",
     }
     if udid:
         try:
-            from mobile_scrcpy_bridge import _diagnose_device_for_scrcpy
+            from mobile_scrcpy_bridge import (
+                _diagnose_device_for_scrcpy,
+                ensure_bridge_started,
+                warm_scrcpy_session,
+            )
+
+            bridge_ok, bridge_msg = ensure_bridge_started()
+            payload["bridge_ok"] = bool(bridge_ok)
+            payload["bridge_message"] = bridge_msg or ""
+            warm_ok, warm_err = warm_scrcpy_session(udid)
+            payload["scrcpy_warm_ok"] = bool(warm_ok)
+            payload["scrcpy_warm_error"] = "" if warm_ok else (warm_err or "")
+            if warm_ok:
+                payload["mirror_backend"] = "scrcpy_ws"
+                payload["mirror_fallback_reason"] = ""
+            else:
+                payload["mirror_backend"] = "external_or_offline"
+                payload["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败"
+            try:
+                payload["mirror_ws_url"] = (
+                    f"{scrcpy_bridge_url(client_host)}/?serial={quote(udid, safe='')}"
+                )
+            except Exception:
+                payload["mirror_ws_url"] = ""
             quick_diag = _diagnose_device_for_scrcpy(udid)
             payload["device_diagnostics"] = {
                 "sdk_level": quick_diag.get("sdk_level"),
@@ -305,8 +331,9 @@ def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dic
                 "warnings": quick_diag.get("warnings", []),
                 "recommended_profile": quick_diag.get("recommended_profile"),
             }
-        except Exception:
-            pass
+        except Exception as exc:
+            payload["bridge_ok"] = False
+            payload["scrcpy_warm_error"] = str(exc)[:200]
     return payload
 
 
@@ -486,6 +513,33 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
                 result["device_diagnostics_error"] = str(exc)
         return jsonify(result)
 
+    @app.route("/api/mobile/mirror/ensure-bridge", methods=["POST", "GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_mirror_ensure_bridge():
+        """启动 scrcpy WebSocket 桥并可选预热指定设备会话（同屏观察 / H.264 播放器入口）。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        serial = (
+            (body.get("serial") or body.get("udid") or request.args.get("serial") or request.args.get("udid") or "")
+            .strip()
+        )
+        if not serial:
+            try:
+                from mobile_device_manager import get_connected_udid
+
+                serial = get_connected_udid() or ""
+            except Exception:
+                serial = ""
+        client_host = (request.host or "").split(":")[0]
+        payload = _mirror_payload(serial, "", client_host=client_host)
+        payload["success"] = True
+        payload["udid"] = serial
+        payload["serial"] = serial
+        return jsonify(payload)
+
     @app.route("/api/mobile/mirror/status", methods=["GET"])
     @login_required
     @api_error_handler
@@ -496,10 +550,11 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         from mobile_env_config import scrcpy_available
         from mobile_mirror import external_scrcpy_status
 
-        udid = (request.args.get("udid") or "").strip()
+        udid = (request.args.get("udid") or request.args.get("serial") or "").strip()
         if not udid:
             from mobile_device_manager import get_connected_udid
             udid = get_connected_udid() or ""
+        warm = (request.args.get("warm") or "").strip().lower() in ("1", "true", "yes", "on")
         ext_status = external_scrcpy_status(udid)
         out: Dict[str, Any] = {
             "success": True,
@@ -507,8 +562,26 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "scrcpy_available": scrcpy_available(),
             "external_scrcpy_running": ext_status.get("running", False),
             "external_scrcpy_available": ext_status.get("available", False),
-            "client_mirror_hint": "投屏采用手机画面投屏（在本地电脑启动，已放弃内嵌画布方案）",
+            "client_mirror_hint": "投屏：外置窗口或内嵌 H.264（需 bridge :8767）",
         }
+        if warm and udid:
+            client_host = (request.host or "").split(":")[0]
+            out.update(_mirror_payload(udid, "", client_host=client_host))
+        elif udid:
+            try:
+                from urllib.parse import quote
+                from mobile_env_config import scrcpy_bridge_url
+                from mobile_scrcpy_bridge import ensure_bridge_started
+
+                bridge_ok, bridge_msg = ensure_bridge_started()
+                out["bridge_ok"] = bool(bridge_ok)
+                out["bridge_message"] = bridge_msg or ""
+                out["mirror_ws_url"] = (
+                    f"{scrcpy_bridge_url((request.host or '').split(':')[0])}/?serial={quote(udid, safe='')}"
+                )
+            except Exception as exc:
+                out["bridge_ok"] = False
+                out["bridge_message"] = str(exc)[:200]
         return jsonify(out)
 
     @app.route("/api/mobile/connection-status", methods=["GET"])

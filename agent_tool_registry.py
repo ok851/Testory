@@ -33,6 +33,18 @@ TOOL_LANES = {
     ],
     "cross_end_mobile": [
         "mobile_extract_otp",
+        "mobile_scrcpy_screenshot",
+        "mobile_scrcpy_extract_otp",
+        "mobile_run_steps",
+        "mobile_run_case",
+        "mobile_tap",
+        "mobile_swipe",
+        "mobile_input",
+        "mobile_back",
+        "mobile_home",
+        "mobile_get_ui_tree",
+        "mobile_get_screen_text",
+        "mobile_await_notification",
     ],
 }
 
@@ -42,6 +54,7 @@ REGISTERED_TOOLS: List[Dict[str, Any]] = [
         "name": "mobile_extract_otp",
         "description": (
             "等待手机本机提取短信/通知中的验证码（默认4-8位数字，优先匹配「验证码」附近）。"
+            "优先走 scrcpy 视觉（截图+OCR，2-5秒），失败后走 APK 通知监听兜底。"
             "成功返回 {sms_otp, variables:{sms_otp}}，可直接用于后续 desktop_type_text/windows_type_text 的文本参数。"
             "参数：timeout_sec=120(默认), sender_hint(可选,如「10086」), pattern(可选,自定义正则分组1)"
         ),
@@ -50,7 +63,93 @@ REGISTERED_TOOLS: List[Dict[str, Any]] = [
             "sender_hint": {"type": "string"},
             "pattern": {"type": "string"},
         },
-        "tags": ["cross-end", "mobile"],
+        "tags": ["cross-end", "mobile", "scrcpy-vision"],
+    },
+    {
+        "name": "mobile_scrcpy_screenshot",
+        "description": (
+            "快速截取已配对手机屏幕并 OCR 识别文字（scrcpy 视觉路径，亚秒级）。"
+            "用于多端联动中快速获取手机屏幕内容，无需 APK 轮询。"
+            "返回 texts（OCR 文本列表）和 text_joined（合并文本）。"
+        ),
+        "input_schema": {
+            "serial": {"type": "string"},
+        },
+        "tags": ["cross-end", "mobile", "scrcpy-vision", "observation"],
+    },
+    {
+        "name": "mobile_scrcpy_extract_otp",
+        "description": (
+            "通过 scrcpy 视觉快速提取验证码（截图+OCR，2-5秒）。"
+            "先导航到信息/短信应用，截图后 OCR 识别验证码。"
+            "速度远快于 mobile_extract_otp 的 APK 轮询路径。"
+        ),
+        "input_schema": {
+            "sender_hint": {"type": "string"},
+            "pattern": {"type": "string"},
+            "timeout_sec": {"type": "number", "default": 30},
+        },
+        "tags": ["cross-end", "mobile", "scrcpy-vision"],
+    },
+    {
+        "name": "mobile_tap",
+        "description": (
+            "在已配对/ADB 连接手机上点击。可按文案定位或直接给 x/y。"
+            "通道：scrcpy 注入 → ADB；不依赖 APK poller。"
+        ),
+        "input_schema": {
+            "description": {"type": "string"},
+            "text": {"type": "string"},
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+            "serial": {"type": "string"},
+        },
+        "tags": ["cross-end", "mobile", "action"],
+    },
+    {
+        "name": "mobile_swipe",
+        "description": "在手机上滑动（x1,y1→x2,y2）。通道：scrcpy 注入 → ADB。",
+        "input_schema": {
+            "x1": {"type": "integer", "required": True},
+            "y1": {"type": "integer", "required": True},
+            "x2": {"type": "integer", "required": True},
+            "y2": {"type": "integer", "required": True},
+            "duration_ms": {"type": "integer"},
+        },
+        "tags": ["cross-end", "mobile", "action"],
+    },
+    {
+        "name": "mobile_input",
+        "description": "向手机输入文本；ASCII 可走 ADB，中文走 APK 本机输入。",
+        "input_schema": {
+            "text": {"type": "string", "required": True},
+            "description": {"type": "string"},
+        },
+        "tags": ["cross-end", "mobile", "action"],
+    },
+    {
+        "name": "mobile_get_ui_tree",
+        "description": "获取手机当前 UI 层级树（紧凑文本），供 mobile_tap(description=) 定位。",
+        "input_schema": {"serial": {"type": "string"}, "max_nodes": {"type": "integer"}},
+        "tags": ["cross-end", "mobile", "observation"],
+    },
+    {
+        "name": "mobile_get_screen_text",
+        "description": "截图手机屏幕并 OCR 可见文字（快速感知）。",
+        "input_schema": {"serial": {"type": "string"}},
+        "tags": ["cross-end", "mobile", "observation", "ocr"],
+    },
+    {
+        "name": "mobile_run_steps",
+        "description": "把 Android 步骤 enqueue 给已配对手机本机回放（需 APK poller 心跳）。",
+        "input_schema": {"steps": {"type": "array", "required": True}, "timeout_sec": {"type": "number"}},
+        "tags": ["cross-end", "mobile", "apk-job"],
+    },
+    {
+        "name": "mobile_run_case",
+        "description": "按 PC 用例库 case_id 在手机本机执行（需 APK poller）。",
+        "input_schema": {"case_id": {"type": "integer", "required": True}},
+        "tags": ["cross-end", "mobile", "apk-job"],
     },
     {
         "name": "desktop_type_text",

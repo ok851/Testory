@@ -216,8 +216,8 @@ class HermesGatewayClient:
             "【最高优先级】你是 Testory 跨层自动化执行代理。"
             "网页：CDP 已 attach 且平台常已预导航；禁止再 browser_navigate / 新开空白标签；"
             "优先用指令内 DOM 控件清单 click/type；"
-            "browser_snapshot 是 DOM/a11y ref（非截图）：click/type 前先 snapshot 一次建立会话，"
-            "此后仅难定位时再用（全程最多 2 次，禁止连续反复）；视觉仅兜底。"
+            "有 DOM 清单时直接操作，不要先调 browser_snapshot；"
+            "browser_snapshot 是 DOM/a11y ref（非截图）：仅难定位时兜底（全程最多 2 次，禁止连续反复）；视觉仅兜底。"
             "禁止 skill_view / terminal。"
             "Windows 桌面优先 MCP windows_* / get_screen_*。"
             "未核验勿声称已完成。同一工具连续无进展超过 2 次必须换策略或 NEED_USER_ACTION。"
@@ -419,7 +419,35 @@ class HermesGatewayClient:
                     for tc in tool_calls if isinstance(tool_calls, list) else [tool_calls]:
                         te = _tool_call_delta_to_event(tc)
                         if te and (te.get("args") or te.get("name") not in ("", "tool")):
-                            # 有函数名时进 traces 用的轻量事件，不进 tool_events 列表刷卡
+                            te_name = str(te.get("name") or "").strip()
+                            # 平台工具（browser_*/windows_*/mobile_*）的 tool_calls delta
+                            # 必须加入 tool_events，否则浏览器步骤永远不会被记录到实时用例
+                            is_platform_tool = (
+                                te_name.startswith("browser_")
+                                or te_name.startswith("windows_")
+                                or te_name.startswith("mobile_")
+                                or te_name in ("navigate", "goto", "click", "type", "snapshot", "scroll",
+                                               "open_app", "tap", "input_text", "swipe", "extract_otp",
+                                               "launch_app", "focus_app", "press_key", "screenshot")
+                            )
+                            if is_platform_tool and te.get("args"):
+                                # 合并 delta 到 tool_events：如果已有同名工具则更新 args，否则新增
+                                _existing = None
+                                for _e in tool_events:
+                                    if _e.get("name") == te_name:
+                                        _existing = _e
+                                        break
+                                if _existing:
+                                    _existing["args"] = te.get("args")
+                                    if not _existing.get("result"):
+                                        _existing["result"] = {"ok": True}
+                                    if not _existing.get("status") or _existing["status"] == "running":
+                                        _existing["status"] = "completed"
+                                else:
+                                    te["status"] = "completed"
+                                    te["result"] = te.get("result") or {"ok": True}
+                                    tool_events.append(te)
+                            # 有函数名时进 traces 用的轻量事件
                             yield ("tool", te)
                 if piece:
                     buf.append(piece)

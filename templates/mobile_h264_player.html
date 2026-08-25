@@ -1,0 +1,422 @@
+{% extends "base.html" %}
+{% block title %}手机实时画面 · Testory{% endblock %}
+{% block head %}
+<style>
+    /* ── 手机 H.264 实时观察台（agent 同屏观察 / 双端观察内嵌页）── */
+    .mhp-root {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 130px);
+        min-height: 420px;
+        padding: 12px 16px 16px;
+        gap: 10px;
+        box-sizing: border-box;
+    }
+    .mhp-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .mhp-toolbar__left, .mhp-toolbar__right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .mhp-device {
+        min-width: 220px;
+        max-width: 340px;
+        height: 34px;
+        padding: 0 10px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        font-size: 13px;
+        background: #fff;
+        color: #1f2937;
+        outline: none;
+    }
+    .mhp-device:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+    .mhp-btn {
+        height: 34px;
+        padding: 0 14px;
+        border: none;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all .15s;
+    }
+    .mhp-btn--primary { background: #4f46e5; color: #fff; }
+    .mhp-btn--primary:hover { background: #4338ca; }
+    .mhp-btn--primary:disabled { background: #a5b4fc; cursor: not-allowed; }
+    .mhp-btn--ghost { background: #f1f5f9; color: #334155; border: 1px solid #e2e8f0; }
+    .mhp-btn--ghost:hover { background: #e2e8f0; }
+    .mhp-btn--danger { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+    .mhp-btn--danger:hover { background: #fecaca; }
+    .mhp-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .mhp-badge--idle { background: #f1f5f9; color: #64748b; }
+    .mhp-badge--ok { background: #dcfce7; color: #15803d; }
+    .mhp-badge--warn { background: #fef3c7; color: #b45309; }
+    .mhp-badge--err { background: #fee2e2; color: #b91c1c; }
+    .mhp-fps { font-size: 12px; color: #64748b; font-variant-numeric: tabular-nums; min-width: 54px; text-align: right; }
+    .mhp-stage {
+        position: relative;
+        flex: 1;
+        background: #0b0f19;
+        border-radius: 12px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 0;
+    }
+    .mhp-stage canvas {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: auto;
+        display: block;
+        object-fit: contain;
+        box-shadow: 0 4px 24px rgba(0,0,0,.5);
+    }
+    .mhp-empty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        color: #64748b;
+        text-align: center;
+        padding: 24px;
+    }
+    .mhp-empty i { font-size: 40px; color: #334155; }
+    .mhp-empty p { margin: 0; font-size: 14px; line-height: 1.7; }
+    .mhp-empty .mhp-empty__code { color: #94a3b8; font-size: 12px; }
+    .mhp-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        font-size: 12px;
+        color: #64748b;
+    }
+    .mhp-foot label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .mhp-foot input[type=checkbox] { accent-color: #4f46e5; }
+    .mhp-status { font-variant-numeric: tabular-nums; }
+    .mhp-status--ok { color: #15803d; }
+    .mhp-status--err { color: #b91c1c; }
+    /* 暗色适配 */
+    .dark .mhp-device { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+    .dark .mhp-btn--ghost { background: #1e293b; color: #cbd5e1; border-color: #334155; }
+    .dark .mhp-badge--idle { background: #1e293b; color: #94a3b8; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="mhp-root">
+    <div class="mhp-toolbar">
+        <div class="mhp-toolbar__left">
+            <select id="mhpDeviceSelect" class="mhp-device" title="选择要观察的设备">
+                <option value="">加载设备列表…</option>
+            </select>
+            <span id="mhpBridgeBadge" class="mhp-badge mhp-badge--idle"><i class="fas fa-plug"></i> 桥接未检测</span>
+            <button id="mhpStartBtn" class="mhp-btn mhp-btn--primary" disabled><i class="fas fa-play"></i> 连接画面</button>
+            <button id="mhpStopBtn" class="mhp-btn mhp-btn--danger hidden"><i class="fas fa-stop"></i> 停止</button>
+        </div>
+        <div class="mhp-toolbar__right">
+            <span id="mhpCodecBadge" class="mhp-badge mhp-badge--idle"><i class="fas fa-microchip"></i> 检测中…</span>
+            <span id="mhpFps" class="mhp-fps">0 FPS</span>
+        </div>
+    </div>
+
+    <div class="mhp-stage">
+        <canvas id="mhpCanvas" width="0" height="0"></canvas>
+        <div id="mhpEmpty" class="mhp-empty">
+            <i class="fas fa-mobile-screen"></i>
+            <p><strong>手机实时画面</strong><br>选择设备后点击「连接画面」开始观察<br>agent 在移动端执行操作时，此画面实时同步</p>
+            <p class="mhp-empty__code" id="mhpEmptyDetail"></p>
+        </div>
+    </div>
+
+    <div class="mhp-foot">
+        <label><input type="checkbox" id="mhpTapToggle" checked> 点击画面 = 手机点击（反控注入）</label>
+        <span id="mhpStatusText" class="mhp-status"></span>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}?v=1"></script>
+<script>
+(function () {
+    'use strict';
+
+    var BRIDGE_PORT = {{ bridge_port | default(8767) | int }};
+    var canvas = document.getElementById('mhpCanvas');
+    var deviceSelect = document.getElementById('mhpDeviceSelect');
+    var startBtn = document.getElementById('mhpStartBtn');
+    var stopBtn = document.getElementById('mhpStopBtn');
+    var bridgeBadge = document.getElementById('mhpBridgeBadge');
+    var codecBadge = document.getElementById('mhpCodecBadge');
+    var fpsEl = document.getElementById('mhpFps');
+    var emptyBox = document.getElementById('mhpEmpty');
+    var emptyDetail = document.getElementById('mhpEmptyDetail');
+    var tapToggle = document.getElementById('mhpTapToggle');
+    var statusText = document.getElementById('mhpStatusText');
+
+    var player = null;
+    var currentSerial = '';
+    var gotFrame = false;
+    var fpsTimer = null;
+    var frameCount = 0;
+    var lastFpsAt = performance.now();
+
+    // ── WebCodecs 支持检测 ──
+    function detectCodec() {
+        if (window.ScrcpyMirrorPlayer && ScrcpyMirrorPlayer.webCodecsSupported && ScrcpyMirrorPlayer.webCodecsSupported()) {
+            codecBadge.innerHTML = '<i class="fas fa-microchip"></i> WebCodecs 可用';
+            codecBadge.className = 'mhp-badge mhp-badge--ok';
+            return true;
+        }
+        codecBadge.innerHTML = '<i class="fas fa-triangle-exclamation"></i> WebCodecs 不可用';
+        codecBadge.className = 'mhp-badge mhp-badge--err';
+        emptyDetail.textContent = '当前浏览器/WebView 不支持 WebCodecs 硬件解码，无法内嵌播放 H.264 画面。请使用新版 Edge/Chrome 桌面端打开。';
+        return false;
+    }
+
+    // ── 设备列表 ──
+    function loadDevices() {
+        return fetch('/api/mobile/devices')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var seen = {};
+                var items = [];
+                function push(list, labelPrefix) {
+                    (list || []).forEach(function (d) {
+                        var udid = d.udid || d.serial || '';
+                        if (!udid || seen[udid]) return;
+                        seen[udid] = true;
+                        var name = d.name || d.model || udid;
+                        items.push({ udid: udid, label: (labelPrefix ? labelPrefix + ' ' : '') + name + ' (' + udid + ')' });
+                    });
+                }
+                push(data.devices, '');
+                push(data.emulators, '📱');
+                push(data.real_devices, '📱');
+                return items;
+            })
+            .catch(function () { return []; });
+    }
+
+    function refreshDevices() {
+        loadDevices().then(function (items) {
+            deviceSelect.innerHTML = '';
+            if (!items.length) {
+                deviceSelect.innerHTML = '<option value="">未检测到设备（请先连接）</option>';
+                startBtn.disabled = true;
+                return;
+            }
+            items.forEach(function (it) {
+                var opt = document.createElement('option');
+                opt.value = it.udid;
+                opt.textContent = it.label;
+                deviceSelect.appendChild(opt);
+            });
+            // URL 指定 serial 优先；否则当前连接设备
+            var urlSerial = new URLSearchParams(location.search).get('serial');
+            if (urlSerial && seenSerial(items, urlSerial)) {
+                deviceSelect.value = urlSerial;
+            }
+            startBtn.disabled = false;
+            setStatus('已就绪，请选择设备后连接', '');
+        });
+    }
+
+    function seenSerial(items, serial) {
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].udid === serial) return true;
+        }
+        return false;
+    }
+
+    // ── 桥接状态探测（先 ensure-bridge，再 WS 探活）──
+    function ensureBridgeThenProbe() {
+        var serial = (new URLSearchParams(location.search).get('serial') || '').trim();
+        var url = '/api/mobile/mirror/ensure-bridge' + (serial ? ('?serial=' + encodeURIComponent(serial)) : '');
+        fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serial: serial }) })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data && data.bridge_ok) {
+                    bridgeBadge.innerHTML = '<i class="fas fa-plug"></i> 桥接已启动';
+                    bridgeBadge.className = 'mhp-badge mhp-badge--ok';
+                } else {
+                    bridgeBadge.innerHTML = '<i class="fas fa-plug"></i> ' + ((data && data.bridge_message) || '桥接启动失败');
+                    bridgeBadge.className = 'mhp-badge mhp-badge--warn';
+                }
+                setTimeout(probeBridge, 400);
+            })
+            .catch(function () { probeBridge(); });
+    }
+
+    function probeBridge() {
+        var probeUrl = 'ws://' + location.hostname + ':' + BRIDGE_PORT + '/scrcpy?serial=probe';
+        var ws;
+        var done = false;
+        function finish(ok, msg) {
+            if (done) return;
+            done = true;
+            try { ws && ws.close(); } catch (e) {}
+            bridgeBadge.innerHTML = '<i class="fas fa-plug"></i> ' + msg;
+            bridgeBadge.className = 'mhp-badge ' + (ok ? 'mhp-badge--ok' : 'mhp-badge--err');
+        }
+        try {
+            ws = new WebSocket(probeUrl);
+            ws.binaryType = 'arraybuffer';
+            ws.onopen = function () { finish(true, '桥接在线 :' + BRIDGE_PORT); };
+            ws.onerror = function () { finish(false, '桥接离线 :' + BRIDGE_PORT); };
+            setTimeout(function () { finish(false, '桥接探测超时'); }, 4000);
+        } catch (e) {
+            finish(false, '桥接不可用');
+        }
+    }
+
+    // ── 连接 / 停止 ──
+    function wsUrlFor(serial) {
+        return 'ws://' + location.hostname + ':' + BRIDGE_PORT + '/scrcpy?serial=' + encodeURIComponent(serial);
+    }
+
+    function connect() {
+        if (!window.ScrcpyMirrorPlayer) return;
+        var serial = deviceSelect.value;
+        if (!serial) return;
+        // 连接前再 ensure + warm 一次
+        fetch('/api/mobile/mirror/ensure-bridge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serial: serial }),
+        }).finally(function () { connectAfterEnsure(serial); });
+    }
+
+    function connectAfterEnsure(serial) {
+        if (!window.ScrcpyMirrorPlayer) return;
+        currentSerial = serial;
+        stop(true);
+        gotFrame = false;
+        frameCount = 0;
+        emptyBox.style.display = '';
+        startBtn.disabled = true;
+        stopBtn.classList.remove('hidden');
+        setStatus('连接中 ' + serial + ' …', '');
+
+        player = new ScrcpyMirrorPlayer({
+            canvas: canvas,
+            wsUrl: wsUrlFor(serial),
+            maxReconnect: 6,
+            noFrameTimeoutMs: 20000,
+            decodeTimeoutMs: 40000,
+            onFps: function (fps) { fpsEl.textContent = fps + ' FPS'; },
+            onFirstFrame: function () {
+                gotFrame = true;
+                emptyBox.style.display = 'none';
+                setStatus('已连接 · 实时画面', 'ok');
+                startBtn.disabled = false;
+            },
+            onReconnect: function (n, max) {
+                setStatus('连接断开，重连 ' + n + '/' + max + ' …', 'err');
+            },
+            onError: function (msg) {
+                setStatus('错误：' + (msg || '未知'), 'err');
+                startBtn.disabled = false;
+                stopBtn.classList.add('hidden');
+            },
+            onFallback: function (msg) {
+                emptyDetail.textContent = msg;
+            },
+        });
+        player.start().catch(function (err) {
+            setStatus('连接失败：' + (err && err.message ? err.message : err), 'err');
+            startBtn.disabled = false;
+            stopBtn.classList.add('hidden');
+        });
+    }
+
+    function stop(silent) {
+        if (player) {
+            try { player.stop(); } catch (e) {}
+            player = null;
+        }
+        currentSerial = '';
+        fpsEl.textContent = '0 FPS';
+        stopBtn.classList.add('hidden');
+        startBtn.disabled = !deviceSelect.value;
+        if (!silent) {
+            setStatus('已停止', '');
+            emptyBox.style.display = '';
+        }
+    }
+
+    function setStatus(text, kind) {
+        statusText.textContent = text;
+        statusText.className = 'mhp-status' + (kind === 'ok' ? ' mhp-status--ok' : (kind === 'err' ? ' mhp-status--err' : ''));
+    }
+
+    // ── 画布点击 → 手机 tap 反控 ──
+    canvas.addEventListener('click', function (e) {
+        if (!tapToggle.checked) return;
+        if (!player || !gotFrame || !currentSerial) return;
+        var rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        var x = Math.round((e.clientX - rect.left) * canvas.width / rect.width);
+        var y = Math.round((e.clientY - rect.top) * canvas.height / rect.height);
+        try {
+            player.sendTap(x, y, canvas.width, canvas.height);
+        } catch (err) {}
+    });
+
+    // ── 事件绑定 ──
+    startBtn.addEventListener('click', connect);
+    stopBtn.addEventListener('click', function () { stop(false); });
+    deviceSelect.addEventListener('change', function () {
+        stop(false);
+        if (deviceSelect.value) connect();
+    });
+
+    // ── 初始化 ──
+    detectCodec();
+    ensureBridgeThenProbe();
+
+    // iframe 内嵌（双端观察分屏）时：隐藏顶部导航栏，页面占满全高
+    if (window.self !== window.top) {
+        try {
+            var navEl = document.getElementById('testoryMainNav');
+            if (navEl) navEl.style.display = 'none';
+            var mainEl = document.getElementById('testoryPageMain');
+            if (mainEl) mainEl.style.padding = '0';
+            var rootEl = document.querySelector('.mhp-root');
+            if (rootEl) rootEl.style.height = '100vh';
+        } catch (e) {}
+    }
+
+    refreshDevices().then(function () {
+        // 自动连接（URL 指定 serial 或当前已连接设备）
+        if (deviceSelect.value && startBtn.disabled === false) {
+            connect();
+        }
+    });
+})();
+</script>
+{% endblock %}

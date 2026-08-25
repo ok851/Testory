@@ -38,9 +38,12 @@ def capture_device_frame(serial: str = "", *, timeout: float = 10.0) -> Optional
     """
     serial = (serial or "").strip()
     try:
-        from mobile_device_manager import adb_path
+        from mobile_env_config import adb_path
     except ImportError:
-        return None
+        try:
+            from mobile_device_manager import adb_path
+        except ImportError:
+            return None
 
     cmd = [adb_path()]
     if serial:

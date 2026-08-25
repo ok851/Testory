@@ -1158,44 +1158,97 @@
         var toggle = document.getElementById('aiScreenShareToggle');
         var indicator = document.getElementById('aiVisionIndicator');
         var visionStatus = document.getElementById('aiVisionStatus');
-        AI_TEST_STATE.isScreenSharing = !AI_TEST_STATE.isScreenSharing;
+        if (!toggle) return;
+        if (toggle.dataset.busy === '1') return;
+        toggle.dataset.busy = '1';
+        toggle.style.pointerEvents = 'none';
 
-        // 调用后端 API
+        var nextEnabled = !AI_TEST_STATE.isScreenSharing;
+        // 乐观更新 UI，避免等待后端
+        AI_TEST_STATE.isScreenSharing = nextEnabled;
+        applyScreenShareUI(nextEnabled, {});
+
         fetch('/api/ai/screen-share/toggle', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                enabled: AI_TEST_STATE.isScreenSharing,
+                enabled: nextEnabled,
                 interval: 3
             })
         })
-        .then(function(res) { return res.json(); })
+        .then(function(res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
         .then(function(data) {
-            if (!data.success) {
-                // 失败时回滚
-                AI_TEST_STATE.isScreenSharing = !AI_TEST_STATE.isScreenSharing;
-                return;
+            if (!data || data.success === false) {
+                throw new Error((data && (data.error || data.message)) || '切换失败');
             }
-            // 更新 UI
-            if (AI_TEST_STATE.isScreenSharing) {
-                toggle.classList.add('on');
-                indicator.classList.remove('disabled');
-                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>屏幕观察工具已启用（按需调用）</span>';
-                visionStatus.textContent = '可用';
-                visionStatus.className = 'ai-status-bar__value running';
-                showScreenShareOverlay();
-            } else {
-                toggle.classList.remove('on');
-                indicator.classList.add('disabled');
-                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>屏幕观察已关闭；开启后 AI 可按需调用 OCR/视觉工具</span>';
-                visionStatus.textContent = '未开启';
-                visionStatus.className = 'ai-status-bar__value';
-                hideScreenShareOverlay();
-            }
+            var enabled = (typeof data.enabled === 'boolean') ? data.enabled : nextEnabled;
+            AI_TEST_STATE.isScreenSharing = enabled;
+            applyScreenShareUI(enabled, data);
         })
         .catch(function() {
-            AI_TEST_STATE.isScreenSharing = !AI_TEST_STATE.isScreenSharing;
+            AI_TEST_STATE.isScreenSharing = !nextEnabled;
+            applyScreenShareUI(AI_TEST_STATE.isScreenSharing, {});
+        })
+        .finally(function() {
+            toggle.dataset.busy = '0';
+            toggle.style.pointerEvents = '';
         });
+    }
+
+    function applyScreenShareUI(enabled, data) {
+        var toggle = document.getElementById('aiScreenShareToggle');
+        var indicator = document.getElementById('aiVisionIndicator');
+        var visionStatus = document.getElementById('aiVisionStatus');
+        data = data || {};
+        if (enabled) {
+            if (toggle) toggle.classList.add('on');
+            if (indicator) indicator.classList.remove('disabled');
+            var hint = '屏幕观察工具已启用（按需调用）';
+            if (data.ocr_ok === false && data.ocr_error) {
+                hint = '已启用，但 OCR 不可用：' + String(data.ocr_error).slice(0, 80);
+                if (visionStatus) {
+                    visionStatus.textContent = 'OCR缺失';
+                    visionStatus.className = 'ai-status-bar__value';
+                }
+            } else if (visionStatus) {
+                visionStatus.textContent = '可用';
+                visionStatus.className = 'ai-status-bar__value running';
+            }
+            if (data.mobile_warm && data.mobile_warm.serial) {
+                hint += data.mobile_warm.warm_ok
+                    ? '；手机画面通道已预热'
+                    : ('；手机预热失败: ' + String(data.mobile_warm.warm_error || '').slice(0, 40));
+            }
+            if (indicator) {
+                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>' + hint + '</span>';
+            }
+            showScreenShareOverlay();
+        } else {
+            if (toggle) toggle.classList.remove('on');
+            if (indicator) {
+                indicator.classList.add('disabled');
+                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>屏幕观察已关闭；开启后 AI 可按需调用 OCR/视觉工具</span>';
+            }
+            if (visionStatus) {
+                visionStatus.textContent = '未开启';
+                visionStatus.className = 'ai-status-bar__value';
+            }
+            hideScreenShareOverlay();
+        }
+    }
+
+    function syncScreenShareStatus() {
+        fetch('/api/ai/screen-share/status')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data || !data.success) return;
+                AI_TEST_STATE.isScreenSharing = !!data.enabled;
+                applyScreenShareUI(!!data.enabled, data);
+            })
+            .catch(function() {});
     }
 
     function showScreenShareOverlay() {
@@ -1339,6 +1392,8 @@
 
     // ── Hermes Gateway 状态管理 ──
     var hermesGatewayRunning = false;
+    var _hermesPhase = 'idle'; // idle | starting | running | stopping | degraded | error
+    var _hermesUserIntent = null; // 'start' | 'stop' | null
 
     // 监听 CDP Bridge 扩展发来的消息
     window.addEventListener('message', function(event) {
@@ -1358,35 +1413,51 @@
         }
     });
 
-    function updateHermesUI(running, configured, cdpConnected, starting, startError, stopping, llmModel) {
+    function updateHermesUI(running, configured, cdpConnected, starting, startError, stopping, llmModel, extra) {
+        extra = extra || {};
+        var canForce = !!extra.can_force_stop;
+        var stoppingElapsed = Number(extra.stopping_elapsed_sec || 0) || 0;
+        if (extra.phase) _hermesPhase = extra.phase;
+        else if (stopping) _hermesPhase = 'stopping';
+        else if (starting) _hermesPhase = 'starting';
+        else if (running) _hermesPhase = 'running';
+        else if (startError) _hermesPhase = 'error';
+        else _hermesPhase = 'idle';
+
         hermesGatewayRunning = !!running;
         var dot = document.getElementById('aiHermesStatusDot');
         var text = document.getElementById('aiHermesStatusText');
         var btn = document.getElementById('aiHermesToggleBtn');
         if (!dot || !text || !btn) return;
         var modelHint = (llmModel || '').trim();
-        // 启停过程中仍允许点击：启动中→可点停止取消；停止中→可点强制停止
+
         if (stopping) {
-            hermesGatewayRunning = true; // 让下一次点击走 stop
+            // 停止过程中：前几秒显示「停止中」，超时未干净才显示「强制停止」
+            hermesGatewayRunning = true;
             dot.style.background = '#f59e0b';
             dot.style.boxShadow = '0 0 6px rgba(245,158,11,0.5)';
-            text.textContent = '停止中';
+            text.textContent = canForce || stoppingElapsed >= 5
+                ? ('停止未完成 ' + (stoppingElapsed ? Math.round(stoppingElapsed) + 's' : ''))
+                : '停止中';
             text.style.color = '#f59e0b';
-            btn.textContent = '强制停止';
+            btn.textContent = (canForce || stoppingElapsed >= 5) ? '强制停止' : '停止中';
             btn.style.borderColor = '#ef4444';
             btn.style.color = '#ef4444';
-            btn.disabled = false;
+            btn.disabled = !(canForce || stoppingElapsed >= 5 || _hermesUserIntent === 'stop');
+            // 允许用户在停止中再次点击强制停止（>2s）
+            if (stoppingElapsed >= 2) btn.disabled = false;
         } else if (starting) {
-            hermesGatewayRunning = true; // 让下一次点击走 stop（取消启动）
+            hermesGatewayRunning = false; // 启动中点按钮应走「取消启动」而非误判为运行中停止
             dot.style.background = '#f59e0b';
             dot.style.boxShadow = '0 0 6px rgba(245,158,11,0.5)';
             text.textContent = '启动中';
             text.style.color = '#f59e0b';
-            btn.textContent = '停止';
+            btn.textContent = '取消';
             btn.style.borderColor = '#ef4444';
             btn.style.color = '#ef4444';
             btn.disabled = false;
         } else if (running) {
+            _hermesUserIntent = null;
             dot.style.background = '#10b981';
             dot.style.boxShadow = '0 0 6px rgba(16,185,129,0.5)';
             var runLabel = cdpConnected ? '运行中 · 浏览器已连' : '运行中';
@@ -1399,6 +1470,7 @@
             btn.style.color = '#ef4444';
             btn.disabled = false;
         } else if (startError) {
+            _hermesUserIntent = null;
             hermesGatewayRunning = false;
             dot.style.background = '#ef4444';
             dot.style.boxShadow = 'none';
@@ -1410,6 +1482,7 @@
             btn.style.color = '#4f46e5';
             btn.disabled = false;
         } else if (configured) {
+            _hermesUserIntent = null;
             hermesGatewayRunning = false;
             dot.style.background = '#94a3b8';
             dot.style.boxShadow = 'none';
@@ -1421,6 +1494,7 @@
             btn.style.color = '#4f46e5';
             btn.disabled = false;
         } else {
+            _hermesUserIntent = null;
             hermesGatewayRunning = false;
             dot.style.background = '#94a3b8';
             dot.style.boxShadow = 'none';
@@ -1434,13 +1508,32 @@
         }
     }
 
+    function applyHermesStatus(s) {
+        s = s || {};
+        updateHermesUI(
+            !!s.running,
+            !!s.configured,
+            !!s.cdp_connected,
+            !!s.starting,
+            s.start_error || '',
+            !!s.stopping,
+            s.llm_model || '',
+            {
+                phase: s.phase || '',
+                can_force_stop: !!s.can_force_stop,
+                stopping_elapsed_sec: s.stopping_elapsed_sec || 0,
+                starting_elapsed_sec: s.starting_elapsed_sec || 0
+            }
+        );
+    }
+
     function checkHermesStatus() {
         fetch('/api/ai/hermes/status')
             .then(function(res) { return res.json(); })
             .then(function(data) {
                 if (data.success && data.status) {
                     var s = data.status;
-                    updateHermesUI(s.running, s.configured, s.cdp_connected, s.starting, s.start_error, s.stopping, s.llm_model);
+                    applyHermesStatus(s);
                     if (s.starting || s.stopping) {
                         ensureHermesTransientPoll();
                     } else {
@@ -1478,19 +1571,19 @@
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     var s = (data && data.status) || {};
-                    updateHermesUI(s.running, s.configured, s.cdp_connected, s.starting, s.start_error, s.stopping, s.llm_model);
+                    applyHermesStatus(s);
                     if (!s.starting && !s.stopping) {
                         stopHermesTransientPoll();
                         return;
                     }
-                    // 约 45s 仍 starting / 约 20s 仍 stopping：放开并提示
-                    if (_hermesTransientPollTicks >= 18 && s.starting && !s.running) {
+                    // 约 50s 仍 starting：放开并提示
+                    if (_hermesTransientPollTicks >= 20 && s.starting && !s.running) {
                         stopHermesTransientPoll();
-                        updateHermesUI(false, true, false, false, s.start_error || '启动超时，请重试或点停止', false);
+                        updateHermesUI(false, true, false, false, s.start_error || '启动超时，请重试或点取消', false);
                     }
-                    if (_hermesTransientPollTicks >= 8 && s.stopping) {
-                        // 后端看门狗也会清；前端先允许强制再点
-                        updateHermesUI(false, true, false, false, '', true);
+                    // 停止中：仅根据后端 can_force_stop 刷新按钮，勿过早标强制停止
+                    if (s.stopping) {
+                        applyHermesStatus(s);
                     }
                 })
                 .catch(function() {});
@@ -1530,15 +1623,18 @@
         var btn = document.getElementById('aiHermesToggleBtn');
         if (!btn) return;
         var label = (btn.textContent || '').trim();
-        // 启动中 / 停止中 / 运行中 → 一律走 stop；仅「启动/重试」走 start
+        // 运行中 / 停止中 / 强制停止 / 启动中点「取消」 → stop；仅「启动/重试」走 start
         var isStop = hermesGatewayRunning
+            || _hermesPhase === 'running'
+            || _hermesPhase === 'stopping'
             || label === '停止'
             || label === '强制停止'
             || label === '停止中'
-            || label === '启动中';
-        // 允许在启动轮询中点「停止」取消；仅阻止同向连点
+            || label === '取消';
+        // 允许在启动轮询中点「取消」；仅阻止同向连点
         if (_hermesToggleBusy && !isStop) return;
         _hermesToggleBusy = true;
+        _hermesUserIntent = isStop ? 'stop' : 'start';
         var url = isStop ? '/api/ai/hermes/stop' : '/api/ai/hermes/start';
         btn.disabled = true;
         btn.textContent = isStop ? '停止中' : '启动中';
@@ -1550,42 +1646,56 @@
             .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
             .then(function(pack) {
                 var data = pack.data || {};
-                // POST 返回后立刻允许再点（取消启动 / 强制停止）
                 _hermesToggleBusy = false;
                 if (btn) btn.disabled = false;
                 if (isStop) {
-                    updateHermesUI(false, true, false, false, '', true);
+                    applyHermesStatus({
+                        running: false, configured: true, starting: false, stopping: true,
+                        can_force_stop: false, stopping_elapsed_sec: 0, phase: 'stopping'
+                    });
                     return pollHermesUntil(function(st) {
                         return !st.running && !st.stopping;
                     }, {
-                        max: 16,
-                        intervalMs: 350,
-                        onTick: function() {
-                            updateHermesUI(false, true, false, false, '', true);
+                        max: 20,
+                        intervalMs: 400,
+                        onTick: function(_n, st) {
+                            applyHermesStatus(Object.assign({ configured: true }, st));
                         }
                     }).then(function(st) {
                         if (st.running) {
-                            updateHermesUI(true, true, !!st.cdp_connected, false, '停止未完成，可再点强制停止', false);
+                            updateHermesUI(true, true, !!st.cdp_connected, false, '停止未完成，可再点强制停止', false, st.llm_model, {
+                                can_force_stop: true, phase: 'running'
+                            });
                         } else {
-                            updateHermesUI(false, true, false, false, '', false);
+                            applyHermesStatus(Object.assign({ configured: true, phase: 'idle' }, st, { stopping: false, running: false }));
                         }
+                        _hermesUserIntent = null;
                     });
                 }
                 if (data && data.starting) {
-                    updateHermesUI(false, true, false, true, '', false);
+                    applyHermesStatus({
+                        running: false, configured: true, starting: true, stopping: false, phase: 'starting'
+                    });
                     return pollHermesUntil(function(st) {
-                        return !!st.running || (!!st.start_error && st.start_finished) || (!st.starting && st.start_finished) || !!st.stopping;
+                        // 用户若已点取消，stopping 可能出现——那是预期，结束 start 轮询
+                        if (_hermesUserIntent === 'stop') return true;
+                        return !!st.running || (!!st.start_error && st.start_finished) || (!st.starting && st.start_finished);
                     }, {
-                        max: 30,
+                        max: 40,
                         intervalMs: 1000,
                         onTick: function(_n, st) {
-                            if (st.stopping) {
-                                updateHermesUI(false, true, false, false, '', true);
-                            } else if (st.starting) {
-                                updateHermesUI(false, true, false, true, '', false);
+                            // 启动轮询期间忽略无关 stopping 抖动，除非用户主动取消
+                            if (_hermesUserIntent === 'stop' || (st.stopping && !st.starting)) {
+                                applyHermesStatus(Object.assign({ configured: true }, st));
+                            } else if (st.starting || !st.running) {
+                                applyHermesStatus(Object.assign({ configured: true, starting: true, stopping: false, phase: 'starting' }, st, {
+                                    starting: true, stopping: false
+                                }));
+                            } else {
+                                applyHermesStatus(st);
                             }
                         }
-                    }).then(function() { checkHermesStatus(); });
+                    }).then(function() { checkHermesStatus(); _hermesUserIntent = null; });
                 }
                 if (data && data.started) {
                     checkHermesStatus();
@@ -1894,7 +2004,9 @@
             hideTyping();
             addChatMessage(ev.text || '', false);
             saveChatHistory();
-            setStatus('success', '已回复');
+            var replyText = (ev.text || '').trim();
+            var looksFail = /未调用|未真正执行|任务实际未执行|无效用例 JSON|不会用用例 JSON/.test(replyText);
+            setStatus(looksFail ? 'error' : 'success', looksFail ? '未执行' : '已回复');
         } else if (ev.type === 'done') {
             hideTyping();
             var isFailed = !!ev.failed;
@@ -1921,7 +2033,7 @@
                 if (reportSaveBtnFail) reportSaveBtnFail.style.display = 'none';
                 var bannerFail = document.getElementById('aiSaveCaseBanner');
                 if (bannerFail) bannerFail.remove();
-                if (ev.message && ev.message !== '已回复') {
+                if (ev.message && ev.message !== '已回复' && ev.message !== '完成') {
                     addChatMessage('❌ ' + ev.message, false);
                     saveChatHistory();
                 }
@@ -1934,7 +2046,7 @@
             if (ev.need_user_action) {
                 setStatus('warning', '待人工');
             } else if (isFailed) {
-                setStatus('error', '失败');
+                setStatus('error', ev.message === '未真正执行' ? '未执行' : '失败');
             } else {
                 setStatus(isPartial ? 'warning' : 'success', isPartial ? '部分完成' : '完成');
             }
@@ -2385,6 +2497,7 @@
     document.addEventListener('DOMContentLoaded', function() {
         loadChatHistory();
         checkHermesStatus();
+        syncScreenShareStatus();
 
         fetch('/api/ai/models')
             .then(function(res) { return res.json(); })

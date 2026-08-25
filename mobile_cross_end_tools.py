@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # 常见短信验证码：4–8 位数字；优先匹配「验证码」附近
 _DEFAULT_OTP_RE = re.compile(
@@ -173,13 +173,16 @@ def ensure_mobile_hand_ready(
         "success": False,
         "ok": False,
         "error": (
-            f"手机已配对，但近 {int(stale)}s 内无任务轮询心跳（已等待重试 {max_attempts} 次）。"
-            "请打开 APK 无障碍服务（PcRunJobPoller 仅在无障碍内运行），"
-            "确认界面显示已连接后再试。"
+            f"[MOBILE_POLLER_STALE] 手机已配对，但近 {int(stale)}s 内无任务轮询心跳"
+            f"（已等待重试 {max_attempts} 次）。"
+            "mobile_run_steps / mobile_run_case 需要 APK 无障碍服务内的 PcRunJobPoller。"
+            "请打开手机无障碍，确认 APK 界面显示已连接后再试；"
+            "若只需 PC 遥控点击，请改用 mobile_tap / mobile_swipe（不依赖 poller）。"
         ),
         "error_code": "MOBILE_POLLER_STALE",
         "poller_status": last_status,
         "paired_devices": [d.get("device_id") for d in devices],
+        "hint": "use_mobile_tap_for_pc_remote_or_enable_apk_poller",
     }
 
 
@@ -195,10 +198,10 @@ def mobile_extract_otp(
     on_tick: Any = None,
     allow_scrcpy_vision: bool = True,
 ) -> Dict[str, Any]:
-    """高层工具：三级 OTP 获取策略
+    """高层工具：三级 OTP 获取策略（scrcpy 视觉优先）
 
-    1. 通知监听（APK 本机 extract_otp）— 主路径
-    2. scrcpy 视觉（屏幕截图 + OCR）— 快速兜底
+    1. scrcpy 视觉（屏幕截图 + OCR）— 主路径，快速（2-5秒）
+    2. 通知监听（APK 本机 extract_otp）— 兜底路径（7-15秒）
     3. 手动兜底 — 用户输入
     """
     mock = _mock_otp() if mock_allowed else ""
@@ -215,20 +218,29 @@ def mobile_extract_otp(
     device_id = ""
     evidence: List[Dict[str, Any]] = []
 
-    # 一级：通知监听（APK 本机）
+    # ── 一级：scrcpy 视觉（快速主路径）──
+    # 直接 ADB screencap + OCR，无需 APK enqueue/await 轮询，2-5 秒出结果
+    if allow_scrcpy_vision:
+        scrcpy_result = _try_scrcpy_vision_otp(
+            user_id=user_id,
+            sender_hint=sender_hint,
+            pattern=pattern,
+        )
+        if scrcpy_result.get("success"):
+            scrcpy_result["evidence"] = evidence + scrcpy_result.get("evidence", [])
+            return scrcpy_result
+        # scrcpy 视觉未成功，记录 evidence 继续走 APK 兜底
+        evidence.append({
+            "type": "scrcpy_vision",
+            "ok": False,
+            "error": scrcpy_result.get("error", ""),
+            "error_code": scrcpy_result.get("error_code", ""),
+        })
+
+    # ── 二级：通知监听（APK 本机兜底）──
     hand_err = ensure_mobile_hand_ready(user_id, device_id, poller_retry=2)
     if hand_err:
         evidence.append({"type": "hand_check", "ok": False, "error": hand_err.get("error", "")})
-        # 手机未就绪时，直接尝试 scrcpy 视觉路径
-        if allow_scrcpy_vision:
-            scrcpy_result = _try_scrcpy_vision_otp(
-                user_id=user_id,
-                sender_hint=sender_hint,
-                pattern=pattern,
-            )
-            if scrcpy_result.get("success"):
-                scrcpy_result["evidence"] = evidence + scrcpy_result.get("evidence", [])
-                return scrcpy_result
         return hand_err
 
     job_meta = {
@@ -304,18 +316,7 @@ def mobile_extract_otp(
             "evidence": evidence + [{"type": "mobile_extract_otp", "job_id": job_id}],
         }
 
-    # 二级：scrcpy 视觉兜底
-    if allow_scrcpy_vision:
-        scrcpy_result = _try_scrcpy_vision_otp(
-            user_id=user_id,
-            sender_hint=sender_hint,
-            pattern=pattern,
-        )
-        if scrcpy_result.get("success"):
-            scrcpy_result["evidence"] = evidence + scrcpy_result.get("evidence", [])
-            return scrcpy_result
-
-    # 三级：手动兜底
+    # ── 三级：手动兜底 ──
     return {
         "success": False,
         "ok": False,
@@ -502,12 +503,471 @@ def desktop_focus(app_name: str) -> Dict[str, Any]:
     return windows_focus_app(app_name)
 
 
+# ════════════════════════════════════════════════════════════
+# 移动端通用操作手（agent 可直接操控手机）
+# 执行位置自动切换：活跃 scrcpy 会话注入 → ADB 遥控 → 手机 APK job
+# ════════════════════════════════════════════════════════════
+
+def _resolve_device_serial(user_id: int = 0, serial: str = "") -> str:
+    serial = (serial or "").strip()
+    if serial:
+        return serial
+    try:
+        from mobile_scrcpy_vision import get_device_serial_for_user
+
+        return get_device_serial_for_user(int(user_id or 0))
+    except Exception:
+        return ""
+
+
+def _scrcpy_session_ready(serial: str) -> bool:
+    """是否有活跃 scrcpy 会话（不预热，快速探测）。"""
+    if not serial:
+        return False
+    try:
+        from mobile_scrcpy_bridge import _get_persistent_device
+
+        sess = _get_persistent_device(serial)
+        return bool(sess is not None and getattr(sess, "running", False))
+    except Exception:
+        return False
+
+
+def _warm_scrcpy_once(serial: str, *, timeout: float = 8.0) -> Tuple[bool, str]:
+    """短超时预热 scrcpy 会话；失败不抛，返回 (ok, err)。"""
+    if not serial:
+        return False, "serial 为空"
+    if _scrcpy_session_ready(serial):
+        return True, "already_ready"
+    try:
+        from mobile_scrcpy_bridge import ensure_bridge_started, warm_scrcpy_session
+
+        ensure_bridge_started()
+        return warm_scrcpy_session(serial, timeout=timeout)
+    except TypeError:
+        try:
+            from mobile_scrcpy_bridge import warm_scrcpy_session
+
+            return warm_scrcpy_session(serial)
+        except Exception as exc:
+            return False, str(exc)[:160]
+    except Exception as exc:
+        return False, str(exc)[:160]
+
+def _pc_remote_tap(serial: str, x: int, y: int) -> Dict[str, Any]:
+    """PC 遥控 tap：优先活跃 scrcpy 控制通道注入，否则 ADB smart_tap。"""
+    if not _scrcpy_session_ready(serial):
+        _warm_scrcpy_once(serial, timeout=6.0)
+    if _scrcpy_session_ready(serial):
+        try:
+            from mobile_scrcpy_bridge import ensure_scrcpy_device_session
+            from mobile_ui_probe import get_screen_size
+
+            session, _ = ensure_scrcpy_device_session(serial)
+            if session is not None:
+                w, h = get_screen_size(serial)
+                if session.inject_tap(int(x), int(y), screen_width=w, screen_height=h):
+                    return {"ok": True, "via": "scrcpy_inject", "x": int(x), "y": int(y)}
+        except Exception:
+            pass
+    try:
+        from mobile_adb_control import smart_tap
+
+        r = smart_tap(serial, int(x), int(y))
+        return {"ok": True, "via": r.get("via", "adb"), "x": int(x), "y": int(y)}
+    except Exception as exc:
+        return {"ok": False, "error": f"PC 遥控 tap 失败: {exc}"}
+
+
+def _pc_remote_swipe(
+    serial: str,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    duration_ms: int = 300,
+) -> Dict[str, Any]:
+    """PC 遥控 swipe：优先 scrcpy 注入，否则 ADB。"""
+    if not _scrcpy_session_ready(serial):
+        _warm_scrcpy_once(serial, timeout=6.0)
+    if _scrcpy_session_ready(serial):
+        try:
+            from mobile_scrcpy_bridge import ensure_scrcpy_device_session
+            from mobile_ui_probe import get_screen_size
+
+            session, _ = ensure_scrcpy_device_session(serial)
+            if session is not None:
+                w, h = get_screen_size(serial)
+                if session.inject_swipe(
+                    int(x1), int(y1), int(x2), int(y2),
+                    screen_width=w, screen_height=h,
+                ):
+                    return {
+                        "ok": True,
+                        "via": "scrcpy_inject",
+                        "start": (int(x1), int(y1)),
+                        "end": (int(x2), int(y2)),
+                    }
+        except Exception:
+            pass
+    try:
+        from mobile_adb_control import adb_swipe
+
+        r = adb_swipe(serial, int(x1), int(y1), int(x2), int(y2), int(duration_ms))
+        return {"ok": True, "via": "adb", "start": r.get("start"), "end": r.get("end")}
+    except Exception as exc:
+        return {"ok": False, "error": f"PC 遥控 swipe 失败: {exc}"}
+
+
+def _pc_key(serial: str, keycode: int) -> Dict[str, Any]:
+    """PC 遥控按键（back/home/menu）。"""
+    names = {3: "home", 4: "back", 82: "menu", 24: "volume_up", 25: "volume_down"}
+    try:
+        from mobile_adb_control import adb_keyevent
+
+        adb_keyevent(serial, int(keycode))
+        return {"ok": True, "via": "adb_keyevent", "key": names.get(int(keycode), str(keycode))}
+    except Exception as exc:
+        return {"ok": False, "error": f"按键注入失败: {exc}"}
+
+
+def _apk_job_execute(
+    user_id: int,
+    steps: List[Dict[str, Any]],
+    *,
+    timeout_sec: float = 120.0,
+    source: str = "mobile_action",
+) -> Dict[str, Any]:
+    """手机 APK job 队列执行（本机执行路径，PC 不逐步遥控）。"""
+    hand_err = ensure_mobile_hand_ready(int(user_id or 0), "", poller_retry=2)
+    if hand_err:
+        return hand_err
+    job_id = enqueue_mobile_job(
+        steps=steps,
+        user_id=int(user_id or 0),
+        job_kind="run_steps",
+        source=source,
+    )
+    job = wait_mobile_job(
+        job_id,
+        timeout_sec=timeout_sec,
+        poll_interval_sec=0.8,
+    )
+    st = str(job.get("status") or "").strip().lower()
+    payload = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    ok = st in ("success", "ok")
+    return {
+        "ok": ok,
+        "success": ok,
+        "job_id": job_id,
+        "status": st,
+        "via": "apk_job",
+        "error": job.get("error") or payload.get("error") or ("" if ok else "手机本机执行失败"),
+        "results": results,
+    }
+
+
+def _apk_text_input(
+    user_id: int,
+    serial: str,
+    text: str,
+    *,
+    input_label: str = "",
+    timeout_sec: float = 90.0,
+) -> Dict[str, Any]:
+    """中文等非 ASCII 文本输入：必走 APK 本机剪贴板/无障碍输入。"""
+    step: Dict[str, Any] = {
+        "action": "input",
+        "input_value": text,
+        "selector_type": "text",
+        "selector_value": input_label or "",
+        "description": f"输入文本 {text!r}" + (f"（目标：{input_label}）" if input_label else "（当前焦点输入框）"),
+        "automation_layer": "android",
+    }
+    r = _apk_job_execute(user_id, [step], timeout_sec=timeout_sec, source="mobile_input")
+    if r.get("ok"):
+        r["input_text"] = text
+    return r
+
+
+def _observe_after_action(
+    serial: str,
+    user_id: int = 0,
+    observe: Any = True,
+) -> Dict[str, Any]:
+    """操作后视觉反馈：observe=true 默认 OCR（<1s）；observe=deep 追加 VLM 描述。
+
+    不做持续流式喂 VLM（token 不可控）；默认只 OCR，深度理解按需开启。
+    """
+    mode = str(observe or "").strip().lower()
+    if mode in ("0", "false", "no", "off", "none"):
+        return {}
+    try:
+        from mobile_scrcpy_vision import capture_device_frame, ocr_device_frame
+
+        png = capture_device_frame(serial)
+        if not png:
+            return {"observe_error": "操作后截图失败"}
+        ocr = ocr_device_frame(png)
+        obs: Dict[str, Any] = {
+            "texts": ocr.get("texts", []),
+            "text_joined": ocr.get("text_joined", ""),
+        }
+        if mode in ("deep", "vlm", "1", "true", "yes"):
+            try:
+                from ai_vision_local import vision_describe
+
+                desc = vision_describe(
+                    png,
+                    "这是手机当前屏幕截图，请用一句中文概括当前界面内容和关键状态（不超过60字）。",
+                )
+                if desc:
+                    obs["vision"] = str(desc)[:280]
+            except Exception:
+                pass
+        return {"observation": obs}
+    except Exception as exc:
+        return {"observe_error": str(exc)}
+
+
+def _mobile_execute_action(
+    action: str,
+    args: Dict[str, Any],
+    *,
+    user_id: int = 0,
+) -> Dict[str, Any]:
+    """移动端动作适配器：解析坐标/文本 → 按可用性自动切换执行位置。
+
+    决策链：
+    - tap/swipe：活跃 scrcpy 会话 → PC 注入；否则 ADB 遥控；APK job 兜底
+    - input：ASCII → ADB input text；含中文 → APK 剪贴板（ADB 中文必败）
+    - back/home：ADB keyevent → APK job 兜底
+    """
+    a = dict(args or {})
+    serial = _resolve_device_serial(int(user_id or 0), str(a.get("serial") or ""))
+    if not serial:
+        return {"success": False, "ok": False, "error": "无可用设备 serial，请先配对手机或通过 ADB 连接设备"}
+
+    # 设备级互斥锁：同一手机同一时间仅一个执行通道（PC 遥控 / APK job）
+    from mobile_device_lock import MobileDeviceLockError, mobile_device_guard
+
+    act = (action or "").strip().lower().lstrip("mobile_")
+
+    # 首次 tap/swipe 前短超时预热 scrcpy（失败则后续走 ADB，结果带 via）
+    if act in ("tap", "click", "swipe"):
+        _warm_scrcpy_once(serial, timeout=6.0)
+
+    # ── tap ──
+    if act in ("tap", "click"):
+        x = a.get("x")
+        y = a.get("y")
+        if x is None or y is None:
+            # 通过 UI 树按文本/resource-id 定位
+            desc = str(a.get("description") or a.get("text") or a.get("locate") or "")
+            rid = str(a.get("resource_id") or "")
+            xml = ""
+            try:
+                from mobile_ui_probe import get_mobile_ui_tree
+
+                tree = get_mobile_ui_tree(serial, user_id=user_id)
+                if tree.get("success"):
+                    xml = tree.get("xml") or ""
+            except Exception:
+                pass
+            node = None
+            if rid and xml:
+                from mobile_ui_probe import find_node_by_resource_id
+
+                node = find_node_by_resource_id(xml, rid)
+            if node is None and desc and xml:
+                from mobile_ui_probe import find_node_by_text
+
+                node = find_node_by_text(xml, desc)
+            if node is not None:
+                from mobile_ui_probe import locate_center
+
+                center = locate_center(node)
+                if center:
+                    x, y = center
+                    a["locator"] = (node.get("resource_id") or node.get("text") or "")[:80]
+            if x is None or y is None:
+                return {
+                    "success": False,
+                    "ok": False,
+                    "error": f"无法从 UI 树定位目标（desc={desc or '-'} rid={rid or '-'}），"
+                    "请先调用 mobile_get_ui_tree 查看可用节点，或直接提供 x/y 坐标",
+                }
+        # 物理注入：设备锁保护（防 PC 遥控与 APK job 同设备双写）
+        try:
+            with mobile_device_guard(
+                serial,
+                owner=f"agent_tap:{user_id}:{serial}",
+                timeout_sec=150.0,
+            ):
+                result = _pc_remote_tap(serial, int(x), int(y))
+        except MobileDeviceLockError as le:
+            return {"success": False, "ok": False, "error": str(le), "action": "tap", "serial": serial}
+        result["action"] = "tap"
+        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+        result["serial"] = serial
+        return result
+
+    # ── swipe ──
+    if act == "swipe":
+        x1 = a.get("x1") if a.get("x1") is not None else a.get("from_x")
+        y1 = a.get("y1") if a.get("y1") is not None else a.get("from_y")
+        x2 = a.get("x2") if a.get("x2") is not None else a.get("to_x")
+        y2 = a.get("y2") if a.get("y2") is not None else a.get("to_y")
+        if x1 is None or y1 is None or x2 is None or y2 is None:
+            return {"success": False, "ok": False, "error": "swipe 需要 x1/y1/x2/y2 坐标"}
+        try:
+            with mobile_device_guard(
+                serial,
+                owner=f"agent_swipe:{user_id}:{serial}",
+                timeout_sec=150.0,
+            ):
+                result = _pc_remote_swipe(
+                    serial, int(x1), int(y1), int(x2), int(y2),
+                    int(a.get("duration_ms") or a.get("duration") or 300),
+                )
+        except MobileDeviceLockError as le:
+            return {"success": False, "ok": False, "error": str(le), "action": "swipe", "serial": serial}
+        result["action"] = "swipe"
+        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+        result["serial"] = serial
+        return result
+
+    # ── input ──
+    if act in ("input", "type_text", "fill", "set_text"):
+        text = str(a.get("text") or a.get("input_value") or "")
+        if not text:
+            return {"success": False, "ok": False, "error": "input 需要 text 参数"}
+        has_cjk = any(ord(ch) > 127 for ch in text)
+        # 输入执行（ADB / APK 剪贴板）全程持设备锁
+        try:
+            with mobile_device_guard(
+                serial,
+                owner=f"agent_input:{user_id}:{serial}",
+                timeout_sec=180.0,
+            ):
+                if not has_cjk:
+                    try:
+                        from mobile_adb_control import adb_input_text
+
+                        adb_input_text(serial, text)
+                        result = {"ok": True, "via": "adb_input_text", "input_text": text}
+                    except Exception:
+                        result = _apk_text_input(user_id, serial, text, input_label=str(a.get("input_label") or ""))
+                else:
+                    result = _apk_text_input(user_id, serial, text, input_label=str(a.get("input_label") or ""))
+                    if not result.get("ok"):
+                        result["hint"] = "中文输入必须由手机本机执行（剪贴板/无障碍），PC 侧 ADB 不支持中文"
+        except MobileDeviceLockError as le:
+            return {"success": False, "ok": False, "error": str(le), "action": "input", "serial": serial}
+        result["action"] = "input"
+        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+        result["serial"] = serial
+        return result
+
+    # ── back / home ──
+    if act in ("back", "home", "menu"):
+        keycode = {"back": 4, "home": 3, "menu": 82}.get(act, 4)
+        try:
+            with mobile_device_guard(
+                serial,
+                owner=f"agent_key:{user_id}:{serial}",
+                timeout_sec=150.0,
+            ):
+                result = _pc_key(serial, keycode)
+                if not result.get("ok"):
+                    apk = _apk_job_execute(
+                        user_id,
+                        [{"action": act, "description": f"按下 {act}", "automation_layer": "android"}],
+                        timeout_sec=60.0,
+                    )
+                    if apk.get("ok"):
+                        return {**apk, "action": act, "serial": serial}
+        except MobileDeviceLockError as le:
+            return {"success": False, "ok": False, "error": str(le), "action": act, "serial": serial}
+        result["action"] = act
+        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+        result["serial"] = serial
+        return result
+
+    return {"success": False, "ok": False, "error": f"不支持的移动端动作 {action}"}
+
+
+# ── agent 工具函数（供 dispatch_cross_end_tool 调用）──
+
+def mobile_tap(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    return _mobile_execute_action("tap", args, user_id=user_id)
+
+
+def mobile_swipe(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    return _mobile_execute_action("swipe", args, user_id=user_id)
+
+
+def mobile_input(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    return _mobile_execute_action("input", args, user_id=user_id)
+
+
+def mobile_back(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    return _mobile_execute_action("back", args, user_id=user_id)
+
+
+def mobile_home(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    return _mobile_execute_action("home", args, user_id=user_id)
+
+
+def mobile_get_ui_tree(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    from mobile_ui_probe import get_mobile_ui_tree
+
+    return get_mobile_ui_tree(
+        str(args.get("serial") or ""),
+        user_id=int(user_id or 0),
+        max_nodes=int(args.get("max_nodes") or 80),
+    )
+
+
+def mobile_get_screen_text(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    from mobile_scrcpy_vision import capture_device_frame, ocr_device_frame
+
+    serial = _resolve_device_serial(int(user_id or 0), str(args.get("serial") or ""))
+    if not serial:
+        return {"success": False, "ok": False, "error": "无可用设备 serial"}
+    png = capture_device_frame(serial)
+    if not png:
+        return {"success": False, "ok": False, "error": "设备截图失败"}
+    ocr = ocr_device_frame(png)
+    return {
+        "success": True,
+        "ok": True,
+        "serial": serial,
+        "texts": ocr.get("texts", []),
+        "text_joined": ocr.get("text_joined", ""),
+        "source": "mobile_screencap_ocr",
+    }
+
+
 MOBILE_TOOL_NAMES = frozenset(
     {
         "mobile_extract_otp",
         "mobile_run_steps",
         "mobile_run_case",
         "mobile_await_notification",  # alias → extract_otp with longer wait
+        # scrcpy 视觉工具（此前已挂 schema 但未入此集合 → _is_cross_end_agent_tool
+        # 判 False → 落入"未知工具"，是"agent 移动端作用≈0"的直接原因之一）
+        "mobile_scrcpy_screenshot",
+        "mobile_scrcpy_extract_otp",
+        # 通用操作手 + 结构化感知
+        "mobile_tap",
+        "mobile_swipe",
+        "mobile_input",
+        "mobile_back",
+        "mobile_home",
+        "mobile_get_ui_tree",
+        "mobile_get_screen_text",
     }
 )
 
@@ -555,6 +1015,36 @@ def dispatch_cross_end_tool(
                 abort_event=abort_event,
                 on_tick=on_tick,
             )
+        if n == "mobile_scrcpy_screenshot":
+            from mobile_scrcpy_vision import get_device_serial_for_user, capture_device_frame, ocr_device_frame
+            serial = str(a.get("serial") or "") or get_device_serial_for_user(int(a.get("user_id") or 0))
+            if not serial:
+                return {"success": False, "error": "无可用设备 serial"}
+            png = capture_device_frame(serial)
+            if not png:
+                return {"success": False, "error": "设备截图失败"}
+            ocr = ocr_device_frame(png)
+            return {
+                "success": True,
+                "ok": True,
+                "serial": serial,
+                "image_size": len(png),
+                "texts": ocr.get("texts", []),
+                "text_joined": ocr.get("text_joined", ""),
+                "source": "scrcpy_vision",
+            }
+        if n == "mobile_scrcpy_extract_otp":
+            return mobile_extract_otp(
+                timeout_sec=float(a.get("timeout_sec") or 30),
+                sender_hint=str(a.get("sender_hint") or ""),
+                pattern=str(a.get("pattern") or ""),
+                user_id=int(a.get("user_id") or 0),
+                device_id=str(a.get("device_id") or ""),
+                abort_event=abort_event,
+                on_tick=on_tick,
+                mock_allowed=False,
+                allow_scrcpy_vision=True,
+            )
         if n == "mobile_run_steps":
             steps = a.get("steps") or []
             if not isinstance(steps, list):
@@ -577,6 +1067,21 @@ def dispatch_cross_end_tool(
                 abort_event=abort_event,
                 on_tick=on_tick,
             )
+        # ── 通用操作手 + 结构化感知（P0/P1 新增）──
+        if n == "mobile_tap":
+            return mobile_tap(a, user_id=int(a.get("user_id") or 0))
+        if n == "mobile_swipe":
+            return mobile_swipe(a, user_id=int(a.get("user_id") or 0))
+        if n == "mobile_input":
+            return mobile_input(a, user_id=int(a.get("user_id") or 0))
+        if n == "mobile_back":
+            return mobile_back(a, user_id=int(a.get("user_id") or 0))
+        if n == "mobile_home":
+            return mobile_home(a, user_id=int(a.get("user_id") or 0))
+        if n == "mobile_get_ui_tree":
+            return mobile_get_ui_tree(a, user_id=int(a.get("user_id") or 0))
+        if n == "mobile_get_screen_text":
+            return mobile_get_screen_text(a, user_id=int(a.get("user_id") or 0))
     except Exception as e:
         return {"success": False, "ok": False, "error": str(e)}
     return {"success": False, "ok": False, "error": f"未知跨端工具 {n}"}
@@ -650,7 +1155,8 @@ def cross_end_tool_schemas(
             "function": {
                 "name": "mobile_extract_otp",
                 "description": (
-                    "请已配对手机本机从短信/通知提取验证码（双手：手机 APK）。"
+                    "请已配对手机本机从短信/通知提取验证码。"
+                    "优先走 scrcpy 视觉（截图+OCR，2-5秒），失败后走 APK 通知监听兜底。"
                     "PC 不等逐步遥控；返回 variables.sms_otp。"
                     "多端注册场景：桌面点发送验证码后调用本工具，再 desktop_input 填回。"
                 ),
@@ -660,6 +1166,42 @@ def cross_end_tool_schemas(
                         "timeout_sec": {"type": "number", "description": "等待秒数，默认 120"},
                         "sender_hint": {"type": "string", "description": "可选：短信发送方提示"},
                         "pattern": {"type": "string", "description": "可选：自定义正则，须含捕获组"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_scrcpy_screenshot",
+                "description": (
+                    "快速截取已配对手机屏幕并 OCR 识别文字（scrcpy 视觉路径，亚秒级）。"
+                    "用于多端联动中快速获取手机屏幕内容，无需 APK 轮询。"
+                    "返回 texts（OCR 文本列表）和 text_joined（合并文本）。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serial": {"type": "string", "description": "可选：设备序列号，默认自动获取"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_scrcpy_extract_otp",
+                "description": (
+                    "通过 scrcpy 视觉快速提取验证码（截图+OCR，2-5秒）。"
+                    "先导航到信息/短信应用，截图后 OCR 识别验证码。"
+                    "速度远快于 mobile_extract_otp 的 APK 轮询路径。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sender_hint": {"type": "string", "description": "可选：短信发送方提示"},
+                        "pattern": {"type": "string", "description": "可选：自定义正则"},
+                        "timeout_sec": {"type": "number", "description": "等待秒数，默认 30"},
                     },
                 },
             },
@@ -709,6 +1251,138 @@ def cross_end_tool_schemas(
                         "timeout_sec": {"type": "number"},
                     },
                     "required": ["case_id"],
+                },
+            },
+        },
+        # ── 通用操作手 + 结构化感知（P0/P1）──
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_tap",
+                "description": (
+                    "在已配对手机上执行点击。优先按 UI 树文本定位（description/text 传可见文案如「登录」「发送验证码」），"
+                    "也可直接给 x/y 物理像素坐标。自动选择执行通道：活跃 scrcpy 注入 → ADB → 手机本机。"
+                    "observe=true（默认）会在点击后自动 OCR 屏幕反馈。多端联动典型用法：先 mobile_get_ui_tree 找目标文案，再本工具点击。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string", "description": "目标控件可见文案（UI 树 text）"},
+                        "text": {"type": "string", "description": "同 description，二选一"},
+                        "resource_id": {"type": "string", "description": "可选：resource-id 精确定位，如 com.demo:id/login"},
+                        "x": {"type": "integer", "description": "可选：直接给物理像素 x"},
+                        "y": {"type": "integer", "description": "可选：直接给物理像素 y"},
+                        "serial": {"type": "string", "description": "可选：设备 serial，默认自动获取"},
+                        "observe": {"type": "boolean", "description": "点击后是否截图反馈，默认 true"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_swipe",
+                "description": (
+                    "在已配对手机上滑动（x1,y1 → x2,y2，物理像素坐标）。"
+                    "duration_ms 控制时长（默认 300，长滑动可给 800+）。"
+                    "observe=true（默认）滑动后自动 OCR 反馈。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "x1": {"type": "integer", "description": "起点 x"},
+                        "y1": {"type": "integer", "description": "起点 y"},
+                        "x2": {"type": "integer", "description": "终点 x"},
+                        "y2": {"type": "integer", "description": "终点 y"},
+                        "duration_ms": {"type": "integer", "description": "滑动时长毫秒，默认 300"},
+                        "serial": {"type": "string", "description": "可选：设备 serial"},
+                        "observe": {"type": "boolean", "description": "滑动后是否截图反馈，默认 true"},
+                    },
+                    "required": ["x1", "y1", "x2", "y2"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_input",
+                "description": (
+                    "向手机当前聚焦输入框输入文本。ASCII 文本走 PC 快速通道；中文等非 ASCII 自动走手机本机剪贴板/无障碍输入"
+                    "（PC 侧 ADB 不支持中文）。input_label 可选：输入框可见文案，帮助手机端定位目标输入框。"
+                    "observe=true（默认）输入后自动 OCR 反馈。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "要输入的文本（中文/英文均可）"},
+                        "input_value": {"type": "string", "description": "同 text，二选一"},
+                        "input_label": {"type": "string", "description": "可选：目标输入框的可见文案（如「手机号」）"},
+                        "serial": {"type": "string", "description": "可选：设备 serial"},
+                        "observe": {"type": "boolean", "description": "输入后是否截图反馈，默认 true"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_back",
+                "description": "手机返回键。observe=true（默认）按下后自动 OCR 反馈。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serial": {"type": "string", "description": "可选：设备 serial"},
+                        "observe": {"type": "boolean", "description": "按下后是否截图反馈，默认 true"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_home",
+                "description": "手机 Home 键，回到桌面。observe=true（默认）按下后自动 OCR 反馈。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serial": {"type": "string", "description": "可选：设备 serial"},
+                        "observe": {"type": "boolean", "description": "按下后是否截图反馈，默认 true"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_get_ui_tree",
+                "description": (
+                    "获取手机当前界面 UI 层级树（紧凑文本，类似 Web DOM 快照 / 桌面 UIA 树）。"
+                    "返回 compact_text 可直接阅读：节点含类名/文本/resource-id/坐标/是否可点击。"
+                    "**这是移动端智能操作的第一手感知**：定位元素用 mobile_tap(description=文案) 即可，无需盲猜坐标。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serial": {"type": "string", "description": "可选：设备 serial"},
+                        "max_nodes": {"type": "integer", "description": "可选：返回节点上限，默认 80"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mobile_get_screen_text",
+                "description": (
+                    "截图手机屏幕并 OCR 全部可见文字（快速，<1s）。"
+                    "适合快速了解手机当前界面内容；需要精确定位控件时优先 mobile_get_ui_tree。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serial": {"type": "string", "description": "可选：设备 serial"},
+                    },
                 },
             },
         },

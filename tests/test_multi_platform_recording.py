@@ -14,13 +14,15 @@ tests_web = [
     ('browser_navigate', {'url': 'https://example.com'}, {'ok': True}, 'completed'),
     ('browser_click', {'ref': '@e5', 'text': 'Login'}, {'ok': True, 'matched': 'Login'}, 'completed'),
     ('browser_type', {'ref': '@e3', 'text': 'admin'}, {'ok': True}, 'completed'),
-    ('browser_snapshot', {}, {'elements': 5}, 'completed'),
+    ('browser_snapshot', {}, {'elements': 5}, 'completed'),  # observation → skipped
     ('browser_scroll', {'direction': 'down'}, {'ok': True}, 'completed'),
 ]
 for name, args, result, status in tests_web:
     recs = rec_web.capture_from_tool_event(name=name, args=args, result=result, status=status)
     for r in recs:
         print(f"  [Web] {r.action_type}: target={r.target[:40]}, status={r.status}")
+    if not recs:
+        print(f"  [Web] skipped observation: {name}")
 
 # Desktop tools
 rec_desktop = ActionRecorder(platform='desktop')
@@ -229,10 +231,52 @@ print(f"  Mobile records: {total_mobile}")
 print(f"  Fallback function matches: {total_fallback_fn}")
 print(f"  Fallback Chinese matches: {total_fallback_cn}")
 
-assert total_web >= 5, f"Expected at least 5 web records, got {total_web}"
+assert total_web >= 4, f"Expected at least 4 web records (snapshot filtered), got {total_web}"
 assert total_desktop >= 5, f"Expected at least 5 desktop records, got {total_desktop}"
 assert total_mobile >= 5, f"Expected at least 5 mobile records, got {total_mobile}"
 assert total_fallback_fn >= 7, f"Expected at least 7 fallback function matches, got {total_fallback_fn}"
 assert total_fallback_cn >= 5, f"Expected at least 5 fallback Chinese matches, got {total_fallback_cn}"
+
+# Test 5: observation tools filtered; console expression lifted
+print("\n" + "=" * 60)
+print("Test 5: Observation filter + console lift")
+print("=" * 60)
+from ai_action_recorder import lift_console_expression, is_observation_tool, is_replayable_action_type
+
+assert is_observation_tool("browser_snapshot")
+assert is_observation_tool("get_screen_text")
+assert is_observation_tool("mobile_get_ui_tree")
+assert not is_replayable_action_type("snapshot")
+assert not is_replayable_action_type("console")
+
+rec_obs = ActionRecorder(platform="web")
+assert rec_obs.capture_from_tool_event(
+    name="browser_snapshot", args={}, result={"ok": True}, status="completed"
+) == []
+assert rec_obs.capture_from_tool_event(
+    name="browser_console",
+    args={"expression": "console.log(document.title)"},
+    result={"ok": True},
+    status="completed",
+) == []
+lifted_click = rec_obs.capture_from_tool_event(
+    name="browser_console",
+    args={"expression": "document.querySelector('#login').click()"},
+    result={"ok": True},
+    status="completed",
+)
+assert len(lifted_click) == 1 and lifted_click[0].action_type == "click"
+assert "#login" in lifted_click[0].target
+lifted_input = rec_obs.capture_from_tool_event(
+    name="browser_console",
+    args={"expression": "document.querySelector('input[name=user]').value = 'admin'"},
+    result={"ok": True},
+    status="completed",
+)
+assert len(lifted_input) == 1 and lifted_input[0].action_type == "input"
+assert lifted_input[0].input_data == "admin"
+lifted_nav = lift_console_expression("location.href = 'https://example.com/home'")
+assert lifted_nav and lifted_nav["action_type"] == "navigate"
+print("  observation filtered + console lift OK")
 
 print("\n✅ All tests passed!")

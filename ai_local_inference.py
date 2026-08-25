@@ -1097,9 +1097,16 @@ class LocalAIService:
             except Exception:
                 raise first_err
 
-    def chat_ollama(self, prompt: str, model: str, base_url: Optional[str] = None) -> str:
+    def chat_ollama(
+        self,
+        prompt: str,
+        model: str,
+        base_url: Optional[str] = None,
+        *,
+        purpose: str = "json_plan",
+    ) -> str:
         root = (base_url or "").strip().rstrip("/") or self.base_url
-        return self._chat_completion_at(prompt, model, root)
+        return self._chat_completion_at(prompt, model, root, purpose=purpose)
 
     def _chat_completion(self, prompt: str, model: str, *, json_format: Optional[bool] = None) -> str:
         return self._chat_completion_at(prompt, model, self.base_url, json_format=json_format)
@@ -1111,19 +1118,30 @@ class LocalAIService:
         base_url: str,
         *,
         json_format: Optional[bool] = None,
+        purpose: str = "json_plan",
     ) -> str:
         url = f"{base_url.rstrip('/')}/api/chat"
+        purpose_n = (purpose or "json_plan").strip().lower() or "json_plan"
+        if purpose_n in ("assistant", "chat", "nl"):
+            sys_content = (
+                "你是 Testory 平台的 AI 测试助手。用简洁自然的中文与用户对话。"
+                "闲聊、问身份/能力、问建议时直接回答。"
+                "禁止输出测试用例 JSON（不要出现 case_name / steps 等字段）。"
+                "禁止假装已操作浏览器或桌面；需要自动化时请提示用户给出可执行任务指令。"
+            )
+        else:
+            sys_content = (
+                "You are a senior QA engineer. Output must be exactly one JSON object—nothing else. "
+                "No markdown fences, no commentary, no trailing text. "
+                "First non-whitespace character must be '{'; last must be '}'. "
+                "Schema: AI-assisted web test plan with case_name, case_url, description, precondition, expected_result, steps[]."
+            )
         payload = {
             "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a senior QA engineer. Output must be exactly one JSON object—nothing else. "
-                        "No markdown fences, no commentary, no trailing text. "
-                        "First non-whitespace character must be '{'; last must be '}'. "
-                        "Schema: AI-assisted web test plan with case_name, case_url, description, precondition, expected_result, steps[]."
-                    ),
+                    "content": sys_content,
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -1132,12 +1150,15 @@ class LocalAIService:
         }
         use_json_format = json_format
         if use_json_format is None:
-            use_json_format = os.environ.get("LOCAL_LLM_JSON_FORMAT", "1").strip().lower() not in (
-                "0",
-                "false",
-                "no",
-                "off",
-            )
+            if purpose_n in ("assistant", "chat", "nl"):
+                use_json_format = False
+            else:
+                use_json_format = os.environ.get("LOCAL_LLM_JSON_FORMAT", "1").strip().lower() not in (
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                )
         if use_json_format:
             payload["format"] = "json"
         try:

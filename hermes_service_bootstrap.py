@@ -26,7 +26,7 @@ _START_FINISHED = False
 _START_BEGAN_AT = 0.0  # time.monotonic() when _STARTING became True
 _STOP_BEGAN_AT = 0.0  # time.monotonic() when _STOPPING became True
 _START_STALE_SEC = 50.0  # status watchdog: force-fail stuck "starting"
-_STOP_STALE_SEC = 18.0  # status watchdog: force-clear stuck "stopping"
+_STOP_STALE_SEC = 12.0  # status watchdog: force-clear stuck "stopping"
 # 每次 stop / 新一轮 start 递增，用于取消仍在跑的异步启动线程
 _LIFECYCLE_EPOCH = 0
 _LIFECYCLE_LOCK = threading.RLock()
@@ -759,11 +759,41 @@ def _force_stale_stopping_unlock() -> bool:
         return True
 
 
+def _clear_stopping_if_dead(*, min_elapsed_sec: float = 0.4) -> bool:
+    """进程与端口均已倒下时尽快清掉 stopping，避免 UI 长期「强制停止」。"""
+    global _STOPPING, _STOP_BEGAN_AT
+    with _LIFECYCLE_LOCK:
+        if not _STOPPING:
+            return False
+        began = _STOP_BEGAN_AT or 0.0
+        if began and (time.monotonic() - began) < float(min_elapsed_sec):
+            return False
+    try:
+        host, port = _gateway_listen_endpoint()
+        client = HermesGatewayClient()
+        alive = False
+        try:
+            alive = bool(client.health_check(timeout_sec=0.25))
+        except Exception:
+            alive = False
+        if alive or _port_listening(host, port, timeout=0.12):
+            return False
+    except Exception:
+        return False
+    with _LIFECYCLE_LOCK:
+        if not _STOPPING:
+            return False
+        _STOPPING = False
+        _STOP_BEGAN_AT = 0.0
+        return True
+
+
 def get_bootstrap_status() -> dict:
     """获取当前启动状态（供 status API 使用）。"""
     global _STARTING, _STOPPING, _START_ERROR, _START_FINISHED, _STOP_BEGAN_AT
     _force_stale_starting_unlock()
     _force_stale_stopping_unlock()
+    _clear_stopping_if_dead(min_elapsed_sec=0.35)
     try:
         from hermes_config import resolve_hermes_api_server_key
         resolve_hermes_api_server_key()
@@ -782,18 +812,9 @@ def get_bootstrap_status() -> dict:
             if _STARTING:
                 _clear_starting_locked(error="", finished=True)
                 _START_ERROR = ""
-    # 已停干净却仍标 stopping（超过短窗口）→ 清掉
+    # 已停干净却仍标 stopping → 尽快清掉（缩短原 2.5s 窗口）
     if _STOPPING and not running:
-        try:
-            host, port = _gateway_listen_endpoint()
-            if not _port_listening(host, port, timeout=0.15):
-                with _LIFECYCLE_LOCK:
-                    began = _STOP_BEGAN_AT or 0.0
-                    if began and (time.monotonic() - began) > 2.5:
-                        _STOPPING = False
-                        _STOP_BEGAN_AT = 0.0
-        except Exception:
-            pass
+        _clear_stopping_if_dead(min_elapsed_sec=0.35)
     cdp_connected = False
     if running:
         try:
@@ -802,18 +823,35 @@ def get_bootstrap_status() -> dict:
         except Exception:
             pass
     host, port = _gateway_listen_endpoint()
+    # 互斥：starting 优先于 stopping，避免启动过程中 UI 跳到「强制停止」
     starting = bool(_STARTING) and not running and not _STOPPING
-    stopping = bool(_STOPPING) and not running
+    stopping = bool(_STOPPING) and not running and not _STARTING
     port_up = _port_listening(host, port)
     degraded = bool(port_up and not running and not starting and not stopping)
     start_error = _START_ERROR if _START_FINISHED and not running and not starting and not stopping else ""
     if degraded and not start_error:
         start_error = "端口被占用但健康检查失败，可点停止后重试"
+    stopping_elapsed = 0.0
+    if stopping and _STOP_BEGAN_AT:
+        stopping_elapsed = round(time.monotonic() - _STOP_BEGAN_AT, 1)
+    starting_elapsed = 0.0
+    if starting and _START_BEGAN_AT:
+        starting_elapsed = round(time.monotonic() - _START_BEGAN_AT, 1)
+    # 仅停止超过约 5s 仍未干净时，才允许前端展示「强制停止」
+    can_force_stop = bool(stopping and stopping_elapsed >= 5.0)
     out = {
         "configured": configured,
         "running": running,
         "starting": starting,
         "stopping": stopping,
+        "can_force_stop": can_force_stop,
+        "phase": (
+            "stopping" if stopping else
+            "starting" if starting else
+            "running" if running else
+            "degraded" if degraded else
+            "idle"
+        ),
         "start_error": start_error,
         "start_finished": _START_FINISHED,
         "cdp_connected": cdp_connected,
@@ -822,10 +860,10 @@ def get_bootstrap_status() -> dict:
         "degraded": degraded,
         "lifecycle_epoch": _LIFECYCLE_EPOCH,
     }
-    if stopping and _STOP_BEGAN_AT:
-        out["stopping_elapsed_sec"] = round(time.monotonic() - _STOP_BEGAN_AT, 1)
-    if starting and _START_BEGAN_AT:
-        out["starting_elapsed_sec"] = round(time.monotonic() - _START_BEGAN_AT, 1)
+    if stopping:
+        out["stopping_elapsed_sec"] = stopping_elapsed
+    if starting:
+        out["starting_elapsed_sec"] = starting_elapsed
     if start_error or degraded:
         tail = hermes_log_tail(25)
         if tail:

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -102,14 +103,84 @@ def _result_is_stream_empty(result_text: str) -> bool:
     return "stream_empty_text" in (result_text or "")
 
 
-def _strip_invented_case_json(text: str) -> str:
-    """失败回复里去掉模型夹带的「供参考」用例 JSON，避免误导用户去保存。"""
-    import re
+def _looks_like_case_json_blob(text: str) -> bool:
+    """整段（或主体）是否像测试用例 JSON。混有自然语言前缀/后缀的不算整段 blob。"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if t.startswith("```"):
+        inner = t.strip("`")
+        # 去掉开头语言标记
+        if inner.lower().startswith("json"):
+            inner = inner[4:].lstrip()
+        # fence 内几乎全是 JSON → 视为 blob
+        try:
+            data = json.loads(inner.strip().rstrip("`").strip())
+            if isinstance(data, dict) and (
+                ("case_name" in data and "steps" in data)
+                or isinstance(data.get("steps"), list)
+            ):
+                return True
+            if isinstance(data, list) and data and isinstance(data[0], dict):
+                if any(k in data[0] for k in ("action", "target", "selector", "steps")):
+                    return True
+        except Exception:
+            pass
+        # 未闭合 fence：仍以 { 开头且含 case 字段
+        body = inner.strip()
+        if body.startswith("{") or body.startswith("["):
+            if '"case_name"' in body and '"steps"' in body:
+                return True
+            if '"steps"' in body and any(
+                k in body for k in ('"action"', '"target"', '"selector"', '"input_value"')
+            ):
+                return True
+        return False
+    # 尝试直接解析整段
+    try:
+        data = json.loads(t)
+        if isinstance(data, dict) and (
+            ("case_name" in data and "steps" in data)
+            or (isinstance(data.get("steps"), list) and len(data.get("steps") or []) > 0)
+            or (
+                any(k in data for k in ("case_url", "precondition", "expected_result", "description"))
+                and isinstance(data.get("steps"), list)
+            )
+        ):
+            return True
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            if any(k in data[0] for k in ("action", "target", "selector", "steps")):
+                return True
+    except Exception:
+        pass
+    # 必须以 JSON 结构开头；正文夹带 JSON 不算「整段 blob」
+    if not (t.startswith("{") or t.startswith("[")):
+        return False
+    if '"case_name"' in t and '"steps"' in t:
+        return True
+    if '"steps"' in t and any(k in t for k in ('"action"', '"target"', '"selector"', '"input_value"')):
+        return True
+    return False
 
+
+def _strip_invented_case_json(text: str) -> str:
+    """去掉模型夹带的用例 JSON；若整段都是空壳 JSON，返回空串（勿回退原文）。"""
     t = (text or "").strip()
     if not t:
         return t
+    original = t
+    # 整段可解析为用例 JSON → 直接清空
+    if _looks_like_case_json_blob(t):
+        return ""
+    # markdown 代码块整段用例
+    t = re.sub(
+        r"```(?:json)?\s*(\{[\s\S]*?\"case_name\"[\s\S]*?\"steps\"\s*:\s*\[[\s\S]*?\]\s*\})\s*```",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
     t = re.sub(r"```(?:json)?\s*\{[\s\S]*?\}\s*```", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"```(?:json)?\s*\[[\s\S]*?\]\s*```", "", t, flags=re.IGNORECASE)
     # 去掉独立大段 case_name/steps JSON（保留前后说明）
     t = re.sub(
         r"\{[^{}]*\"case_name\"[^{}]*\"steps\"\s*:\s*\[[\s\S]*?\]\s*\}",
@@ -117,8 +188,439 @@ def _strip_invented_case_json(text: str) -> str:
         t,
         flags=re.IGNORECASE,
     )
+    # 嵌套更深的 case JSON（steps 内含对象）
+    t = re.sub(
+        r"\{[\s\S]*?\"case_name\"[\s\S]*?\"steps\"\s*:\s*\[[\s\S]*?\]\s*\}",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
+    # 仅有 steps 的对象（仅当该对象是独立片段时）
+    t = re.sub(
+        r"(?m)^[\s]*\{[\s\S]*?\"steps\"\s*:\s*\[[\s\S]*?\]\s*\}[\s]*$",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
-    return t or text.strip()
+    # 关键：剥空后绝不能 return 原文，否则空壳 JSON 会原样回显给用户
+    if not t:
+        return ""
+    if _looks_like_case_json_blob(t):
+        return ""
+    # 若几乎没剥掉且原文就是用例 JSON，也视为空
+    if _looks_like_case_json_blob(original) and len(t) >= max(20, int(len(original) * 0.6)):
+        return ""
+    # 残留仍以 { / [ 开头且含 steps → 视为未剥净
+    stripped = t.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        if '"steps"' in t or '"case_name"' in t or '"action"' in t:
+            return ""
+    return t
+
+
+def _nl_fallback_when_case_json(raw: str = "") -> str:
+    """模型只吐了用例 JSON 时的可读回退文案。"""
+    _ = raw
+    return (
+        "我这边不会用用例 JSON 来回复。"
+        "请直接用自然语言提问，或给出要执行的自动化任务"
+        "（例如「打开百度搜索 AI」「用记事本写一段话」）。"
+    )
+
+
+_FAKE_COMPLETE_RE = re.compile(
+    r"^\s*(?:已?完成|操作完成|任务已?完成|执行完成|搞定了?|好了|"
+    r"done\.?|completed\.?|finished\.?|success\.?|"
+    r"已经(?:完成|弄好|处理好)|全部完成|"
+    r"测试完成|用例完成|执行成功|操作成功)[。.!！\s]*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_fake_completion_claim(text: str) -> bool:
+    """无工具调用时模型是否在假装「已完成」。"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _FAKE_COMPLETE_RE.match(t):
+        return True
+    # 短句含完成且无具体步骤描述
+    if len(t) <= 48 and re.search(r"(已完成|操作完成|任务完成|执行完成|测试完成|执行成功)", t):
+        if not re.search(r"(失败|错误|无法|请|需要|建议|因为|未调用|未执行)", t):
+            return True
+    return False
+
+
+def _automation_expected(params: Any, meta: Dict[str, Any], tools: List[Any]) -> bool:
+    """本轮是否期望调用自动化工具（而非纯闲聊）。"""
+    if meta.get("expect_tools") is True:
+        return True
+    msg = getattr(params, "message", "") or ""
+    msg_needs = False
+    try:
+        from agent_intent import message_needs_automation
+
+        msg_needs = bool(message_needs_automation(msg))
+    except Exception:
+        msg_needs = False
+    allow_refine = getattr(params, "allow_refine_test_plan", True)
+    # 执行会话（禁止 refine）：有动作意图或挂了工具 → 必须调工具
+    if allow_refine is False:
+        if msg_needs:
+            return True
+        if tools:
+            return True
+        return False
+    if not tools:
+        return False
+    if msg_needs:
+        return True
+    return False
+
+
+def _no_tool_failure_reply(*, was_case_json: bool, fake_complete: bool) -> str:
+    if was_case_json:
+        return (
+            "模型没有正确调用自动化工具（只返回了用例 JSON），且自动转交执行也未完成。"
+            "请确认已启动智能体，并再试一次；或换支持 tool calling 的推理模型。"
+        )
+    if fake_complete:
+        return (
+            "模型未调用任何自动化工具就声称「完成」，自动转交执行也未完成。"
+            "请确认已启动智能体后再发任务指令。"
+        )
+    return (
+        "模型未调用自动化工具，自动转交执行也未完成。"
+        "请确认已启动智能体，并给出明确任务指令。"
+    )
+
+
+def _available_tool_names(tools: List[Any]) -> set:
+    names: set = set()
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") if isinstance(t.get("function"), dict) else t
+        if not isinstance(fn, dict):
+            continue
+        n = str(fn.get("name") or "").strip()
+        if n:
+            names.add(n)
+    return names
+
+
+def _try_extract_tool_calls_from_content(
+    text: str, allowed_names: set
+) -> Optional[List[Dict[str, Any]]]:
+    """弱模型常把 tool call 写进正文；尽量还原成正式 tool_calls。"""
+    t = (text or "").strip()
+    if not t or not allowed_names:
+        return None
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t.lower().startswith("json"):
+            t = t[4:].lstrip()
+    candidates: List[Any] = []
+    try:
+        data = json.loads(t)
+        candidates.append(data)
+    except Exception:
+        # 正文中夹带的单个 JSON 对象
+        m = re.search(r"\{[\s\S]*\}", t)
+        if m:
+            try:
+                candidates.append(json.loads(m.group(0)))
+            except Exception:
+                pass
+    for data in candidates:
+        if isinstance(data, dict) and isinstance(data.get("tool_calls"), list):
+            out: List[Dict[str, Any]] = []
+            for tc in data["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+                if not isinstance(fn, dict):
+                    continue
+                name = str(fn.get("name") or tc.get("name") or "").strip()
+                if name not in allowed_names:
+                    continue
+                args = fn.get("arguments", tc.get("arguments", {}))
+                if not isinstance(args, str):
+                    args = json.dumps(args or {}, ensure_ascii=False)
+                out.append(
+                    {
+                        "id": tc.get("id") or f"call_rec_{uuid.uuid4().hex[:12]}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": args},
+                    }
+                )
+            if out:
+                return out
+        if isinstance(data, dict):
+            name = str(data.get("name") or data.get("tool") or "").strip()
+            if name in allowed_names:
+                args = data.get("arguments") or data.get("parameters") or data.get("args") or {}
+                if name == "hermes_execute" and isinstance(args, dict) and not args.get("instruction"):
+                    if data.get("instruction"):
+                        args = dict(args)
+                        args["instruction"] = data.get("instruction")
+                if not isinstance(args, str):
+                    args = json.dumps(args if isinstance(args, dict) else {}, ensure_ascii=False)
+                return [
+                    {
+                        "id": f"call_rec_{uuid.uuid4().hex[:12]}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": args},
+                    }
+                ]
+    # hermes_execute("...") / hermes_execute(instruction=...)
+    for name in ("hermes_execute", "openclaw_execute"):
+        if name not in allowed_names:
+            continue
+        m = re.search(
+            rf"{name}\s*\(\s*(?:instruction\s*=\s*)?[\"']([\s\S]+?)[\"']\s*\)",
+            text or "",
+            re.IGNORECASE,
+        )
+        if m:
+            instr = (m.group(1) or "").strip()
+            if instr:
+                return [
+                    {
+                        "id": f"call_rec_{uuid.uuid4().hex[:12]}",
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps({"instruction": instr}, ensure_ascii=False),
+                        },
+                    }
+                ]
+    return None
+
+
+def _instruction_from_case_json_hint(text: str) -> str:
+    """从模型误吐的用例 JSON 里抽简短步骤提示，供 hermes_execute 参考。"""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t.lower().startswith("json"):
+            t = t[4:].lstrip()
+    try:
+        data = json.loads(t)
+    except Exception:
+        m = re.search(r"\{[\s\S]*\"steps\"[\s\S]*\}", t)
+        if not m:
+            return ""
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return ""
+    if not isinstance(data, dict):
+        return ""
+    steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+    bits: List[str] = []
+    for s in steps[:8]:
+        if not isinstance(s, dict):
+            continue
+        act = str(s.get("action") or "").strip()
+        tgt = str(
+            s.get("target")
+            or s.get("selector_value")
+            or s.get("selector")
+            or s.get("name")
+            or s.get("description")
+            or ""
+        ).strip()
+        val = str(s.get("input_value") or s.get("value") or "").strip()
+        piece = " ".join(x for x in (act, tgt, val) if x).strip()
+        if piece:
+            bits.append(piece)
+    if not bits:
+        return ""
+    return "参考步骤（勿照抄无效 assert）：" + "；".join(bits)
+
+
+def _synthesize_auto_execute_tool_calls(
+    *,
+    params: Any,
+    tools: List[Any],
+    text: str,
+    meta: Dict[str, Any],
+) -> Optional[List[Dict[str, Any]]]:
+    """执行会话零 tool_calls 时：自动转交 hermes_execute（一脑多端主路径）。"""
+    if meta.get("_auto_injected_execute"):
+        return None
+    names = _available_tool_names(tools)
+    tool_name = ""
+    if "hermes_execute" in names:
+        tool_name = "hermes_execute"
+    elif "openclaw_execute" in names:
+        tool_name = "openclaw_execute"
+    if not tool_name:
+        return None
+    user_msg = (getattr(params, "message", "") or "").strip()
+    if not user_msg:
+        return None
+    hint = _instruction_from_case_json_hint(text)
+    instruction = user_msg if not hint else f"{user_msg}\n{hint}"
+    meta["_auto_injected_execute"] = True
+    meta["auto_injected_execute"] = True
+    return [
+        {
+            "id": f"call_auto_{uuid.uuid4().hex[:12]}",
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "arguments": json.dumps({"instruction": instruction}, ensure_ascii=False),
+            },
+        }
+    ]
+
+
+def _resolve_no_tool_assistant_text(
+    text: str,
+    *,
+    params: Any,
+    meta: Dict[str, Any],
+    tools: List[Any],
+    round_idx: int,
+) -> Dict[str, Any]:
+    """无 tool_calls 时统一处理。
+
+    返回 dict action:
+      - tool_calls: 从正文还原或自动转交 hermes_execute
+      - nudge: 催模型再调工具（无 hermes 可挂时）
+      - reply: 自然语言 / 失败说明
+    """
+    clean_text = _strip_invented_case_json(text)
+    was_case_json = (not clean_text) or _looks_like_case_json_blob(text)
+    if was_case_json:
+        clean_text = _nl_fallback_when_case_json(text)
+    tools_used = list(meta.get("tools_used") or [])
+    expect_auto = _automation_expected(params, meta, tools)
+    fake_complete = _looks_like_fake_completion_claim(text)
+    # 纯闲聊 / 已跑过工具：自然语言即可
+    if not expect_auto or tools_used:
+        return {
+            "action": "reply",
+            "clean_text": clean_text
+            or (text.strip() if text and not was_case_json else _nl_fallback_when_case_json(text)),
+            "was_case_json": was_case_json,
+            "fake_complete": fake_complete,
+            "failed": False,
+        }
+
+    allowed = _available_tool_names(tools)
+    recovered = _try_extract_tool_calls_from_content(text, allowed)
+    if recovered:
+        return {
+            "action": "tool_calls",
+            "tool_calls": recovered,
+            "was_case_json": was_case_json,
+            "fake_complete": fake_complete,
+            "failed": False,
+            "recovered_from_content": True,
+        }
+
+    # 一脑多端：零工具时自动转交 hermes_execute，而不是把用例 JSON /「完成」当终态
+    auto_calls = _synthesize_auto_execute_tool_calls(
+        params=params, tools=tools, text=text or "", meta=meta
+    )
+    if auto_calls:
+        return {
+            "action": "tool_calls",
+            "tool_calls": auto_calls,
+            "was_case_json": was_case_json,
+            "fake_complete": fake_complete,
+            "failed": False,
+            "auto_injected": True,
+        }
+
+    # 无 hermes 可挂（例如仅桌面双手）：再催一次模型显式调 windows_*/mobile_*
+    if not meta.get("_nudged_for_tools") and round_idx + 1 < _max_tool_rounds():
+        meta["_nudged_for_tools"] = True
+        return {
+            "action": "nudge",
+            "clean_text": text,
+            "was_case_json": was_case_json,
+            "fake_complete": fake_complete,
+            "failed": False,
+            "nudge_user": (
+                "你还没有调用任何自动化工具，禁止声称已完成，禁止输出用例 JSON。"
+                "请立即调用 hermes_execute（网页）或 windows_*/desktop_*（桌面）"
+                "或 mobile_*（手机）执行用户任务；根据工具返回再用中文简短汇报。"
+            ),
+        }
+    meta["failed"] = True
+    meta["no_tool_case_json"] = bool(was_case_json)
+    meta["fake_complete"] = bool(fake_complete)
+    return {
+        "action": "reply",
+        "clean_text": _no_tool_failure_reply(
+            was_case_json=was_case_json, fake_complete=fake_complete or True
+        ),
+        "was_case_json": was_case_json,
+        "fake_complete": True,
+        "failed": True,
+    }
+
+
+def _is_plausible_case_plan(plan: Any) -> bool:
+    """判断解析出的 plan 是否像真实可保存用例（过滤空壳/胡乱 assert）。"""
+    if not isinstance(plan, dict):
+        return False
+    steps = plan.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return False
+    name = str(plan.get("case_name") or "").strip()
+    # 空壳：无名 + 仅 1 个无定位的 assert/verify
+    if len(steps) == 1:
+        s0 = steps[0] if isinstance(steps[0], dict) else {}
+        act = str(s0.get("action") or "").strip().lower()
+        tgt = str(
+            s0.get("target")
+            or s0.get("selector")
+            or s0.get("selector_value")
+            or s0.get("input_value")
+            or s0.get("name")
+            or ""
+        ).strip()
+        if act in ("assert", "verify", "wait") and (not tgt or len(tgt) <= 2) and not name:
+            return False
+        if act in ("assert", "verify") and tgt in ("使用", "测试", "操作", "步骤", "用例"):
+            return False
+    # 至少要有一个可执行动作，或有像样的用例名
+    actionable = {
+        "navigate",
+        "goto",
+        "click",
+        "type",
+        "fill",
+        "input",
+        "input_text",
+        "launch_app",
+        "open_app",
+        "tap",
+        "swipe",
+        "scroll",
+        "press_key",
+        "hotkey",
+        "extract_otp",
+        "api_call",
+    }
+    has_action = False
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("action") or "").strip().lower() in actionable:
+            has_action = True
+            break
+    if has_action:
+        return True
+    return bool(name) and len(steps) >= 1
 
 
 def _hermes_retry_blocked(meta: Dict[str, Any]) -> bool:
@@ -204,10 +706,11 @@ def _web_hermes_system_prompt() -> str:
         "- 不要编造未实际执行的操作结果\n\n"
         "【📋 工具使用规则 - 严格遵守】\n"
         "\n"
-        "✅ browser_snapshot：获取页面结构快照，用于定位元素\n"
-        "   - 这是你定位元素的主要工具\n"
+        "✅ browser_snapshot：获取页面结构快照，用于定位元素（**谨慎使用，避免反复调用**）\n"
+        "   - 导航后系统已自动返回紧凑快照，且已注入 DOM 清单：**优先用它们定位，无需重复快照**\n"
+        "   - 仅当 DOM 清单/已有快照不足以定位目标元素时才调用本工具\n"
         "   - 返回的 @e1、@e2 等 ref 可直接用于 browser_click/browser_type\n"
-        "   - 在执行任何操作前，必须先调用一次 browser_snapshot\n"
+        "   - 同一页面状态未被操作改变时禁止重复调用（全程最多 2 次）\n"
         "\n"
         "✅ browser_click(ref)：点击元素\n"
         "   - ref 来自 browser_snapshot 返回的 @e1、@e2 等\n"
@@ -225,10 +728,10 @@ def _web_hermes_system_prompt() -> str:
         "   - 不要用它来执行 DOM 操作\n"
         "   - 只有当你需要检查控制台错误时才使用\n\n"
         "【🎯 标准执行流程】\n"
-        "1. 调用 browser_snapshot 获取页面结构\n"
+        "1. 优先使用导航返回的快照 / 系统注入的 DOM 清单定位元素，不要先调 browser_snapshot\n"
         "2. 从返回结果中找到目标元素的 ref（如 @e5）\n"
         "3. 使用 browser_click(ref) 或 browser_type(ref, text) 操作元素\n"
-        "4. 操作完成后，可以再次调用 browser_snapshot 验证结果\n\n"
+        "4. 仅当需要确认界面是否变化时才调用 browser_snapshot 验证（避免反复快照空转）\n\n"
         "【📌 重要提示】\n"
         "- 页面已就绪时不要调用 browser_navigate\n"
         "- 遇到验证码/扫码：等待用户在浏览器窗口完成\n"
@@ -1940,6 +2443,7 @@ def _build_system_prompt(
     embedded_session_id: str = "",
     platform_type: str = "web",
     generate_case_after_run: bool = False,
+    allow_refine_test_plan: bool = True,
 ) -> str:
     plan_preview = json.dumps(current_plan or {}, ensure_ascii=False)
     if len(plan_preview) > 12000:
@@ -1953,12 +2457,15 @@ def _build_system_prompt(
     mem = (memory_context or "").strip()
     if len(mem) > 4000:
         mem = mem[:3999] + "…"
+    allow_refine = bool(allow_refine_test_plan)
     parts = [
         "你是 Testory 平台的 AI 测试助手，可以帮助用户进行自动化测试任务，也可以进行日常对话。",
         "",
         "## 意图判断（最重要，先读再动）",
         "请先判断用户输入的意图，并**严格按平台边界选工具**：",
-        "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。",
+        "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。"
+        " **严禁**输出 case_name / steps 等测试用例 JSON。",
+        "- **严禁**在未调用任何工具时回复「完成」「已完成」「操作完成」等；需要自动化时必须先调用工具，再根据工具返回汇报。",
         "- 【浏览器/Web 任务】打开网站、访问 URL、搜索网页、浏览器页面操作、输入网址 → **只调用 hermes_execute**。"
             "一般任务只调一次；只有「网页+手机短信验证码」多端联动时，才按下方说明把 hermes_execute 分两段调用（点击获取验证码前、回填验证码后各一次）。"
             "**严禁**用 windows_* / desktop_* 启动应用或按键！**严禁**在非浏览器窗口（如 Testory 软件本身、其他应用窗口）上点击！"
@@ -1970,7 +2477,12 @@ def _build_system_prompt(
             "- 开启「执行后生成用例」时：操作成功后只需简短中文汇报；"
             "平台会从动作轨迹自动规范化生成用例，禁止 refine_test_plan，禁止手写大段用例 JSON。"
             if generate_case_after_run
-            else "- 未开启「执行后生成用例」：操作完成后简短中文汇报即可，禁止 refine_test_plan，禁止输出用例 JSON。"
+            else (
+                "- **本会话禁止 refine_test_plan，也禁止输出任何用例 JSON**（不要出现 case_name / steps）。"
+                "需要自动化时必须调用工具；完成后一两句中文汇报。"
+                if not allow_refine
+                else "- 未开启「执行后生成用例」：操作完成后简短中文汇报即可，禁止 refine_test_plan，禁止输出用例 JSON。"
+            )
         ),
         "- 如果用户只是询问测试建议、用例设计思路 → 直接回答，不要调用工具。",
         "- 若 hermes_execute 返回 stream_empty / auth_fatal → 禁止再次 hermes_execute。",
@@ -2056,25 +2568,41 @@ def _build_system_prompt(
             parts_agent = [
                 "【重要】平台已连接内置画布 Chromium（CDP attach）。浏览器操作应优先调用 hermes_execute，",
                 "Hermes 将在与中栏实时画面**同一浏览器**中自主 navigate/click/input/snapshot。",
-                "执行完成后根据返回摘要调用 refine_test_plan 写入可复现 steps；仅改 JSON/选择器时可只调用 refine_test_plan。",
+                (
+                    "执行完成后简短中文汇报即可；禁止手写用例 JSON。"
+                    if not allow_refine
+                    else "执行完成后根据返回摘要调用 refine_test_plan 写入可复现 steps；仅改 JSON/选择器时可只调用 refine_test_plan。"
+                ),
             ]
         else:
             parts_agent = [
                 "【重要】平台已启用内置浏览器运行时，但 Hermes 尚未 attach 到画布 CDP。",
-                "请先确保 AI 测试页已连接实时画面，再调用 hermes_execute；当前请通过 refine_test_plan 写入 steps 由平台执行。",
-                "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
+                (
+                    "请先确保 AI 测试页已连接实时画面，再调用 hermes_execute；完成后自然语言汇报，禁止输出用例 JSON。"
+                    if not allow_refine
+                    else "请先确保 AI 测试页已连接实时画面，再调用 hermes_execute；当前请通过 refine_test_plan 写入 steps 由平台执行。"
+                    "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。"
+                ),
             ]
     elif (embedded_session_id or "").strip() and embedded_gateway_enabled():
         if hermes_cdp_attached():
             parts_agent = [
                 "【重要】用户已连接内置 AI 画布且 Hermes CDP 已 attach。可调用 hermes_execute 在同一 Chromium 中探索；",
-                "完成后用 refine_test_plan 固化步骤。仅改 JSON 时可只调用 refine_test_plan。",
+                (
+                    "完成后一两句中文汇报，禁止手写用例 JSON。"
+                    if not allow_refine
+                    else "完成后用 refine_test_plan 固化步骤。仅改 JSON 时可只调用 refine_test_plan。"
+                ),
             ]
         else:
             parts_agent = [
                 "【重要】用户已连接内置 AI 画布（browser runtime 会话）。浏览器操作必须只在该画布 Chromium 中通过 steps 体现；",
                 "由平台在画布执行。禁止调用 hermes_execute（CDP 未同步，会另开独立浏览器窗口）。",
-                "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改 steps。",
+                (
+                    "请用 hermes_execute 以外的说明请用户先连接 CDP；禁止直接输出用例 JSON。"
+                    if not allow_refine
+                    else "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改 steps。"
+                ),
             ]
     else:
         parts_agent = [
@@ -2082,8 +2610,13 @@ def _build_system_prompt(
             "起始网址在用户消息里（平台无独立 URL 输入框）；instruction 须带上完整任务（含 URL、账号、验收点）。"
             "平台会尝试从消息解析 URL 并预导航；若仍停在 about:blank，Hermes 须先 navigate 到消息中的地址。",
             "hermes_execute 可把 scope / environment_notes / acceptance_criteria / continuation_from 与 instruction 组合成长指令；"
-            "对大系统请分多轮调用。拿到 Agent 文本结果后提炼选择器、URL、断言文案；必要时调用 refine_test_plan 合并。",
-            "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
+            "对大系统请分多轮调用。",
+            (
+                "拿到 Agent 结果后用一两句中文汇报；禁止 refine_test_plan，禁止输出用例 JSON。"
+                if not allow_refine
+                else "拿到 Agent 文本结果后提炼选择器、URL、断言文案；必要时调用 refine_test_plan 合并。"
+                "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。"
+            ),
         ]
     parts.extend(parts_agent)
     parts.extend(_cross_end_strategy_lines())
@@ -2136,8 +2669,15 @@ def _build_system_prompt(
     parts.extend([
         "",
         f"项目名: {project_name or 'unknown'}",
-        f"当前计划 JSON:\n{plan_preview}",
     ])
+    # 执行任务模式（禁止 refine）时不要把空壳「当前计划 JSON」塞进 system，否则模型会照抄 case_name/steps
+    if allow_refine and (current_plan or {}):
+        parts.append(f"当前计划 JSON（仅供 refine 参考，禁止在聊天回复中原样输出）:\n{plan_preview}")
+    elif not allow_refine:
+        parts.append(
+            "【输出硬约束】本轮是任务执行/对话，不是「生成用例」。"
+            "回复必须是自然语言中文；绝对禁止输出含 case_name / steps 的 JSON 对象或代码块。"
+        )
     ts = (test_scope or "").strip()
     if ts:
         parts.append(f"【用户指定的测试范围/模块】（须在步骤与描述中落实）: {ts}")
@@ -2738,13 +3278,15 @@ def _handle_agent_execute(
                 "browser_goto",
                 "navigate",
                 "browser_snapshot",
+                "browser_console",  # 无 expression 的只读 console 也会反复空转
             }
         )
         _NAV_NAMES = frozenset({"browser_navigate", "browser_goto", "navigate"})
         # 只读探索工具：连续只调这些而没有任何操作类工具 = 死循环
-        # browser_console / browser_back / browser_press 等可改变页面状态，不算只读
+        # browser_console 带 expression 可执行 JS（可能改状态），无参纯读日志 → 只读；
+        # browser_back / browser_press 等可改变页面状态，不算只读
         _READONLY_BROWSER_TOOLS = frozenset(
-            {"browser_snapshot", "browser_scroll", "browser_get_images"}
+            {"browser_snapshot", "browser_scroll", "browser_get_images", "browser_console"}
         )
         _READONLY_CYCLE_WINDOW = 5
         # 同一次真实调用可能被推 started/progress/completed 多条事件，按签名去重，
@@ -2753,6 +3295,76 @@ def _handle_agent_execute(
         _TOOL_DONE_STATUSES = frozenset(
             {"completed", "success", "succeeded", "done", "finished", "failed", "error"}
         )
+
+        # ===== 浏览器观测“上限即跳过”（对齐桌面 _DESKTOP_OBS_CAP，:1290-1297）=====
+        # 同一页面 epoch 内纯观测累计；navigate / 操作类 / 滚动类工具视为进入新阶段并重置计数。
+        # snapshot 累计达上限仍未操作 → 提前软停（skip 语义），不等 _REP_LIMIT(3) 或只读窗口(5) 硬熔断。
+        # 验收：单页任务 browser_snapshot ≤2 次、browser_console ≤1 次（无 JS 错误场景）。
+        _BROWSER_SNAPSHOT_CAP = 2
+        _BROWSER_CONSOLE_CAP = 1
+        # 操作/推进类工具：出现即重置 epoch（snapshot 后滚动查看新内容 = 合理观测；
+        # 纯 scroll 死循环仍由 _READONLY_BROWSER_TOOLS 只读窗口兜底）
+        _BROWSER_EPOCH_RESET_TOOLS = frozenset(
+            {
+                "browser_navigate",
+                "browser_goto",
+                "browser_click",
+                "browser_type",
+                "browser_back",
+                "browser_press",
+                "browser_scroll",
+                "browser_vision",
+                "navigate",
+                "goto",
+            }
+        )
+        _browser_epoch_snaps = 0
+        _browser_epoch_consoles = 0
+
+        def _norm_hermes_tool_name(raw: str) -> str:
+            """归一化工具名：去 hermes: 前缀、截断到空格/括号（browser_navigate(...)→browser_navigate）。"""
+            n = (raw or "").strip().lower()
+            if n.startswith("hermes:"):
+                n = n.split(":", 1)[-1].strip()
+            return re.split(r"[\s(/]", n, maxsplit=1)[0].strip()
+
+        def _browser_obs_cap_check(tn: str) -> Optional[str]:
+            """纯观测上限即跳过：返回 skip JSON 字符串时，外层应软停本次 Hermes 执行。"""
+            nonlocal _browser_epoch_snaps, _browser_epoch_consoles
+            if tn in _BROWSER_EPOCH_RESET_TOOLS:
+                # 出现操作/推进工具 → 观测已服务于进展，进入新 epoch 重新计数
+                _browser_epoch_snaps = 0
+                _browser_epoch_consoles = 0
+                return None
+            if tn == "browser_snapshot":
+                if _browser_epoch_snaps >= _BROWSER_SNAPSHOT_CAP:
+                    return _skip_payload(
+                        "snapshot_cap",
+                        "页面快照已达上限（同一阶段最多 2 次）且期间无任何操作，本次 snapshot 已拦截。"
+                        "请基于已有快照 / DOM 清单直接执行下一步操作或结束任务，禁止继续快照。",
+                        obs_name="browser_snapshot",
+                        epoch_snapshots=_browser_epoch_snaps,
+                    )
+                _browser_epoch_snaps += 1
+                return None
+            if tn == "browser_console":
+                if _browser_epoch_consoles >= _BROWSER_CONSOLE_CAP:
+                    return _skip_payload(
+                        "console_cap",
+                        "控制台日志读取已达上限（同一阶段最多 1 次）且期间无任何操作，本次调用已拦截。"
+                        "请直接操作页面或结束任务，禁止重复读取 console 空转。",
+                        obs_name="browser_console",
+                        epoch_consoles=_browser_epoch_consoles,
+                    )
+                _browser_epoch_consoles += 1
+                return None
+            return None
+
+        # ===== SSE 事件去重强化：同工具+同参数 N 秒内只计一次 =====
+        # 快速重复调用（如页面加载中重试 snapshot）不计入循环检测，避免误判死循环；
+        # 上限计数（_browser_epoch_snaps/consoles）统计真实调用，不受此去重影响。
+        _SIG_DEDUP_SEC = 8.0
+        _sig_dedup: Dict[str, float] = {}
 
         def _update_readonly_cycle(n: str) -> Optional[str]:
             """只读浏览器工具交替循环检测。"""
@@ -2771,11 +3383,8 @@ def _handle_agent_execute(
             raw: str, status: Optional[str] = None, readonly_only: bool = False
         ) -> Optional[str]:
             nonlocal _rep_name, _rep_count
-            n = (raw or "").strip().lower()
-            if n.startswith("hermes:"):
-                n = n.split(":", 1)[-1].strip()
+            n = _norm_hermes_tool_name(raw)
             # "browser_navigate(...)" / "terminal"
-            n = re.split(r"[\s(/]", n, maxsplit=1)[0].strip()
             if not n:
                 return None
             # 「Hermes 开始执行」等非工具轨迹不计入
@@ -2955,10 +3564,25 @@ def _handle_agent_execute(
                             count_now = sig != _last_tool_sig
                             _last_tool_sig = "" if status in _TOOL_DONE_STATUSES else sig
                             if count_now:
-                                looped = _note_hermes_tool_name(
-                                    str(ev_payload.get("name") or sum_m),
-                                    status=status,
+                                _tn = _norm_hermes_tool_name(
+                                    str(ev_payload.get("name") or sum_m)
                                 )
+                                # 上限即跳过：纯观测累计到上限仍未操作 → 提前软停（不等 3 次熔断）
+                                _cap_skip = _browser_obs_cap_check(_tn)
+                                if _cap_skip:
+                                    result_text = _cap_skip
+                                    meta["hermes_tool_obs_capped"] = True
+                                    meta["hermes_tool_obs_cap_tool"] = _tn
+                                    break
+                                # SSE 去重强化：同工具+同参数 N 秒内只计一次（避免快速重复调用误判死循环）
+                                _now_ts = time.time()
+                                if (
+                                    sig in _sig_dedup
+                                    and (_now_ts - _sig_dedup[sig]) < _SIG_DEDUP_SEC
+                                ):
+                                    continue
+                                _sig_dedup[sig] = _now_ts
+                                looped = _note_hermes_tool_name(_tn, status=status)
                                 if looped:
                                     result_text = _halt_tool_loop(looped)
                                     break
@@ -3200,6 +3824,16 @@ def _prepare_unified_agent_meta(params: "ChatToolLoopParams", plat: str) -> Dict
             cross_vars = seeded
     else:
         cross_vars = seeded
+    allow_refine = getattr(params, "allow_refine_test_plan", True)
+    # 执行会话（禁止 refine）默认期望真正调工具，避免空口「完成」
+    expect_tools = allow_refine is False
+    if not expect_tools:
+        try:
+            from agent_intent import message_needs_automation
+
+            expect_tools = bool(message_needs_automation(getattr(params, "message", "") or ""))
+        except Exception:
+            expect_tools = False
     return {
         "tool_rounds": 0,
         "tools_used": [],
@@ -3215,6 +3849,7 @@ def _prepare_unified_agent_meta(params: "ChatToolLoopParams", plat: str) -> Dict
         "repair_forward_only": False,
         "cross_end_vars": cross_vars,
         "agent_session_id": sid or "default",
+        "expect_tools": expect_tools,
     }
 
 
@@ -3295,7 +3930,7 @@ def run_ai_chat_with_tools(
         _lines.append("\n\n## === 任务语义分析与工具选择指南 ===")
         
         # 平台状态
-        _connected = connected_hands or {}
+        _connected = getattr(params, "connected_hands", None) or {}
         _parts = []
         if allow_agent:
             _parts.append("hermes_execute(浏览器)")
@@ -3372,6 +4007,11 @@ def run_ai_chat_with_tools(
         embedded_session_id=embed_sid,
         platform_type=plat,
         generate_case_after_run=bool(getattr(params, "generate_case_after_run", False)),
+        allow_refine_test_plan=(
+            bool(params.allow_refine_test_plan)
+            if getattr(params, "allow_refine_test_plan", None) is not None
+            else True
+        ),
     )
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -3475,42 +4115,105 @@ def run_ai_chat_with_tools(
                 meta["chat_reply"] = True
                 meta["failed"] = True
                 meta["savable"] = False
-                meta["reply_text"] = text
+                meta["reply_text"] = _strip_invented_case_json(text)
                 return {}, [], meta
-            try:
-                parsed = local_ai_service._parse_json_response(text)
-                using_model = (params.legacy_model or local_ai_service.model_mid).strip()
-                if prof:
-                    using_model = (
-                        (prof.get("label") or prof.get("model_id") or using_model) or using_model
-                    ).strip()
-                normalized = local_ai_service._normalize_output(
-                    parsed,
-                    params.message,
-                    params.project_name,
-                    using_model,
-                    probe_registry=params.probe_registry,
+            _allow_ref = getattr(params, "allow_refine_test_plan", None)
+            allow_parse_plan = bool(_allow_ref) if _allow_ref is not None else True
+            tools_used = list(meta.get("tools_used") or [])
+            expect_auto = _automation_expected(params, meta, tools)
+            # 期望自动化却零工具：优先还原/自动提升为 hermes_execute，而非硬失败
+            if expect_auto and not tools_used:
+                resolved = _resolve_no_tool_assistant_text(
+                    text, params=params, meta=meta, tools=tools, round_idx=round_idx
                 )
+                if resolved.get("action") == "tool_calls" and resolved.get("tool_calls"):
+                    tool_calls = resolved["tool_calls"]
+                    if resolved.get("auto_injected"):
+                        meta["auto_injected_execute"] = True
+                        uat_logger.info(
+                            "auto_injected hermes_execute from no-tool reply (case_json=%s fake_complete=%s)",
+                            bool(resolved.get("was_case_json")),
+                            bool(resolved.get("fake_complete")),
+                        )
+                    elif resolved.get("recovered_from_content"):
+                        meta["recovered_tool_calls"] = True
+                    # 落入下方正式 tool 执行路径
+                elif resolved.get("action") == "nudge":
+                    messages.append({"role": "assistant", "content": text})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": resolved.get("nudge_user")
+                            or (
+                                "你还没有调用任何自动化工具，禁止声称已完成，禁止输出用例 JSON。"
+                                "请立即调用自动化工具执行用户任务。"
+                            ),
+                        }
+                    )
+                    continue
+                else:
+                    meta["final_round"] = round_idx
+                    meta["chat_reply"] = True
+                    meta["savable"] = False
+                    meta["failed"] = True
+                    meta["no_tool_case_json"] = bool(resolved.get("was_case_json"))
+                    meta["fake_complete"] = bool(resolved.get("fake_complete"))
+                    meta["reply_text"] = resolved.get("clean_text") or _no_tool_failure_reply(
+                        was_case_json=bool(resolved.get("was_case_json")),
+                        fake_complete=True,
+                    )
+                    return {}, [], meta
+            if not tool_calls and not allow_parse_plan:
                 meta["final_round"] = round_idx
-                return normalized, [], meta
-            except ValueError:
-                uat_logger.info("AI chat tools: final message not JSON, falling back to refine once")
-                refined = local_ai_service.refine_case_and_steps(
-                    user_message=params.message,
-                    project_name=params.project_name,
-                    current_plan=last_plan,
-                    history=params.history if isinstance(params.history, list) else [],
-                    model=params.legacy_model,
-                    profile=prof,
-                    page_snapshot=params.page_snapshot,
-                    probe_registry=params.probe_registry,
-                    probe_url=params.probe_url,
-                    memory_context=params.memory_context,
-                    dom_context_pack=params.dom_context_pack,
-                    interaction_context=params.interaction_context,
-                )
-                meta["fallback"] = "refine_after_non_json"
-                return refined, [], meta
+                meta["chat_reply"] = True
+                meta["savable"] = False
+                clean_text = _strip_invented_case_json(text)
+                was_case_json = (not clean_text) or _looks_like_case_json_blob(text)
+                if was_case_json:
+                    clean_text = _nl_fallback_when_case_json(text)
+                meta["reply_text"] = clean_text
+                return {}, [], meta
+            if not tool_calls:
+                try:
+                    parsed = local_ai_service._parse_json_response(text)
+                    using_model = (params.legacy_model or local_ai_service.model_mid).strip()
+                    if prof:
+                        using_model = (
+                            (prof.get("label") or prof.get("model_id") or using_model) or using_model
+                        ).strip()
+                    normalized = local_ai_service._normalize_output(
+                        parsed,
+                        params.message,
+                        params.project_name,
+                        using_model,
+                        probe_registry=params.probe_registry,
+                    )
+                    if not _is_plausible_case_plan(normalized):
+                        raise ValueError("parsed plan looks like chat noise")
+                    meta["final_round"] = round_idx
+                    return normalized, [], meta
+                except ValueError:
+                    # 非 JSON / 空壳用例：当作自然语言回复，不要再强制 refine 成假用例
+                    meta["final_round"] = round_idx
+                    meta["chat_reply"] = True
+                    meta["savable"] = False
+                    clean_text = _strip_invented_case_json(text)
+                    if not clean_text or _looks_like_case_json_blob(clean_text):
+                        clean_text = _nl_fallback_when_case_json(text)
+                    # 假完成不应在 parse 失败后当成功闲聊放出
+                    if _looks_like_fake_completion_claim(text) and expect_auto:
+                        meta["failed"] = True
+                        meta["fake_complete"] = True
+                        clean_text = _no_tool_failure_reply(
+                            was_case_json=_looks_like_case_json_blob(text),
+                            fake_complete=True,
+                        )
+                    meta["reply_text"] = clean_text
+                    meta["fallback"] = "chat_after_non_json"
+                    return {}, [], meta
+
+        if not tool_calls:
+            continue
 
         meta["tool_rounds"] = int(meta["tool_rounds"]) + 1
 
@@ -3990,6 +4693,11 @@ def run_ai_chat_with_tools_stream(
         embedded_session_id=embed_sid,
         platform_type=plat,
         generate_case_after_run=bool(getattr(params, "generate_case_after_run", False)),
+        allow_refine_test_plan=(
+            bool(params.allow_refine_test_plan)
+            if getattr(params, "allow_refine_test_plan", None) is not None
+            else True
+        ),
     )
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -4185,6 +4893,10 @@ def run_ai_chat_with_tools_stream(
                 meta["savable"] = False
                 meta["partial"] = False
                 clean_text = _strip_invented_case_json(text)
+                if not clean_text or _looks_like_case_json_blob(clean_text):
+                    clean_text = (text.strip() if text and not _looks_like_case_json_blob(text) else "") or (
+                        "执行未成功完成。请查看上方工具错误说明，或换个说法再试。"
+                    )
                 yield ("reply", {"text": clean_text})
                 yield (
                     "done",
@@ -4199,58 +4911,179 @@ def run_ai_chat_with_tools_stream(
                     },
                 )
                 return
-            try:
-                parsed = local_ai_service._parse_json_response(text)
-                using_model = (params.legacy_model or local_ai_service.model_mid).strip()
-                if prof:
-                    using_model = ((prof.get("label") or prof.get("model_id") or using_model) or using_model).strip()
-                normalized = local_ai_service._normalize_output(
-                    parsed, params.message, params.project_name, using_model,
-                    probe_registry=params.probe_registry,
+            # 任务执行默认禁止 refine：一律当对话回复，禁止把胡乱 JSON 当「完成用例」
+            _allow_ref = getattr(params, "allow_refine_test_plan", None)
+            allow_parse_plan = (
+                bool(_allow_ref)
+                if _allow_ref is not None
+                else True
+            )
+            tools_used = list(meta.get("tools_used") or [])
+            expect_auto = _automation_expected(params, meta, tools)
+            if expect_auto and not tools_used:
+                resolved = _resolve_no_tool_assistant_text(
+                    text, params=params, meta=meta, tools=tools, round_idx=round_idx
                 )
-                meta["final_round"] = round_idx
-                n = len(normalized.get("steps") or [])
-                _maybe_persist_desktop_run_memory(
-                    meta, message=params.message or "", failed=False
-                )
-                yield ("plan_update", {"plan": normalized, "step_count": n})
-                yield (
-                    "done",
-                    {
-                        "total_rounds": round_idx + 1,
-                        "plan": normalized,
-                        "meta": meta,
-                        "reply": "",
-                        "savable": True,
-                        "failed": False,
-                        "partial": bool(meta.get("partial")),
-                    },
-                )
-                return
-            except ValueError:
+                if resolved.get("action") == "tool_calls" and resolved.get("tool_calls"):
+                    tool_calls = resolved["tool_calls"]
+                    if resolved.get("auto_injected"):
+                        meta["auto_injected_execute"] = True
+                        yield (
+                            "thinking",
+                            {
+                                "round": round_idx,
+                                "content": (
+                                    "模型未正确调用工具（常把用例 JSON 当回复），"
+                                    "已自动转交 hermes_execute 执行…"
+                                ),
+                            },
+                        )
+                    elif resolved.get("recovered_from_content"):
+                        meta["recovered_tool_calls"] = True
+                        yield (
+                            "thinking",
+                            {
+                                "round": round_idx,
+                                "content": "已从模型正文还原工具调用，正在执行…",
+                            },
+                        )
+                    # 落入下方正式 tool 执行路径
+                elif resolved.get("action") == "nudge":
+                    messages.append({"role": "assistant", "content": text})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": resolved.get("nudge_user")
+                            or (
+                                "你还没有调用任何自动化工具，禁止声称已完成，禁止输出用例 JSON。"
+                                "请立即调用自动化工具执行用户任务。"
+                            ),
+                        }
+                    )
+                    yield (
+                        "thinking",
+                        {
+                            "round": round_idx,
+                            "content": "模型未调用工具，正在催促其执行自动化…",
+                        },
+                    )
+                    continue
+                else:
+                    clean_text = resolved.get("clean_text") or _no_tool_failure_reply(
+                        was_case_json=bool(resolved.get("was_case_json")),
+                        fake_complete=True,
+                    )
+                    meta["final_round"] = round_idx
+                    meta["chat_reply"] = True
+                    meta["failed"] = True
+                    meta["savable"] = False
+                    meta["no_tool_case_json"] = bool(resolved.get("was_case_json"))
+                    meta["fake_complete"] = bool(resolved.get("fake_complete"))
+                    yield ("reply", {"text": clean_text})
+                    yield (
+                        "done",
+                        {
+                            "total_rounds": round_idx + 1,
+                            "plan": {},
+                            "meta": meta,
+                            "reply": clean_text,
+                            "savable": False,
+                            "failed": True,
+                            "partial": False,
+                        },
+                    )
+                    return
+            if not tool_calls and not allow_parse_plan:
                 meta["final_round"] = round_idx
                 meta["chat_reply"] = True
-                _maybe_persist_desktop_run_memory(
-                    meta,
-                    message=params.message or "",
-                    failed=bool(meta.get("hermes_failed") or meta.get("failed")),
-                )
-                yield ("reply", {"text": text})
+                clean_text = _strip_invented_case_json(text)
+                was_case_json = (not clean_text) or _looks_like_case_json_blob(text)
+                if was_case_json:
+                    clean_text = _nl_fallback_when_case_json(text)
+                yield ("reply", {"text": clean_text})
                 yield (
                     "done",
                     {
                         "total_rounds": round_idx + 1,
-                        "plan": last_plan if meta.get("savable") is not False else {},
+                        "plan": {},
                         "meta": meta,
-                        "reply": text,
-                        "savable": meta.get("savable") is not False and bool((last_plan or {}).get("steps")),
-                        "failed": bool(meta.get("hermes_failed")),
-                        "partial": bool(meta.get("partial")),
+                        "reply": clean_text,
+                        "savable": False,
+                        "failed": bool(meta.get("failed")),
+                        "partial": False,
                     },
                 )
                 return
+            if not tool_calls:
+                try:
+                    parsed = local_ai_service._parse_json_response(text)
+                    using_model = (params.legacy_model or local_ai_service.model_mid).strip()
+                    if prof:
+                        using_model = ((prof.get("label") or prof.get("model_id") or using_model) or using_model).strip()
+                    normalized = local_ai_service._normalize_output(
+                        parsed, params.message, params.project_name, using_model,
+                        probe_registry=params.probe_registry,
+                    )
+                    if not _is_plausible_case_plan(normalized):
+                        raise ValueError("parsed plan looks like chat noise")
+                    meta["final_round"] = round_idx
+                    n = len(normalized.get("steps") or [])
+                    _maybe_persist_desktop_run_memory(
+                        meta, message=params.message or "", failed=False
+                    )
+                    yield ("plan_update", {"plan": normalized, "step_count": n})
+                    yield (
+                        "done",
+                        {
+                            "total_rounds": round_idx + 1,
+                            "plan": normalized,
+                            "meta": meta,
+                            "reply": "",
+                            "savable": True,
+                            "failed": False,
+                            "partial": bool(meta.get("partial")),
+                        },
+                    )
+                    return
+                except ValueError:
+                    meta["final_round"] = round_idx
+                    meta["chat_reply"] = True
+                    _maybe_persist_desktop_run_memory(
+                        meta,
+                        message=params.message or "",
+                        failed=bool(meta.get("hermes_failed") or meta.get("failed")),
+                    )
+                    clean_text = _strip_invented_case_json(text)
+                    if not clean_text or _looks_like_case_json_blob(clean_text):
+                        clean_text = _nl_fallback_when_case_json(text)
+                    failed_out = False
+                    if _looks_like_fake_completion_claim(text) and expect_auto:
+                        failed_out = True
+                        meta["failed"] = True
+                        meta["fake_complete"] = True
+                        clean_text = _no_tool_failure_reply(
+                            was_case_json=_looks_like_case_json_blob(text),
+                            fake_complete=True,
+                        )
+                    yield ("reply", {"text": clean_text})
+                    yield (
+                        "done",
+                        {
+                            "total_rounds": round_idx + 1,
+                            "plan": {},
+                            "meta": meta,
+                            "reply": clean_text,
+                            "savable": False,
+                            "failed": failed_out,
+                            "partial": False,
+                        },
+                    )
+                    return
 
-        # 有 tool calls
+        if not tool_calls:
+            continue
+
+        # 有 tool calls（含从用例 JSON / 正文自动提升）
         meta["tool_rounds"] = int(meta["tool_rounds"]) + 1
         messages.append({"role": "assistant", "content": content if content else None, "tool_calls": tool_calls})
 
@@ -4473,6 +5306,16 @@ def run_ai_chat_with_tools_stream(
 
                     rec_tmp = params.recorder if params.recorder else _AR()
                     out_recs = []
+                    try:
+                        from ai_action_recorder import (
+                            is_observation_tool as _is_obs_tool,
+                            is_replayable_action_type as _is_replayable,
+                            lift_console_expression as _lift_console,
+                        )
+                    except Exception:
+                        _is_obs_tool = lambda _n: False  # type: ignore
+                        _is_replayable = lambda _a: True  # type: ignore
+                        _lift_console = lambda _e: None  # type: ignore
                     for te in tool_evs[-80:]:
                         if not isinstance(te, dict):
                             continue
@@ -4481,15 +5324,27 @@ def run_ai_chat_with_tools_stream(
                         te_args = te.get("args") if isinstance(te.get("args"), dict) else {}
                         te_has_result = te.get("result") is not None
                         te_seen = str(te.get("sse_event") or "")
+                        # 观察类工具不进实时用例（browser_console 仅当能提升为 click/input/navigate 时保留）
+                        if te_name == "browser_console":
+                            _expr = str(
+                                te_args.get("expression")
+                                or te_args.get("code")
+                                or te_args.get("script")
+                                or ""
+                            )
+                            if not _lift_console(_expr):
+                                continue
+                        elif _is_obs_tool(te_name):
+                            continue
                         # 平台工具（browser_*/windows_*/mobile_*）判定：这类工具即使 result=None、status=running
                         # 也代表 AI 确实调用过，应当被记录到「执行动作」和「实时用例」。
                         is_platform_tool = (
                             te_name.startswith("browser_")
                             or te_name.startswith("windows_")
                             or te_name.startswith("mobile_")
-                            or te_name in ("navigate", "goto", "click", "type", "snapshot", "scroll",
+                            or te_name in ("navigate", "goto", "click", "type", "scroll",
                                            "open_app", "tap", "input_text", "swipe", "extract_otp",
-                                           "launch_app", "focus_app", "press_key", "screenshot")
+                                           "launch_app", "focus_app", "press_key")
                         )
                         # final result 事件中的工具应视为已完成；若有 result 但 status=running，视为 completed
                         if te_has_result and te_status in ("running", "in_progress", "started", "progress", ""):
@@ -4529,11 +5384,13 @@ def run_ai_chat_with_tools_stream(
                                 if st in ("running", "in_progress", "started", "progress"):
                                     continue
                                 if st in ("fail", "error", "failed"):
-                                    st = "failed"
+                                    continue  # 失败不进实时用例
                                 elif st in ("ok", "done", "success", "completed", "complete"):
                                     st = "success"
                                 elif st not in ("warning", "skipped"):
                                     st = "warning"
+                                if not _is_replayable(r.action_type):
+                                    continue
                                 out_recs.append(
                                     {
                                         "action_type": r.action_type,
@@ -4554,7 +5411,12 @@ def run_ai_chat_with_tools_stream(
                     # 策略：始终运行 fallback 解析，并与已有记录合并去重（不跳过）。
                     try:
                         import re as _re
-                        from ai_action_recorder import sanitize_target as _sanitize_tgt, is_state_observation, contains_negative_snippet
+                        from ai_action_recorder import (
+                            sanitize_target as _sanitize_tgt,
+                            is_state_observation,
+                            contains_negative_snippet,
+                            is_replayable_action_type as _fb_replayable,
+                        )
                         fb_recs: List[Dict[str, Any]] = []
                         _seen_sigs: set = set()
                         def _dedup_sig(action: str, target: str) -> bool:
@@ -4592,8 +5454,6 @@ def run_ai_chat_with_tools_stream(
                              "input", 2),
                             (r"browser_(?:type|fill)\s*\(\s*(?:ref\s*=\s*)?['\"]([^'\"]{0,80})['\"]\s*\)",
                              "input", 1),
-                            (r"\b(browser_snapshot)\s*\(",
-                             "snapshot", 0),
                             (r"browser_scroll\s*\(\s*direction\s*=\s*['\"]?([^'\",\)\s]{2,20})['\"]?",
                              "scroll", 0),
                             (r"browser_(?:press_key|keyboard)\s*\(\s*key\s*=\s*['\"]?([^'\",\)\s]{1,20})['\"]?",
@@ -4634,6 +5494,8 @@ def run_ai_chat_with_tools_stream(
                                     # 过滤：target 是状态观察或含负向片段 → 跳过
                                     if is_state_observation(_tgt) or contains_negative_snippet(_tgt):
                                         continue
+                                    if not _fb_replayable(_act):
+                                        continue
                                     if not _dedup_sig(_act, _tgt):
                                         continue
                                     fb_recs.append({
@@ -4652,8 +5514,6 @@ def run_ai_chat_with_tools_stream(
                             # Web 浏览器
                             (r"(?:导航到|访问|打开网页|进入网站)\s*[:：]\s*(https?://[^\s\"'，。、；]{4,240})",
                              "navigate", 1),
-                            (r"获取页面结构|页面结构快照|DOM\s*清单|browser_snapshot\(\)",
-                             "snapshot", 0),
                             (r"点击\s*([^「\"'\s，。；：\n]{1,30}?)\s*(?:按钮|链接|图标|tab|标签|菜单|选项卡)",
                              "click", 1),
                             (r"点击\s*(@?e?\d+)",
@@ -4701,12 +5561,14 @@ def run_ai_chat_with_tools_stream(
                                             continue
                                     else:
                                         _tgt = _sanitize_tgt(str(_raw_tgt))[:120] or _act
+                                    if not _fb_replayable(_act):
+                                        continue
                                     if not _dedup_sig(_act, _tgt):
                                         continue
                                     fb_recs.append({
                                         "action_type": _act,
                                         "target": _tgt,
-                                        "status": "warning" if _act == "snapshot" else "success",
+                                        "status": "success",
                                         "result": str(_m.group(0) or _act)[:100],
                                         "has_vision": False,
                                         "env_verify": None,

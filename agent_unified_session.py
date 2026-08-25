@@ -94,9 +94,14 @@ def set_session_meta(
 
 
 def snapshot_connected_hands(user_id: int = 0) -> Dict[str, Any]:
-    """按连接态描述可用双手（非入口平台）。"""
+    """按连接态描述可用双手（非入口平台）。
+
+    phone=True：sync 已配对 **或** ADB 有可用 serial（PC 遥控 tap/swipe/OCR 可用）。
+    mobile_run_steps/case 仍在工具内单独校验 APK poller 心跳。
+    """
     phone_ok = False
     phone_devices: List[Dict[str, Any]] = []
+    adb_serial = ""
     try:
         from mobile_sync_store import list_paired_devices_for_user
 
@@ -104,6 +109,27 @@ def snapshot_connected_hands(user_id: int = 0) -> Dict[str, Any]:
         phone_ok = len(phone_devices) > 0
     except Exception:
         phone_ok = False
+
+    if not phone_ok:
+        try:
+            from mobile_device_manager import get_connected_udid
+
+            adb_serial = (get_connected_udid() or "").strip()
+            if adb_serial:
+                phone_ok = True
+                phone_devices = [{"device_id": adb_serial, "serial": adb_serial, "source": "adb"}]
+        except Exception:
+            pass
+    if not adb_serial:
+        try:
+            from mobile_scrcpy_vision import get_device_serial_for_user
+
+            adb_serial = (get_device_serial_for_user(int(user_id or 0)) or "").strip()
+            if adb_serial and not phone_ok:
+                phone_ok = True
+                phone_devices = [{"device_id": adb_serial, "serial": adb_serial, "source": "adb"}]
+        except Exception:
+            pass
 
     desktop_ok = False
     desktop_detail = ""
@@ -135,6 +161,7 @@ def snapshot_connected_hands(user_id: int = 0) -> Dict[str, Any]:
         "desktop": desktop_ok,
         "browser": browser_ok,
         "phone_devices": phone_devices[:8],
+        "adb_serial": adb_serial,
         "desktop_detail": desktop_detail,
         "ts": time.time(),
     }

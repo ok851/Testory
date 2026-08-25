@@ -470,3 +470,400 @@ def multi_device_summary(result: Dict[str, Any]) -> str:
             line += f" err={err[:80]}"
         lines.append(line)
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────
+# PC + 手机跨端并行编排
+# stage 配置示例：
+#   {
+#     "id": "s3",
+#     "cross_end_parallel": true,
+#     "branches": [
+#       {"name": "pc",  "layer": "desktop", "steps": [{"action": "click", ...}]},
+#       {"name": "mobile", "layer": "mobile", "steps": [{"action": "tap", ...}],
+#        "device_id": "emulator-5554"},
+#     ],
+#     "allow_partial": false,
+#     "timeout_sec": 600
+#   }
+# 简写（无 branches 时）：
+#   {
+#     "parallel": {
+#       "pc":     {"steps": [...]},
+#       "mobile": {"steps": [...], "device_id": "..."}
+#     }
+#   }
+# ─────────────────────────────────────────────────────────────
+
+
+def is_cross_end_parallel_stage(stage: Dict[str, Any]) -> bool:
+    """判断 stage 是否需要 PC + 手机跨端并行编排。"""
+    if not isinstance(stage, dict):
+        return False
+    if stage.get("cross_end_parallel") is True:
+        return True
+    par = stage.get("parallel")
+    if isinstance(par, dict) and (
+        par.get("pc") or par.get("desktop") or par.get("mobile") or par.get("android") or par.get("branches")
+    ):
+        return True
+    if isinstance(stage.get("branches"), list) and len(stage["branches"]) > 1:
+        return True
+    return False
+
+
+def _parse_cross_end_parallel(stage: Dict[str, Any]) -> Dict[str, Any]:
+    """解析跨端并行配置，返回 {branches, allow_partial, timeout_sec}。"""
+    cfg: Dict[str, Any] = {
+        "branches": [],
+        "allow_partial": False,
+        "timeout_sec": 600.0,
+    }
+    par = stage.get("parallel") if isinstance(stage.get("parallel"), dict) else {}
+    branches = stage.get("branches") if isinstance(stage.get("branches"), list) else None
+
+    if branches is None:
+        branches = []
+        for nm in ("pc", "desktop", "mobile", "android"):
+            if isinstance(par.get(nm), dict) and par[nm].get("steps"):
+                b = dict(par[nm])
+                b.setdefault("name", nm)
+                b.setdefault("layer", "mobile" if nm in ("mobile", "android") else "desktop")
+                branches.append(b)
+
+    cfg["branches"] = [b for b in branches if isinstance(b, dict) and isinstance(b.get("steps"), list)]
+    cfg["allow_partial"] = bool(
+        stage.get("allow_partial") or par.get("allow_partial")
+    )
+    try:
+        cfg["timeout_sec"] = float(
+            stage.get("timeout_sec") or par.get("timeout_sec") or 600
+        )
+    except (TypeError, ValueError):
+        cfg["timeout_sec"] = 600.0
+    return cfg
+
+
+def _execute_pc_branch(
+    branch: Dict[str, Any],
+    *,
+    timeout_sec: float = 600.0,
+) -> Dict[str, Any]:
+    """PC 桌面分支：preflight 检查 + 桌面步骤逐步执行（复用自愈执行器）。
+
+    返回标准化结果 dict（与 _execute_steps_on_device 字段对齐）。
+    """
+    t0 = time.perf_counter()
+    steps = branch.get("steps", [])
+    name = str(branch.get("name") or "pc")
+    layer = str(branch.get("layer") or "desktop")
+    base: Dict[str, Any] = {
+        "branch": name,
+        "layer": layer,
+        "device_udid": "pc",
+        "device_model": "PC 桌面",
+        "ok": False,
+        "steps_executed": 0,
+        "elapsed_ms": 0,
+    }
+
+    try:
+        from ai_modules.execute.desktop_preflight import check_desktop_preflight
+        from ai_modules.optimize.desktop_runtime_heal import (
+            run_desktop_step_with_optional_heal,
+        )
+        from step_executor import validate_desktop_step_result
+    except ImportError as ie:
+        base["error"] = f"PC 分支依赖不可用: {ie}"
+        base["error_code"] = "PC_BRANCH_DEPS_MISSING"
+        base["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        return base
+
+    if not steps:
+        base["error"] = "PC 分支 steps 为空，不得当绿"
+        base["error_code"] = "PC_BRANCH_NO_STEPS"
+        base["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        return base
+
+    pre = check_desktop_preflight()
+    if not pre.get("ok"):
+        base["error"] = pre.get("error") or "桌面会话不可用"
+        base["error_code"] = pre.get("error_code") or "DESKTOP_NO_SESSION"
+        base["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        return base
+
+    step_results: List[Dict[str, Any]] = []
+    executed = 0
+    for step in steps:
+        if not isinstance(step, dict):
+            base["error"] = "Desktop 步骤格式无效（非 dict）"
+            base["error_code"] = "INVALID_STEP"
+            break
+        desk, _heal_meta = run_desktop_step_with_optional_heal(step)
+        step_results.append(desk if isinstance(desk, dict) else {})
+        executed += 1
+        try:
+            validate_desktop_step_result(desk, str(step.get("action") or ""))
+        except Exception as ve:
+            base["error"] = str(ve)
+            base["error_code"] = "DESKTOP_STEP_FAILED"
+            base["failed_action"] = step.get("action")
+            break
+        st = str((desk or {}).get("status") or "").strip().lower()
+        if st not in ("success", "ok", "passed"):
+            base["error"] = (
+                (desk or {}).get("error")
+                or (desk or {}).get("warning")
+                or f"桌面步骤 status={st!r} 不得当绿"
+            )
+            base["error_code"] = "DESKTOP_SOFT_FAIL"
+            base["failed_action"] = step.get("action")
+            break
+    else:
+        base["ok"] = True
+        base["status"] = "success"
+
+    base["steps_executed"] = executed
+    base["step_results"] = step_results
+    base["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    return base
+
+
+def _execute_mobile_branch(
+    branch: Dict[str, Any],
+    *,
+    user_id: int = 0,
+    timeout_sec: float = 600.0,
+) -> Dict[str, Any]:
+    """手机分支：优先指定 device_id，否则自动发现一台可用设备，走 APK job 本机执行。"""
+    t0 = time.perf_counter()
+    steps = branch.get("steps", [])
+    name = str(branch.get("name") or "mobile")
+    layer = str(branch.get("layer") or "mobile")
+    dev_id = str(branch.get("device_id") or branch.get("udid") or "").strip()
+
+    device: Optional[Dict[str, Any]] = None
+    if dev_id:
+        try:
+            from mobile_device_manager import get_device_info
+
+            info = get_device_info(dev_id)
+            device = {
+                "udid": dev_id,
+                "platform": "android",
+                "model": info.get("model", ""),
+                "screen_width": info.get("width", 1080),
+                "screen_height": info.get("height", 1920),
+                "is_emulator": False,
+                "connection_type": "usb",
+            }
+        except Exception:
+            device = {"udid": dev_id, "platform": "android", "model": "", "is_emulator": False}
+    else:
+        devs = _discover_available_devices(platform_filter="android", max_devices=1)
+        if devs:
+            device = devs[0]
+
+    base: Dict[str, Any] = {
+        "branch": name,
+        "layer": layer,
+        "ok": False,
+        "steps_executed": 0,
+        "elapsed_ms": 0,
+    }
+    if device is None:
+        base["error"] = (
+            f"手机分支无可用设备（device_id={dev_id or '-'} 且自动发现为空）"
+        )
+        base["error_code"] = "MOBILE_BRANCH_NO_DEVICE"
+        base["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        return base
+    if not steps:
+        base["error"] = "手机分支 steps 为空，不得当绿"
+        base["error_code"] = "MOBILE_BRANCH_NO_STEPS"
+        base["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        return base
+
+    r = _execute_steps_on_device(
+        device,
+        steps,
+        timeout_sec=timeout_sec,
+        source="cross_end_parallel",
+    )
+    r["branch"] = name
+    r["layer"] = layer
+    return r
+
+
+def execute_cross_end_parallel_stage(
+    stage: Dict[str, Any],
+    *,
+    progress_callback: Optional[Callable] = None,
+    user_id: int = 0,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """执行 PC + 手机跨端并行 stage（同一 stage 内 PC 与手机分支并行）。
+
+    Returns:
+        (result_dict, extracted_vars)
+    """
+    cfg = _parse_cross_end_parallel(stage)
+    stage_id = stage.get("id", "cross-end-parallel")
+    branches = cfg["branches"]
+    timeout_sec = cfg["timeout_sec"]
+
+    result: Dict[str, Any] = {
+        "ok_assert": False,
+        "error": None,
+        "elapsed_ms": 0,
+        "stage_id": stage_id,
+        "layer": "cross_end_parallel",
+        "executor": "cross_end_parallel",
+        "branch_count": 0,
+        "branch_results": [],
+        "steps_executed": 0,
+    }
+    extracted: Dict[str, Any] = {}
+
+    if len(branches) < 2:
+        result["error"] = "跨端并行至少需要 PC 与手机两个分支"
+        result["error_code"] = "CEP_NEED_TWO_BRANCHES"
+        result["elapsed_ms"] = 0
+        return result, extracted
+
+    # 区分 PC 分支与手机分支
+    pc_branches = [b for b in branches if (b.get("layer") or "").lower() in ("desktop", "pc", "web")]
+    mob_branches = [b for b in branches if (b.get("layer") or "").lower() in ("mobile", "android", "ios")]
+    # 未标注 layer 的分支按 name 猜测
+    for b in branches:
+        nm = str(b.get("name") or "").lower()
+        if nm in ("pc", "desktop", "web"):
+            pc_branches.append(b)
+        elif nm in ("mobile", "android", "ios", "phone"):
+            mob_branches.append(b)
+
+    # 去重（layer 与 name 可能同时命中）
+    seen: set = set()
+    merged_pc: List[Dict[str, Any]] = []
+    for b in pc_branches:
+        k = id(b)
+        if k not in seen:
+            seen.add(k)
+            merged_pc.append(b)
+    merged_mob: List[Dict[str, Any]] = []
+    for b in mob_branches:
+        k = id(b)
+        if k not in seen:
+            seen.add(k)
+            merged_mob.append(b)
+
+    if not merged_pc or not merged_mob:
+        result["error"] = "跨端并行缺少 PC 分支或手机分支（需各至少一个）"
+        result["error_code"] = "CEP_MISSING_BRANCH"
+        result["elapsed_ms"] = 0
+        return result, extracted
+
+    t0 = time.perf_counter()
+    result["branch_count"] = len(merged_pc) + len(merged_mob)
+
+    jobs: List[Tuple[str, Callable[[], Dict[str, Any]]]] = []
+    for b in merged_pc:
+        jobs.append((str(b.get("name") or "pc"), lambda bb=b: _execute_pc_branch(bb, timeout_sec=timeout_sec)))
+    for b in merged_mob:
+        jobs.append((
+            str(b.get("name") or "mobile"),
+            lambda bb=b, uid=user_id: _execute_mobile_branch(bb, user_id=uid, timeout_sec=timeout_sec),
+        ))
+
+    branch_results: List[Dict[str, Any]] = []
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(len(jobs), 8)
+    ) as pool:
+        future_map = {
+            pool.submit(fn): nm for nm, fn in jobs
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            nm = future_map[future]
+            try:
+                br = future.result(timeout=timeout_sec + 30)
+            except concurrent.futures.TimeoutError:
+                br = {
+                    "branch": nm, "ok": False, "status": "timeout",
+                    "error": f"分支 {nm} 执行超时 ({timeout_sec}s)",
+                    "error_code": "BRANCH_TIMEOUT",
+                    "elapsed_ms": timeout_sec * 1000,
+                    "steps_executed": 0,
+                }
+            except Exception as e:
+                br = {
+                    "branch": nm, "ok": False, "status": "error",
+                    "error": str(e)[:200], "error_code": "BRANCH_EXCEPTION",
+                    "elapsed_ms": 0, "steps_executed": 0,
+                }
+            branch_results.append(br)
+            if progress_callback:
+                try:
+                    progress_callback(stage_id, br.get("ok", False))
+                except Exception:
+                    pass
+
+    result["branch_results"] = branch_results
+    result["steps_executed"] = sum(int(b.get("steps_executed") or 0) for b in branch_results)
+
+    all_ok = all(b.get("ok") for b in branch_results)
+    any_ok = any(b.get("ok") for b in branch_results)
+    failed_branches = [b for b in branch_results if not b.get("ok")]
+
+    if all_ok:
+        result["ok_assert"] = True
+    elif cfg["allow_partial"] and any_ok:
+        result["ok_assert"] = True
+        result["partial_success"] = True
+        result["failed_branches"] = [b.get("branch") for b in failed_branches]
+    else:
+        result["ok_assert"] = False
+        result["error"] = (
+            f"{len(failed_branches)}/{len(branch_results)} 个分支失败: "
+            + "; ".join(
+                f"{b.get('branch')}: {b.get('error', 'unknown')}"
+                for b in failed_branches[:3]
+            )
+        )
+        result["error_code"] = "CEP_BRANCH_FAILED"
+        result["failed_branches"] = [b.get("branch") for b in failed_branches]
+
+    result["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+
+    # 变量抽取：成功分支的 result_payload.variables 并入
+    if result["ok_assert"]:
+        for br in branch_results:
+            if not br.get("ok"):
+                continue
+            payload = br.get("result_payload") or {}
+            vars_out = payload.get("variables") or {}
+            if isinstance(vars_out, dict):
+                for k, v in vars_out.items():
+                    if k and v is not None:
+                        extracted[f"{br.get('branch', 'b')}_{k}"] = v
+                        if k not in extracted:
+                            extracted[k] = v
+
+    return result, extracted
+
+
+def cross_end_parallel_summary(result: Dict[str, Any]) -> str:
+    """生成跨端并行执行摘要文本。"""
+    brs = result.get("branch_results") or []
+    elapsed = result.get("elapsed_ms", 0)
+    lines = [
+        f"跨端并行: {len(brs)} 个分支, 总耗时 {elapsed:.0f}ms",
+    ]
+    for br in brs:
+        mark = "OK" if br.get("ok") else "FAIL"
+        nm = br.get("branch", "?")
+        ly = br.get("layer", "")
+        err = br.get("error", "")
+        line = f"  [{mark}] {nm} ({ly})"
+        if err:
+            line += f" err={err[:80]}"
+        lines.append(line)
+    return "\n".join(lines)

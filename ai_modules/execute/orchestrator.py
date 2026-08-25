@@ -23,6 +23,7 @@ from ai_modules.plan.api_skill_adapter import ApiSkillAdapter
 from ai_modules.execute.timeline_tracker import get_or_create_tracker
 from ai_modules.execute.performance_monitor import PerformanceMetrics, record_metrics
 from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+from ai_modules.execute.multi_device_scheduler import is_cross_end_parallel_stage
 
 _version_mgr = ScenarioVersionManager()
 
@@ -1180,7 +1181,17 @@ def _execute_cross_end_plan_impl(
         # 记录阶段开始到时间线
         tracker.stage_start(stage_id, layer=layer)
 
-        if layer == "api":
+        if is_cross_end_parallel_stage(stage):
+            # PC + 手机跨端并行编排（同 stage 内双分支并行执行）
+            from ai_modules.execute.multi_device_scheduler import (
+                cross_end_parallel_summary,
+                execute_cross_end_parallel_stage,
+            )
+            result, extracted = execute_cross_end_parallel_stage(
+                stage, progress_callback=progress_callback, user_id=int(uid or 0),
+            )
+            result["cross_end_parallel_summary"] = cross_end_parallel_summary(result)
+        elif layer == "api":
             result, extracted = _execute_api_stage(stage, context)
         elif layer in ("hitl", "human"):
             # 已在上方处理

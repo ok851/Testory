@@ -164,6 +164,23 @@ def _openai_compat_headers(api_key: str, *, provider: str = "", base_url: str = 
     return headers
 
 
+_JSON_PLAN_SYSTEM = (
+    "You are a senior QA engineer. Reply with exactly one JSON object only—no markdown fences, "
+    "no commentary. First non-whitespace character must be '{'. "
+    "Schema: AI-assisted web test plan with case_name, case_url, description, precondition, expected_result, steps[]. "
+    "Steps: use action assert (+compare_type) for text/URL expectations; use verify only for captcha/human checks with input_value auto|slider|image|visible|exist|clickable. "
+    "For tianai-captcha (TAC) and mixed captcha types prefer verify auto (curve/rotate/click-text auto-detected). "
+    "Selectors must be real css/xpath from the page, never snapshot line numbers alone."
+)
+
+_ASSISTANT_CHAT_SYSTEM = (
+    "你是 Testory 平台的 AI 测试助手。用简洁自然的中文与用户对话。"
+    "闲聊、问身份/能力、问建议时直接回答。"
+    "禁止输出测试用例 JSON（不要出现 case_name / steps 等字段）。"
+    "禁止假装已操作浏览器或桌面；需要自动化时请提示用户给出可执行任务指令。"
+)
+
+
 def openai_compatible_chat(
     base_url: str,
     api_key: str,
@@ -174,27 +191,31 @@ def openai_compatible_chat(
     provider: str = "",
     group_id: str = "",
     abort_event: Optional[threading.Event] = None,
+    purpose: str = "json_plan",
 ) -> str:
-    """OpenAI /v1/chat/completions compatible endpoints."""
+    """OpenAI /v1/chat/completions compatible endpoints.
+
+    purpose:
+      - json_plan: 强制用例 JSON（生成/优化用例）
+      - assistant: 自然语言对话（闲聊/问答）
+    """
     url = _openai_compat_endpoint_url(base_url, provider=provider, group_id=group_id)
     headers = _openai_compat_headers(api_key, provider=provider, base_url=base_url)
+    sys_content = (
+        _ASSISTANT_CHAT_SYSTEM
+        if (purpose or "").strip().lower() in ("assistant", "chat", "nl")
+        else _JSON_PLAN_SYSTEM
+    )
     payload: Dict[str, Any] = {
         "model": _norm(model_id),
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "You are a senior QA engineer. Reply with exactly one JSON object only—no markdown fences, "
-                    "no commentary. First non-whitespace character must be '{'. "
-                    "Schema: AI-assisted web test plan with case_name, case_url, description, precondition, expected_result, steps[]. "
-                    "Steps: use action assert (+compare_type) for text/URL expectations; use verify only for captcha/human checks with input_value auto|slider|image|visible|exist|clickable. "
-                    "For tianai-captcha (TAC) and mixed captcha types prefer verify auto (curve/rotate/click-text auto-detected). "
-                    "Selectors must be real css/xpath from the page, never snapshot line numbers alone."
-                ),
+                "content": sys_content,
             },
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.2,
+        "temperature": 0.2 if (purpose or "").strip().lower() == "json_plan" else 0.4,
     }
 
     def _do_request():
@@ -464,6 +485,7 @@ def google_gemini_chat(
     timeout: int = 240,
     *,
     abort_event: Optional[threading.Event] = None,
+    purpose: str = "json_plan",
 ) -> str:
     mid = _norm(model_id)
     if not mid.startswith("models/"):
@@ -472,15 +494,20 @@ def google_gemini_chat(
         f"https://generativelanguage.googleapis.com/v1beta/{mid}:generateContent"
         f"?key={quote(_norm(api_key), safe='')}"
     )
+    sys_text = (
+        _ASSISTANT_CHAT_SYSTEM
+        if (purpose or "").strip().lower() in ("assistant", "chat", "nl")
+        else (
+            "You are a senior QA engineer. Return only JSON, no markdown. "
+            "Use web UI actions compatible with a test runner."
+        )
+    )
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "systemInstruction": {
             "parts": [
                 {
-                    "text": (
-                        "You are a senior QA engineer. Return only JSON, no markdown. "
-                        "Use web UI actions compatible with a test runner."
-                    )
+                    "text": sys_text
                 }
             ]
         },
@@ -559,9 +586,15 @@ def dispatch_chat(
     prompt: str,
     profile: Dict[str, Any],
     local_service: "LocalAIService",
+    *,
+    purpose: str = "json_plan",
 ) -> str:
     """
     Route chat completion by profile.api_style (and provider fallback).
+
+    purpose:
+      - json_plan（默认）: 用例生成等，要求 JSON
+      - assistant / chat: 自然语言对话，禁止用例 JSON
     """
     style = _norm(profile.get("api_style"))
     provider = _norm(profile.get("provider"))
@@ -569,23 +602,38 @@ def dispatch_chat(
     api_key = profile.get("api_key")
     base_url = _norm(profile.get("base_url"))
     timeout = int(os.environ.get("LOCAL_LLM_TIMEOUT", "240"))
+    purpose_n = (purpose or "json_plan").strip().lower() or "json_plan"
 
     if not model_id:
         raise ValueError("模型配置缺少 model_id")
 
     if style == "ollama" or provider == "ollama":
         obase = base_url or local_service.base_url
-        return local_service.chat_ollama(prompt, model_id, obase)
+        return local_service.chat_ollama(prompt, model_id, obase, purpose=purpose_n)
 
     if style == "anthropic_messages" or provider == "anthropic":
         if not _norm(api_key):
             raise ValueError("Anthropic 需要 API 密钥")
-        return anthropic_messages_chat(base_url or "https://api.anthropic.com", str(api_key), model_id, prompt, timeout)
+        sys = (
+            _ASSISTANT_CHAT_SYSTEM
+            if purpose_n in ("assistant", "chat", "nl")
+            else _JSON_PLAN_SYSTEM
+        )
+        return anthropic_messages_chat(
+            base_url or "https://api.anthropic.com",
+            str(api_key),
+            model_id,
+            prompt,
+            timeout,
+            system=sys,
+        )
 
     if style == "google_gemini" or provider == "google_gemini":
         if not _norm(api_key):
             raise ValueError("Gemini 需要 API 密钥")
-        return google_gemini_chat(str(api_key), model_id, prompt, timeout)
+        return google_gemini_chat(
+            str(api_key), model_id, prompt, timeout, purpose=purpose_n
+        )
 
     # Default: OpenAI-compatible (most cloud vendors)
     if not normalize_api_key(api_key):
@@ -598,6 +646,7 @@ def dispatch_chat(
         timeout,
         provider=provider,
         group_id=_norm(profile.get("group_id")),
+        purpose=purpose_n,
     )
 
 

@@ -135,9 +135,9 @@ def web_browser_cdp_hint() -> str:
         "- **禁止** 调用任何 skill_* 类工具（含查看技能文档）；规则已全部内联。\n",
         "- **禁止** terminal / curl / bash / windows_* / 桌面 MCP。\n",
         "- **禁止** 新开空白标签页；平台已导航则 **禁止 browser_navigate**（重复造轮子）。\n",
-        "- **DOM 优先**：指令内「页面 DOM/可交互控件」是主定位源；"
-        "browser_snapshot=无障碍树/DOM ref（不是截图）：click/type 前需先 snapshot 一次建立会话，"
-        "此后仅在难定位时再用（全程最多 2 次，禁止连续反复）；视觉/截图仅最终兜底。\n",
+        "- **DOM 优先**：指令内「页面 DOM/可交互控件」是主定位源；有清单则直接 browser_click/browser_type；"
+        "browser_snapshot=无障碍树/DOM ref（不是截图）：仅难定位时兜底一次"
+        "（全程最多 2 次，禁止连续反复）；视觉/截图仅最终兜底。\n",
     ]
     if cdp:
         lines.append("- CDP 已同步；勿再探测调试端口。\n")
