@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 
 def test_ensure_mobile_gateway_ready_when_healthy():
-    from mobile_service_bootstrap import ensure_mobile_gateway_ready
+    from modules.mobile.mobile_service_bootstrap import ensure_mobile_gateway_ready
 
     with patch("mobile_service_bootstrap._ensure_mobile_env_defaults"):
         with patch("mobile_service_bootstrap._verify_gateway_health", return_value=True):
@@ -16,7 +16,7 @@ def test_ensure_mobile_gateway_ready_when_healthy():
 
 
 def test_ensure_mobile_gateway_ready_starts_when_down():
-    from mobile_service_bootstrap import ensure_mobile_gateway_ready
+    from modules.mobile.mobile_service_bootstrap import ensure_mobile_gateway_ready
 
     with patch("mobile_service_bootstrap._ensure_mobile_env_defaults"):
         with patch(
@@ -34,7 +34,7 @@ def test_ensure_mobile_gateway_ready_starts_when_down():
 
 
 def test_adb_local_connect_fallback():
-    from mobile_routes import _adb_local_connect_fallback
+    from modules.mobile.mobile_routes import _adb_local_connect_fallback
 
     with patch(
         "mobile_routes.list_usb_devices",
@@ -61,7 +61,7 @@ def test_adb_local_connect_fallback():
 
 def test_connect_succeeds_without_gateway():
     """Gateway 挂了也不应阻断 USB 选中设备。"""
-    from mobile_routes import register_mobile_routes
+    from modules.mobile.mobile_routes import register_mobile_routes
 
     calls = {}
 
@@ -84,6 +84,6 @@ def test_connect_succeeds_without_gateway():
                         "mobile_assistant_bundles.assistant_installed_on_device",
                         return_value=False,
                     ):
-                        from mobile_routes import _adb_local_connect_fallback
+                        from modules.mobile.mobile_routes import _adb_local_connect_fallback
                         out = _adb_local_connect_fallback("2512BPNDAC")
     assert out["success"] is True

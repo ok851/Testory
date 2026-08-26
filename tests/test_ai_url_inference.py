@@ -8,7 +8,7 @@ _root = Path(__file__).resolve().parents[1]
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from ai_local_inference import (
+from modules.ai.ai_local_inference import (
     _goal_suggests_seed_url,
     _placeholder_template_case_url,
     local_ai_service,

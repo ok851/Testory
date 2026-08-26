@@ -4,7 +4,7 @@ License 生成工具 - 用于生成企业版或试用版授权
 """
 import argparse
 import sys
-from license_manager import LicenseManager, LicenseType
+from modules.auth.license_manager import LicenseManager, LicenseType
 
 
 def main():

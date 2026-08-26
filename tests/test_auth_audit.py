@@ -11,7 +11,7 @@ from pathlib import Path
 from werkzeug.security import generate_password_hash
 
 from database import Database
-from auth_audit import (
+from modules.auth.auth_audit import (
     ACTION_LOGIN_FAILURE,
     ACTION_LOGIN_SUCCESS,
     ACTION_LOGOUT,

@@ -3,7 +3,7 @@ import json
 import os
 import unittest
 
-from desktop_env_config import prepare_desktop_step, resolve_path_or_alias
+from modules.desktop.desktop_env_config import prepare_desktop_step, resolve_path_or_alias
 
 
 class TestDesktopEnvConfig(unittest.TestCase):
@@ -63,7 +63,7 @@ class TestDesktopEnvConfig(unittest.TestCase):
         self.assertEqual(spec.get("alias"), "erp")
 
     def test_resolve_launch_spec_substitutes_order_id(self):
-        from desktop_env_config import resolve_launch_spec
+        from modules.desktop.desktop_env_config import resolve_launch_spec
 
         os.environ["DESKTOP_APP_ALIASES"] = json.dumps(
             {

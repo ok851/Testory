@@ -67,7 +67,7 @@ def batch_api_cases_from_scenarios(
     warnings: List[str] = []
 
     try:
-        from license_manager import license_manager, LicenseType
+        from modules.auth.license_manager import license_manager, LicenseType
 
         license_info = license_manager.get_current_license()
         limits = license_manager.get_limits()

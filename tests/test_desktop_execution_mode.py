@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from desktop_env_config import (
+from modules.desktop.desktop_env_config import (
     deployment_profile,
     desktop_auto_start_gateway,
     desktop_execution_mode,
@@ -54,7 +54,7 @@ class TestSyncDesktopExecuteStep(unittest.TestCase):
     def test_inprocess_mode(self, mock_inproc):
         os.environ["DESKTOP_EXECUTION_MODE"] = "inprocess"
         mock_inproc.return_value = {"status": "success"}
-        from desktop_automation import sync_desktop_execute_step
+        from modules.desktop.desktop_automation import sync_desktop_execute_step
 
         out = sync_desktop_execute_step({"action": "wait", "input_value": "0.01"})
         self.assertEqual(out["status"], "success")
@@ -64,7 +64,7 @@ class TestSyncDesktopExecuteStep(unittest.TestCase):
     def test_gateway_mode(self, mock_gw):
         os.environ["DESKTOP_EXECUTION_MODE"] = "gateway"
         mock_gw.return_value = {"status": "success"}
-        from desktop_automation import sync_desktop_execute_step
+        from modules.desktop.desktop_automation import sync_desktop_execute_step
 
         sync_desktop_execute_step({"action": "wait", "input_value": "0.01"})
         mock_gw.assert_called_once()

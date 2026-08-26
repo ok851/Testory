@@ -54,7 +54,7 @@ from urllib.request import urlopen
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
-from ai_page_probe import INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS
+from modules.ai.ai_page_probe import INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +422,7 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
                     await handle.dispose()
             body_txt = body_txt.strip()
             if ct == "page_text_equals":
-                from auth_batch_helpers import page_text_has_exact_snippet
+                from modules.auth.auth_batch_helpers import page_text_has_exact_snippet
 
                 if not page_text_has_exact_snippet(body_txt, exp):
                     raise RuntimeError(
@@ -476,7 +476,7 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
         if not cond:
             raise ValueError("assert_vision 缺少画面描述")
         png = await page.screenshot(type="png")
-        from ai_vision_insight import assert_vision_condition_on_png
+        from modules.ai.ai_vision_insight import assert_vision_condition_on_png
 
         ok, reason = await asyncio.to_thread(assert_vision_condition_on_png, png, cond)
         if not ok:
@@ -494,7 +494,7 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
         deadline = time.time() + max(1.0, timeout_ms / 1000.0)
         interval = 2.0
         last_reason = ""
-        from ai_vision_insight import assert_vision_condition_on_png
+        from modules.ai.ai_vision_insight import assert_vision_condition_on_png
 
         while time.time() < deadline:
             png = await page.screenshot(type="png")
@@ -515,7 +515,7 @@ async def _embedded_vlm_click(page: Page, prompt: str) -> None:
     vh = int(vp.get("height") or 720)
 
     def _ground():
-        from ai_vision_grounding import ground_element_from_png
+        from modules.ai.ai_vision_grounding import ground_element_from_png
 
         return ground_element_from_png(png, prompt, viewport_w=vw, viewport_h=vh)
 

@@ -28,7 +28,7 @@ def _fail(name: str, msg: str) -> None:
 
 def case_g1_hitl_timeout_not_success() -> None:
     """G1: HITL 超时不得记为 True/success。"""
-    from agent_hitl import open_hitl_gate, wait_hitl_gate
+    from modules.ai.agent_hitl import open_hitl_gate, wait_hitl_gate
 
     open_hitl_gate("golden-hitl", reason="captcha")
     ok = wait_hitl_gate("golden-hitl", timeout_s=0.25, poll_interval_s=0.05)
@@ -118,7 +118,7 @@ def case_g3_desktop_uia_heal() -> None:
 
 def case_g4_enterprise_feature_entitlement() -> None:
     """G4: 企业档即使旧 features 缺键，目录能力仍可用；拒绝文案不含运维变量。"""
-    from license_manager import LicenseManager, LicenseType
+    from modules.auth.license_manager import LicenseManager, LicenseType
 
     os.environ["LICENSE_ENFORCE_FEATURES"] = "1"
     os.environ["DEPLOYMENT_MODE"] = "server"

@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-from mobile_env_config import adb_path
+from modules.mobile.mobile_env_config import adb_path
 
 # v2 正式包名；保留 v1 作为端口探测回退
 _PACKAGE = "com.testory.assistant.v2"
@@ -416,7 +416,7 @@ def dismiss_dialogs(udid: str) -> Dict[str, Any]:
     except Exception as exc:
         try:
             # 根据设备屏幕尺寸动态计算弹窗按钮位置（屏幕中心偏下）
-            from mobile_adb_control import adb_get_screen_size
+            from modules.mobile.mobile_adb_control import adb_get_screen_size
             sw, sh = adb_get_screen_size(udid)
             x = sw // 2
             y = int(sh * 0.625)
@@ -656,7 +656,7 @@ def replay_step(udit: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict
             skip_reason = "(launcher/system)"
             # 即使是启动器步骤也尝试用ADB启动，确保应用确实打开
             try:
-                from mobile_adb_control import adb_launch_app
+                from modules.mobile.mobile_adb_control import adb_launch_app
                 pkg = str(step.get("input_value") or spec.get("app_package") or spec.get("appPackage") or "")
                 if pkg and pkg not in ("", "com.android.launcher", "com.google.android.apps.nexuslauncher"):
                     info = adb_launch_app(udit, pkg, wait_foreground=True, timeout_sec=8.0)
@@ -671,7 +671,7 @@ def replay_step(udit: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict
         
         # 正常 open_app 执行
         try:
-            from mobile_adb_control import adb_launch_app
+            from modules.mobile.mobile_adb_control import adb_launch_app
             pkg = str(step.get("input_value") or spec.get("app_package") or spec.get("appPackage") or "")
             activity = str(spec.get("app_activity") or spec.get("appActivity") or "") or None
             info = adb_launch_app(udit, pkg, activity, wait_foreground=True, timeout_sec=10.0)
@@ -796,7 +796,7 @@ def replay_step(udit: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict
     # ---- press_home / press_back ----
     if action in ("press_home", "home"):
         try:
-            from mobile_adb_control import adb_press_home
+            from modules.mobile.mobile_adb_control import adb_press_home
             adb_press_home(udit)
             return _make_result("success", message="按下Home键")
         except Exception as exc:
@@ -804,7 +804,7 @@ def replay_step(udit: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict
 
     if action in ("press_back", "back"):
         try:
-            from mobile_adb_control import adb_press_back
+            from modules.mobile.mobile_adb_control import adb_press_back
             adb_press_back(udit)
             return _make_result("success", message="按下Back键")
         except Exception as exc:

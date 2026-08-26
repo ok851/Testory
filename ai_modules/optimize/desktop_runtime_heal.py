@@ -324,7 +324,7 @@ def propose_healed_desktop_step(
             alias and "/" not in alias and "\\" not in alias and not alias.lower().endswith(".exe")
         ):
             try:
-                from desktop_env_config import resolve_launch_spec
+                from modules.desktop.desktop_env_config import resolve_launch_spec
 
                 launch = resolve_launch_spec(alias if alias.startswith("@") else f"@{alias.lstrip('@')}")
             except Exception:
@@ -364,7 +364,7 @@ def run_desktop_step_with_optional_heal(
     Returns:
         (result, heal_meta)
     """
-    from desktop_automation import sync_desktop_execute_step
+    from modules.desktop.desktop_automation import sync_desktop_execute_step
 
     exec_fn = execute_fn or sync_desktop_execute_step
     action = str((step or {}).get("action") or "")

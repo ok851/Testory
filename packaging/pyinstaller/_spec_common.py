@@ -152,6 +152,7 @@ def project_hiddenimports(root: Path) -> list:
         "embedded_browser_gateway",
         "desktop_automation_gateway",
         "mobile_automation_gateway",
+        "modules",
     ):
         try:
             hidden += _only_module_names(collect_submodules(pkg))
@@ -176,7 +177,7 @@ def project_hiddenimports(root: Path) -> list:
         "pypdf",
         "docx",
         "cv2",
-        "optional_cv2",
+        "modules.core.optional_cv2",
         "numpy",
         "PIL",
         "websockets",
@@ -200,21 +201,20 @@ def project_hiddenimports(root: Path) -> list:
                 pass
 
     hidden += [
-        "ai_config_paths",
-        "license_manager",
+        "modules.ai.ai_config_paths",
+        "modules.auth.license_manager",
         "database",
-        "playwright_automation",
-        "install_paths",
+        "modules.web.playwright_automation",
+        "modules.core.install_paths",
         "env_example_sync",
-        "embedded_browser_client",
-        "embedded_browser_service_bootstrap",
-        "desktop_service_bootstrap",
-        "deployment_hooks",
-        "deployment_config",
-        "subprocess_win",
-        "embedded_browser_service_bootstrap",
-        "desktop_user_data",
-        "desktop_startup",
+        "modules.web.embedded_browser_client",
+        "modules.web.embedded_browser_service_bootstrap",
+        "modules.desktop.desktop_service_bootstrap",
+        "modules.core.deployment_hooks",
+        "modules.core.deployment_config",
+        "modules.core.subprocess_win",
+        "modules.desktop.desktop_user_data",
+        "modules.desktop.desktop_startup",
         "playwright._impl._api_structures",
         "playwright._impl._driver",
         "greenlet",
@@ -225,9 +225,9 @@ def project_hiddenimports(root: Path) -> list:
 def gateway_hiddenimports(root: Path) -> list:
     """网关 onedir：依赖少于完整后端。"""
     hidden: list = [
-        "install_paths",
-        "embedded_browser_client",
-        "subprocess_win",
+        "modules.core.install_paths",
+        "modules.web.embedded_browser_client",
+        "modules.core.subprocess_win",
         "dotenv",
         "uvicorn",
         "fastapi",

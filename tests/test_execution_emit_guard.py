@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Phase 0a-2：假绿发射点守卫（空 assert / Hermes 默认失败）。"""
 
-from auth_batch_helpers import assert_empty_expected_error, step_allows_skip
+from modules.auth.auth_batch_helpers import assert_empty_expected_error, step_allows_skip
 from ai_modules.execute.hermes_stage_executor import _parse_hermes_result
 
 

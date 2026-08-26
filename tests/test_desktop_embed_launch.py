@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch, MagicMock
 
-from desktop_embed_launch import (
+from modules.desktop.desktop_embed_launch import (
     chromium_embed_flags,
     embed_hooks_enabled,
     merge_embed_args,

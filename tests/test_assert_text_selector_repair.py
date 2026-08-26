@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from ai_step_normalization import repair_single_assert_step_inplace
+from modules.ai.ai_step_normalization import repair_single_assert_step_inplace
 
 
 def test_repair_text_selector_page_contains_to_page_text():

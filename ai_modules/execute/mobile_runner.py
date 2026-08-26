@@ -29,7 +29,7 @@ def _run_android_steps(
     capabilities: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Android Appium 执行。"""
-    from mobile_executor import get_mobile_executor
+    from modules.mobile.mobile_executor import get_mobile_executor
 
     executor = get_mobile_executor()
     if capabilities:

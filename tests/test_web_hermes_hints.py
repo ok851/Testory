@@ -7,7 +7,7 @@ import unittest
 
 class TestWebHermesHints(unittest.TestCase):
     def test_web_forbids_skill_view(self):
-        from hermes_skill_hints import build_explore_instruction
+        from modules.hermes.hermes_skill_hints import build_explore_instruction
 
         text = build_explore_instruction(
             "打开 https://example.com 登录并搜索",
@@ -20,7 +20,7 @@ class TestWebHermesHints(unittest.TestCase):
         self.assertNotIn("优先调用已注册的 MCP windows_", text)
 
     def test_web_skills_exclude_desktop(self):
-        from hermes_skill_hints import build_explore_instruction
+        from modules.hermes.hermes_skill_hints import build_explore_instruction
 
         text = build_explore_instruction(
             "测网页",
@@ -33,14 +33,14 @@ class TestWebHermesHints(unittest.TestCase):
         self.assertIn("browser_*", text)
 
     def test_desktop_still_allows_one_skill_view(self):
-        from hermes_skill_hints import build_explore_instruction
+        from modules.hermes.hermes_skill_hints import build_explore_instruction
 
         text = build_explore_instruction("打开记事本", {"platform": "desktop"})
         self.assertIn("windows_", text)
         self.assertIn("skill_view", text)
 
     def test_web_surface_prefix_no_desktop_session(self):
-        from agent_task_context import TaskContext
+        from modules.ai.agent_task_context import TaskContext
 
         ctx = TaskContext(session_id="t1", active_surface="web")
         p = ctx.instruction_prefix()

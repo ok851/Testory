@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mobile_assistant_events import _select_primary_node, _point_in_bounds, normalize_assistant_event
+from modules.mobile.mobile_assistant_events import _select_primary_node, _point_in_bounds, normalize_assistant_event
 
 def test_point_in_bounds():
     """坐标包容性测试"""

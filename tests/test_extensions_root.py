@@ -50,6 +50,6 @@ def test_legacy_extensions_migrated_once(monkeypatch, tmp_path):
 def test_android_tools_install_dir_uses_extensions_root(monkeypatch, tmp_path):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("TESTORY_EXTENSIONS_ROOT", raising=False)
-    from mobile_plugin_bundles import android_tools_install_dir
+    from modules.mobile.mobile_plugin_bundles import android_tools_install_dir
 
     assert android_tools_install_dir() == tmp_path / "extensions" / "android" / "platform-tools"

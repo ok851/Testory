@@ -51,7 +51,7 @@ class CloudDeviceProxy:
             stf_url: STF 服务地址 (如 http://stf.example.com)
             stf_token: STF API Token
         """
-        from mobile_env_config import cloud_device_endpoint
+        from modules.mobile.mobile_env_config import cloud_device_endpoint
 
         self._stf_url = (stf_url or cloud_device_endpoint()).rstrip("/")
         self._stf_token = stf_token

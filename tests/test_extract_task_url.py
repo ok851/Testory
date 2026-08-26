@@ -7,13 +7,13 @@ import unittest
 
 class TestExtractTaskUrl(unittest.TestCase):
     def test_https_in_sentence(self):
-        from agent_intent import extract_task_url
+        from modules.ai.agent_intent import extract_task_url
 
         u = extract_task_url("打开 https://demo.example.com/login ，用 admin 登录")
         self.assertTrue(u.startswith("https://demo.example.com/login"))
 
     def test_bare_host_after_open(self):
-        from agent_intent import extract_task_url
+        from modules.ai.agent_intent import extract_task_url
 
         self.assertEqual(
             extract_task_url("访问 demo.example.com/orders 并搜索", allow_seed=False),
@@ -21,7 +21,7 @@ class TestExtractTaskUrl(unittest.TestCase):
         )
 
     def test_localhost(self):
-        from agent_intent import extract_task_url
+        from modules.ai.agent_intent import extract_task_url
 
         self.assertEqual(
             extract_task_url("打开 localhost:8080/admin", allow_seed=False),
@@ -29,12 +29,12 @@ class TestExtractTaskUrl(unittest.TestCase):
         )
 
     def test_baidu_seed(self):
-        from agent_intent import extract_task_url
+        from modules.ai.agent_intent import extract_task_url
 
         self.assertIn("baidu.com", extract_task_url("在百度搜索自动化测试"))
 
     def test_hermes_prefers_message_url(self):
-        from ai_chat_tool_loop import ChatToolLoopParams, _resolve_start_url_for_hermes
+        from modules.ai.ai_chat_tool_loop import ChatToolLoopParams, _resolve_start_url_for_hermes
 
         params = ChatToolLoopParams(
             message="打开 https://shop.example.com/orders 并搜索商品",

@@ -7,32 +7,32 @@ import unittest
 
 class TestMessageNeedsAutomation(unittest.TestCase):
     def test_wechat_send_nl_is_automation(self):
-        from agent_intent import message_needs_automation
+        from modules.ai.agent_intent import message_needs_automation
 
         msg = "用微信给舒琪宝宝大王发：你好，我是AI"
         self.assertTrue(message_needs_automation(msg), msg)
 
     def test_wechat_nl_enables_tools_even_when_platform_web(self):
-        from ai_chat_tool_loop import _should_enable_desktop_windows_tools
+        from modules.ai.ai_chat_tool_loop import _should_enable_desktop_windows_tools
 
         msg = "用微信给舒琪宝宝大王发：我是胡哥的AI助手"
         self.assertTrue(_should_enable_desktop_windows_tools("web", msg))
         self.assertTrue(_should_enable_desktop_windows_tools("auto", msg))
 
     def test_structured_search_is_automation(self):
-        from agent_intent import message_needs_automation
+        from modules.ai.agent_intent import message_needs_automation
 
         msg = "聚焦微信 -> 点搜索 -> 输入「舒琪宝宝大王」"
         self.assertTrue(message_needs_automation(msg))
 
     def test_pure_greeting_is_chat(self):
-        from agent_intent import message_needs_automation
+        from modules.ai.agent_intent import message_needs_automation
 
         self.assertFalse(message_needs_automation("你好"))
         self.assertFalse(message_needs_automation("谢谢"))
 
     def test_ui_desktop_enables_tools_without_keywords(self):
-        from agent_intent import resolve_task_route
+        from modules.ai.agent_intent import resolve_task_route
 
         r = resolve_task_route("帮我操作一下那个软件", ui_platform="desktop")
         self.assertEqual(r.mode, "automation")
@@ -40,7 +40,7 @@ class TestMessageNeedsAutomation(unittest.TestCase):
         self.assertTrue(r.needs_desktop_tools)
 
     def test_flow_profile_generic_vs_im(self):
-        from ai_chat_tool_loop import _resolve_desktop_flow_profile
+        from modules.ai.ai_chat_tool_loop import _resolve_desktop_flow_profile
 
         self.assertEqual(
             _resolve_desktop_flow_profile("打开记事本写一段字"),
@@ -52,7 +52,7 @@ class TestMessageNeedsAutomation(unittest.TestCase):
         )
 
     def test_cross_end_login_otp_example_route(self):
-        from agent_intent import resolve_task_route
+        from modules.ai.agent_intent import resolve_task_route
 
         msg = "帮我登录微信，手机号为13800138000，自动从移动端获取验证码并填写登录"
         r = resolve_task_route(msg, ui_platform="auto")
@@ -63,7 +63,7 @@ class TestMessageNeedsAutomation(unittest.TestCase):
         self.assertEqual(r.reason, "cross_end_capabilities")
 
     def test_otp_only_and_register_variants(self):
-        from agent_intent import resolve_task_route
+        from modules.ai.agent_intent import resolve_task_route
 
         only = resolve_task_route("请从手机通知里取验证码", ui_platform="auto")
         self.assertTrue(only.needs_mobile_await)
@@ -75,8 +75,8 @@ class TestMessageNeedsAutomation(unittest.TestCase):
         self.assertEqual(reg.reason, "cross_end_capabilities")
 
     def test_seed_vars_and_flexible_prompt(self):
-        from agent_intent import extract_cross_end_seed_vars
-        from ai_chat_tool_loop import _build_system_prompt, _cross_end_strategy_lines
+        from modules.ai.agent_intent import extract_cross_end_seed_vars
+        from modules.ai.ai_chat_tool_loop import _build_system_prompt, _cross_end_strategy_lines
 
         seeds = extract_cross_end_seed_vars(
             "帮我登录飞书，手机号为13912345678，自动取验证码"

@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Set
 
-from mobile_assistant_events import normalize_assistant_event
+from modules.mobile.mobile_assistant_events import normalize_assistant_event
 
 from mobile_automation_gateway import plugin_rpc
 
@@ -120,7 +120,7 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
             "error": "无障碍服务未就绪。请在手机「Testory 助手」中开启无障碍后再录制。",
         }
     try:
-        from mobile_adb_control import adb_press_home
+        from modules.mobile.mobile_adb_control import adb_press_home
 
         # 与设备端 SessionForegroundGuard 双保险：PC 侧也先发 Home，减少助手界面误录。
         adb_press_home(udid)
@@ -135,7 +135,7 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
     # 通知设备端开始录制（手机端自行录制，PC 端不介入）
     screen_w, screen_h = 1080, 1920
     try:
-        from mobile_adb_control import adb_get_screen_size
+        from modules.mobile.mobile_adb_control import adb_get_screen_size
 
         screen_w, screen_h = adb_get_screen_size(udid)
     except Exception:

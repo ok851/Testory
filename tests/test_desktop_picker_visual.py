@@ -1,7 +1,7 @@
 # -*- coding: utf-8
 """desktop_visual_picker 产物测试。"""
 
-from desktop_visual_picker import VISUAL_SELECTOR_TYPE, build_visual_recorded_step
+from modules.desktop.desktop_visual_picker import VISUAL_SELECTOR_TYPE, build_visual_recorded_step
 
 
 def test_visual_step_contract():

@@ -31,7 +31,7 @@ def _ensure_env() -> None:
 
 def gateway_run_steps(session_id: str, steps: List[Dict[str, Any]], *, user_id: int = 0) -> Tuple[Optional[Dict], Optional[str]]:
     _ensure_env()
-    from embedded_browser_client import embedded_gateway_json
+    from modules.web.embedded_browser_client import embedded_gateway_json
 
     sid = (session_id or "").strip()
     if not sid:
@@ -47,7 +47,7 @@ def gateway_run_steps(session_id: str, steps: List[Dict[str, Any]], *, user_id: 
 
 def gateway_screenshot_png(session_id: str, *, user_id: int = 0) -> Tuple[Optional[bytes], Optional[str]]:
     _ensure_env()
-    from embedded_browser_client import embedded_gateway_json
+    from modules.web.embedded_browser_client import embedded_gateway_json
 
     j, err = embedded_gateway_json(
         "GET",

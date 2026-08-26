@@ -126,7 +126,7 @@ def reset_cross_end_async_for_tests() -> None:
 
 def list_ops_gates(*, user_id: str = "") -> Dict[str, Any]:
     """运营面板：HITL waiting + RiskGuard pending。"""
-    from agent_hitl import list_hitl_gates
+    from modules.ai.agent_hitl import list_hitl_gates
     from ai_modules.security.risk_guard import list_pending_approvals
 
     hitl = list_hitl_gates(status="waiting")

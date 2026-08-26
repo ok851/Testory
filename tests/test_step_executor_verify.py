@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from step_executor import (
+from modules.execution.step_executor import (
     DESKTOP_POINTER_ACTIONS,
     validate_desktop_step_result,
 )

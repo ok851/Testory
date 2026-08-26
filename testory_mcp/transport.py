@@ -464,17 +464,17 @@ def main():
     vision_port = None
     try:
         if platform == "web":
-            from vision_action_port import WebVisionActionPort
+            from modules.ai.vision_action_port import WebVisionActionPort
 
             sid = (os.environ.get("TESTORY_MCP_SESSION_ID") or "").strip()
             if sid:
                 vision_port = WebVisionActionPort(sid)
         elif platform == "desktop":
-            from vision_action_port import DesktopVisionActionPort
+            from modules.ai.vision_action_port import DesktopVisionActionPort
 
             vision_port = DesktopVisionActionPort()
         elif platform == "android":
-            from vision_action_port import MobileVisionActionPort
+            from modules.ai.vision_action_port import MobileVisionActionPort
 
             udid = (os.environ.get("TESTORY_MCP_UDID") or "").strip()
             if udid:

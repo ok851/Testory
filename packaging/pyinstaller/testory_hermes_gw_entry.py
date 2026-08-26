@@ -5,13 +5,13 @@ from __future__ import annotations
 import os
 import sys
 
-from install_paths import configure_install_root_env
+from modules.core.install_paths import configure_install_root_env
 
 
 def main() -> None:
     configure_install_root_env()
     try:
-        from hermes_config import ensure_hermes_home
+        from modules.hermes.hermes_config import ensure_hermes_home
 
         home = ensure_hermes_home()
         os.environ["HERMES_HOME"] = str(home.resolve())

@@ -4,7 +4,7 @@ import json
 import numpy as np
 import cv2
 
-from locator_tier_utils import (
+from modules.web.locator_tier_utils import (
     split_locator_candidates,
     parse_viewport_coord_value,
     merge_candidates_json,
@@ -12,7 +12,7 @@ from locator_tier_utils import (
     build_vlm_ground_candidate,
     parse_vlm_ground_prompt,
 )
-from locator_visual_fallback import match_template_in_viewport_png, prepare_template_png_bytes_for_storage
+from modules.web.locator_visual_fallback import match_template_in_viewport_png, prepare_template_png_bytes_for_storage
 
 
 def test_split_and_coord_parse():

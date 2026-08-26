@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from agent_hitl import list_hitl_gates, open_hitl_gate, reset_hitl_state_for_tests, resume_hitl_gate
+from modules.ai.agent_hitl import list_hitl_gates, open_hitl_gate, reset_hitl_state_for_tests, resume_hitl_gate
 from ai_modules.execute.cross_end_async import (
     create_run,
     get_run,

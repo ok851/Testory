@@ -68,8 +68,8 @@ async def run_steps(session_id: str, request: Request):
     steps = body.get("steps") or []
     if session_id not in _sessions:
         _sessions[session_id] = {"id": session_id}
-    from desktop_automation import _sync_desktop_execute_inprocess
-    from desktop_env_config import prepare_desktop_step
+    from modules.desktop.desktop_automation import _sync_desktop_execute_inprocess
+    from modules.desktop.desktop_env_config import prepare_desktop_step
 
     results: List[Dict[str, Any]] = []
     for step in steps:
@@ -88,10 +88,10 @@ async def inspect(session_id: str, request: Request):
     body = await request.json()
     spec = body.get("desktop_spec") or {}
     if spec:
-        from desktop_automation import sync_desktop_attach_from_spec
+        from modules.desktop.desktop_automation import sync_desktop_attach_from_spec
 
         sync_desktop_attach_from_spec(spec)
-    from desktop_automation import sync_desktop_inspect
+    from modules.desktop.desktop_automation import sync_desktop_inspect
 
     nodes = sync_desktop_inspect(
         max_depth=int(body.get("max_depth") or 4),

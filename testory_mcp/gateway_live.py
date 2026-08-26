@@ -76,7 +76,7 @@ def live_gateway_wait_step(*, duration_ms: int = 50) -> Dict[str, Any]:
             "resolved": resolved,
         }
     try:
-        from desktop_agent_client import remote_execute_step
+        from modules.desktop.desktop_agent_client import remote_execute_step
 
         result = remote_execute_step(
             {"action": "wait", "duration_ms": int(duration_ms), "desktop_spec": {}}

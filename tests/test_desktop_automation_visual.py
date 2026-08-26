@@ -11,8 +11,8 @@ class TestDesktopAutomationVisual(unittest.TestCase):
     @patch("desktop_hybrid_locator.resolve_desktop_click_point")
     @patch("desktop_automation.desktop_runtime_available", return_value=True)
     def test_perform_visual_click(self, _rt, mock_resolve, sendinput, _effect):
-        from desktop_automation import DesktopAutomation
-        from desktop_hybrid_locator import DesktopResolveResult
+        from modules.desktop.desktop_automation import DesktopAutomation
+        from modules.desktop.desktop_hybrid_locator import DesktopResolveResult
 
         mock_resolve.return_value = DesktopResolveResult(
             x=100, y=200, score=0.92, resolved_via="visual"
@@ -44,8 +44,8 @@ class TestDesktopAutomationVisual(unittest.TestCase):
     def test_visual_match_failure_saves_roi_artifact(
         self, _rt, _artifact, _resolve, _sendinput
     ):
-        from desktop_automation import DesktopAutomation
-        from desktop_visual_engine import VisualMatchFailed
+        from modules.desktop.desktop_automation import DesktopAutomation
+        from modules.desktop.desktop_visual_engine import VisualMatchFailed
 
         auto = DesktopAutomation()
         step = {
@@ -61,7 +61,7 @@ class TestDesktopAutomationVisual(unittest.TestCase):
 
     @patch("desktop_automation.desktop_runtime_available", return_value=True)
     def test_legacy_step_blocked(self, _rt):
-        from desktop_automation import DesktopAutomation
+        from modules.desktop.desktop_automation import DesktopAutomation
 
         auto = DesktopAutomation()
         step = {

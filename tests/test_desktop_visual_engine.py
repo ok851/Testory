@@ -10,7 +10,7 @@ import numpy as np
 
 class TestVisualEngine(unittest.TestCase):
     def test_legacy_step_detection(self):
-        from desktop_visual_engine import is_legacy_desktop_step
+        from modules.desktop.desktop_visual_engine import is_legacy_desktop_step
 
         self.assertTrue(
             is_legacy_desktop_step(
@@ -34,7 +34,7 @@ class TestVisualEngine(unittest.TestCase):
         )
 
     def test_payload_roundtrip(self):
-        from desktop_visual_engine import VisualStepPayload
+        from modules.desktop.desktop_visual_engine import VisualStepPayload
 
         p = VisualStepPayload(
             template_image_base64="abc",
@@ -56,7 +56,7 @@ class TestVisualEngine(unittest.TestCase):
         self.assertIsNotNone(p2.element_snapshot)
 
     def test_need_relearn_band(self):
-        from desktop_visual_engine import _need_relearn_score
+        from modules.desktop.desktop_visual_engine import _need_relearn_score
 
         self.assertTrue(_need_relearn_score(0.60, 0.72, "template"))
         self.assertFalse(_need_relearn_score(0.40, 0.72, "template"))
@@ -64,7 +64,7 @@ class TestVisualEngine(unittest.TestCase):
     def test_template_match_on_synthetic_scene(self):
         import cv2
 
-        from desktop_visual_engine import encode_png_bgr, locate_template_on_screen
+        from modules.desktop.desktop_visual_engine import encode_png_bgr, locate_template_on_screen
 
         tpl = np.zeros((32, 32, 3), dtype=np.uint8)
         tpl[8:24, 8:24] = (0, 255, 0)
@@ -82,7 +82,7 @@ class TestVisualEngine(unittest.TestCase):
     def test_failure_artifact_is_smaller_than_full_screen(self):
         import cv2
 
-        from desktop_visual_engine import (
+        from modules.desktop.desktop_visual_engine import (
             VisualStepPayload,
             build_visual_failure_artifact_png,
             encode_png_bgr,
@@ -116,7 +116,7 @@ class TestVisualEngine(unittest.TestCase):
     def test_refine_corners(self):
         import cv2
 
-        from desktop_visual_engine import refine_template_by_corners
+        from modules.desktop.desktop_visual_engine import refine_template_by_corners
 
         roi = np.zeros((80, 80, 3), dtype=np.uint8)
         cv2.rectangle(roi, (30, 30), (50, 50), (255, 255, 255), 2)
@@ -127,7 +127,7 @@ class TestVisualEngine(unittest.TestCase):
 
 class TestDesktopRuntime(unittest.TestCase):
     def test_parse_desktop_spec(self):
-        from desktop_runtime import parse_desktop_spec
+        from modules.desktop.desktop_runtime import parse_desktop_spec
 
         self.assertEqual(parse_desktop_spec('{"hwnd":1}'), {"hwnd": 1})
         self.assertEqual(parse_desktop_spec(None), {})

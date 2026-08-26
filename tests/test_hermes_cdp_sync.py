@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _reload_loop():
-    import ai_chat_tool_loop as m
+    from modules.ai import ai_chat_tool_loop as m
 
     return importlib.reload(m)
 
@@ -13,7 +13,7 @@ def _reload_loop():
 def test_sync_hermes_cdp_endpoint_writes_env(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("HERMES_CDP_ENDPOINT", raising=False)
-    from hermes_config import (
+    from modules.hermes.hermes_config import (
         clear_hermes_cdp_endpoint,
         hermes_cdp_attached,
         hermes_cdp_endpoint_active,
@@ -36,7 +36,7 @@ def test_hermes_blocked_when_embedded_without_cdp(monkeypatch):
     monkeypatch.setenv("EMBEDDED_BROWSER_GATEWAY_SECRET", "test-secret")
     monkeypatch.delenv("AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK", raising=False)
     monkeypatch.delenv("HERMES_CDP_ENDPOINT", raising=False)
-    import hermes_config as hc
+    from modules.hermes import hermes_config as hc
 
     importlib.reload(hc)
     m = _reload_loop()
@@ -51,7 +51,7 @@ def test_hermes_allowed_when_cdp_attached(monkeypatch):
     monkeypatch.setenv("EMBEDDED_BROWSER_GATEWAY_SECRET", "test-secret")
     monkeypatch.setenv("HERMES_CDP_ENDPOINT", "ws://127.0.0.1:9222/devtools/browser/x")
     monkeypatch.delenv("AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK", raising=False)
-    import hermes_config as hc
+    from modules.hermes import hermes_config as hc
 
     importlib.reload(hc)
     m = _reload_loop()
@@ -64,7 +64,7 @@ def test_skill_loop_auto_export_threshold(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("HERMES_SKILL_AUTO_EXPORT_AFTER", "2")
     monkeypatch.setenv("HERMES_SKILL_CURATOR_ENABLE", "0")
-    from hermes_skill_loop import record_execution_success
+    from modules.hermes.hermes_skill_loop import record_execution_success
 
     plan = {
         "case_name": "登录",
@@ -82,7 +82,7 @@ def test_skill_loop_auto_export_threshold(tmp_path, monkeypatch):
 
 def test_llm_readiness_without_ollama(monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(Path(os.environ.get("TEMP", "/tmp")) / "testory_llm"))
-    from ai_llm_readiness import assess_llm_readiness
+    from modules.ai.ai_llm_readiness import assess_llm_readiness
 
     out = assess_llm_readiness(local_ai_service=None)
     assert "ready" in out

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from auth_batch_helpers import (
+from modules.auth.auth_batch_helpers import (
     normalize_assert_compare_type,
     page_text_assert_matches,
     page_text_has_exact_snippet,

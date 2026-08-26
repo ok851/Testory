@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from agent_hitl import (
+from modules.ai.agent_hitl import (
     cancel_hitl_gate,
     clear_hitl_gate,
     get_hitl_gate,

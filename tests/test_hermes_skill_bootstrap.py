@@ -2,9 +2,9 @@
 import json
 from pathlib import Path
 
-from ai_hermes_skills import list_skills
-from hermes_config import ensure_hermes_home, hermes_skills_dir
-from hermes_skill_bootstrap import (
+from modules.hermes.ai_hermes_skills import list_skills
+from modules.hermes.hermes_config import ensure_hermes_home, hermes_skills_dir
+from modules.hermes.hermes_skill_bootstrap import (
     bundled_skills_source_dir,
     bundled_sync_status,
     load_manifest,
@@ -92,7 +92,7 @@ def test_list_skills_marks_bundled_source(tmp_path, monkeypatch):
 
 
 def test_build_explore_instruction():
-    from hermes_skill_hints import build_explore_instruction
+    from modules.hermes.hermes_skill_hints import build_explore_instruction
 
     text = build_explore_instruction("探索登录", {"platform": "mobile"})
     assert "testory-android-mobile" in text

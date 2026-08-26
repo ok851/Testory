@@ -232,7 +232,7 @@ class DesktopExplorer:
         self.budget.max_steps = min(self.budget.max_steps, max_clicks or 10)
 
         try:
-            from desktop_automation import sync_desktop_execute_step
+            from modules.desktop.desktop_automation import sync_desktop_execute_step
         except Exception:
             result["errors"].append({"error": "desktop_automation module not available"})
             return result

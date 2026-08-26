@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from plugin_install_jobs import should_install_in_background
+from modules.core.plugin_install_jobs import should_install_in_background
 
 
 def test_background_plugin_ids():

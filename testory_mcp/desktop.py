@@ -6,7 +6,7 @@ import json
 import sys
 
 from testory_mcp.kit import mcp_kit_for_port
-from vision_action_port import DesktopVisionActionPort
+from modules.ai.vision_action_port import DesktopVisionActionPort
 
 
 def main():

@@ -1,6 +1,6 @@
 """平台语义修复：URL 断言、过宽 CSS 标签检测。"""
 
-from ai_step_normalization import is_overly_broad_css_selector, repair_raw_ai_steps_for_platform
+from modules.ai.ai_step_normalization import is_overly_broad_css_selector, repair_raw_ai_steps_for_platform
 
 
 def test_is_overly_broad_css_selector() -> None:
@@ -44,7 +44,7 @@ def test_repair_clears_selector_on_url_compare() -> None:
 
 
 def test_repair_url_assert_from_description_at_runtime():
-    from auth_batch_helpers import normalize_step_assert_fields
+    from modules.auth.auth_batch_helpers import normalize_step_assert_fields
 
     step = {
         "action": "assert",

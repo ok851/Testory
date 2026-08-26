@@ -3,8 +3,8 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from desktop_visual_engine import VisualStepPayload
-from desktop_hybrid_locator import _uia_click_from_center
+from modules.desktop.desktop_visual_engine import VisualStepPayload
+from modules.desktop.desktop_hybrid_locator import _uia_click_from_center
 
 
 class TestDesktopHybridLocator(unittest.TestCase):
@@ -17,7 +17,7 @@ class TestDesktopHybridLocator(unittest.TestCase):
     @patch("desktop_hybrid_locator.resolve_visual_click_point")
     @patch("desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_uia_first(self, mock_uia, mock_vis, _com):
-        from desktop_hybrid_locator import resolve_desktop_click_point
+        from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
 
         mock_uia.return_value = MagicMock(
             ok=True, x=50, y=60, score=1.0, anchor=(50, 60)
@@ -47,8 +47,8 @@ class TestDesktopHybridLocator(unittest.TestCase):
     @patch("desktop_hybrid_locator.resolve_visual_click_point")
     @patch("desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_visual_fallback(self, mock_uia, mock_vis, _com):
-        from desktop_uia_snapshot import UiaResolveResult
-        from desktop_hybrid_locator import resolve_desktop_click_point
+        from modules.desktop.desktop_uia_snapshot import UiaResolveResult
+        from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
 
         mock_uia.return_value = UiaResolveResult(ok=False, error_code="timeout")
         mock_vis.return_value = (10, 20, 0.88)
@@ -78,8 +78,8 @@ class TestDesktopHybridLocator(unittest.TestCase):
     @patch("desktop_hybrid_locator.resolve_visual_click_point")
     @patch("desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_uia_from_locator_candidates(self, mock_uia, mock_vis, _shell, _com):
-        from desktop_hybrid_locator import resolve_desktop_click_point
-        from desktop_shell_listview import ShellIconTarget
+        from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
+        from modules.desktop.desktop_shell_listview import ShellIconTarget
 
         mock_uia.return_value = MagicMock(
             ok=True, x=80, y=90, score=1.0, anchor=(80, 90)
@@ -137,8 +137,8 @@ class TestDesktopHybridLocator(unittest.TestCase):
     @patch("desktop_hybrid_locator.resolve_visual_click_point")
     @patch("desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_shell_com_first(self, mock_uia, mock_vis, _shell):
-        from desktop_hybrid_locator import resolve_desktop_click_point
-        from desktop_shell_application import ShellComTarget
+        from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
+        from modules.desktop.desktop_shell_application import ShellComTarget
 
         com = ShellComTarget(icon_name="控制面板", matched_name="控制面板")
         with patch(

@@ -160,7 +160,7 @@ class MaestroFlowGenerator:
 
         # 注入系统弹窗处理
         if inject_dialogs:
-            from mobile_env_config import maestro_auto_inject_dialogs
+            from modules.mobile.mobile_env_config import maestro_auto_inject_dialogs
 
             if maestro_auto_inject_dialogs():
                 lines.append(self.SYSTEM_DIALOG_HANDLER)

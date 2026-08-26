@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class TestEmulatorRecognition(unittest.TestCase):
     def test_is_emulator_udid_localhost_port(self):
-        from mobile_device_manager import is_emulator_udid
+        from modules.mobile.mobile_device_manager import is_emulator_udid
 
         self.assertTrue(is_emulator_udid("emulator-5554"))
         self.assertTrue(is_emulator_udid("127.0.0.1:5555"))
@@ -21,7 +21,7 @@ class TestEmulatorRecognition(unittest.TestCase):
         self.assertFalse(is_emulator_udid("ABC123DEF"))
 
     def test_list_emulators_includes_localhost(self):
-        from mobile_device_manager import list_emulators
+        from modules.mobile.mobile_device_manager import list_emulators
 
         with patch(
             "mobile_device_manager.list_usb_devices",
@@ -39,7 +39,7 @@ class TestEmulatorRecognition(unittest.TestCase):
 class TestAssistantEvents(unittest.TestCase):
     def test_normalize_click_with_resource_id(self):
         """v3: text 优先于 resource_id 作为定位策略。"""
-        from mobile_assistant_events import normalize_assistant_event
+        from modules.mobile.mobile_assistant_events import normalize_assistant_event
 
         step = normalize_assistant_event({
             "type": "click",
@@ -53,7 +53,7 @@ class TestAssistantEvents(unittest.TestCase):
         self.assertEqual(step["automation_layer"], "android")
 
     def test_normalize_swipe(self):
-        from mobile_assistant_events import normalize_assistant_event
+        from modules.mobile.mobile_assistant_events import normalize_assistant_event
 
         step = normalize_assistant_event({
             "type": "scroll",
@@ -65,7 +65,7 @@ class TestAssistantEvents(unittest.TestCase):
 
 class TestStudioState(unittest.TestCase):
     def test_arm_and_clear(self):
-        from mobile_studio_state import clear_arm_state, get_arm_state, set_arm_state
+        from modules.mobile.mobile_studio_state import clear_arm_state, get_arm_state, set_arm_state
 
         clear_arm_state()
         self.assertEqual(get_arm_state()["mode"], "idle")

@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from embedded_browser_service_bootstrap import embedded_auto_start_gateway
+from modules.web.embedded_browser_service_bootstrap import embedded_auto_start_gateway
 
 
 class TestEmbeddedBrowserBootstrap(unittest.TestCase):

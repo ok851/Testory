@@ -1,6 +1,6 @@
 """负向登录用例：登录后校验不应在点击步失败。"""
 
-from auth_batch_helpers import login_failure_expected_for_case
+from modules.auth.auth_batch_helpers import login_failure_expected_for_case
 
 
 def test_cross_input_case_detected() -> None:

@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from desktop_shell_listview import (
+from modules.desktop.desktop_shell_listview import (
     _match_icon_name,
     find_icon_index_by_name,
     resolve_shell_listview_at_screen,
@@ -42,7 +42,7 @@ class TestDesktopShellListview(unittest.TestCase):
     @patch("desktop_shell_listview.get_desktop_listview_hwnd", return_value=42)
     @patch("desktop_win32_snapshot.get_window_rect", return_value=(0, 0, 1920, 1080))
     def test_peek_desktop_icon_at_point(self, *_mocks):
-        from desktop_shell_listview import peek_desktop_icon_at_point
+        from modules.desktop.desktop_shell_listview import peek_desktop_icon_at_point
         import ctypes
         from ctypes import wintypes
 
@@ -68,7 +68,7 @@ class TestDesktopShellListview(unittest.TestCase):
 
 class TestLayeredLocatePrefersShell(unittest.TestCase):
     def test_noise_label(self):
-        from desktop_visual_picker import _is_shell_noise_label
+        from modules.desktop.desktop_visual_picker import _is_shell_noise_label
 
         self.assertTrue(_is_shell_noise_label("FolderView"))
         self.assertTrue(_is_shell_noise_label("SysListView32"))
@@ -78,8 +78,8 @@ class TestLayeredLocatePrefersShell(unittest.TestCase):
     @patch("desktop_visual_picker._locate_via_win32")
     @patch("desktop_shell_listview.peek_desktop_icon_at_point")
     def test_layered_prefers_shell_icon(self, mock_icon, mock_win32, _uia):
-        from desktop_visual_picker import _layered_locate
-        from desktop_shell_listview import ShellIconTarget
+        from modules.desktop.desktop_visual_picker import _layered_locate
+        from modules.desktop.desktop_shell_listview import ShellIconTarget
 
         mock_win32.return_value = {
             "rect": (0, 0, 1920, 1080),

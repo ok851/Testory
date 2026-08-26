@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """web_dom_picker 会话与格式化测试（不依赖 Playwright）。"""
 
-from web_dom_picker import (
+from modules.web.web_dom_picker import (
     format_dom_pick_payload,
     get_web_dom_picker_status,
     report_web_dom_pick,

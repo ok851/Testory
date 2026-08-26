@@ -7,7 +7,7 @@ import unittest
 
 class TestWechatSearchResultPick(unittest.TestCase):
     def test_prefers_contact_over_web_and_search_box(self):
-        from windows_desktop_tools import _pick_wechat_search_result_candidate
+        from modules.desktop.windows_desktop_tools import _pick_wechat_search_result_candidate
 
         query = "舒琪宝宝大王"
         # 搜索框原文（偏上）+ 联系人行 + 网络结果行
@@ -28,7 +28,7 @@ class TestWechatSearchResultPick(unittest.TestCase):
         self.assertIn("wechat_result_pick", str(picked.get("via") or ""))
 
     def test_falls_back_to_first_below_search_box(self):
-        from windows_desktop_tools import _pick_wechat_search_result_candidate
+        from modules.desktop.windows_desktop_tools import _pick_wechat_search_result_candidate
 
         cands = [
             {"name": "张三", "x": 10, "y": 40, "score": 0.8, "via": "ocr"},

@@ -30,7 +30,7 @@ def _discover_available_devices(
     """发现当前可用设备。返回 [{udid, model, platform, ...}]。"""
     devices: List[Dict[str, Any]] = []
     try:
-        from mobile_device_manager import (
+        from modules.mobile.mobile_device_manager import (
             get_device_info,
             list_emulators,
             list_real_usb_devices,
@@ -90,7 +90,7 @@ def _execute_steps_on_device(
 
     # 策略1：通过 enqueue/await（手机本机执行，推荐路径）
     try:
-        from mobile_sync_store import enqueue_run_job, wait_for_run_job
+        from modules.mobile.mobile_sync_store import enqueue_run_job, wait_for_run_job
 
         job_id = enqueue_run_job(
             case_id=0,
@@ -572,7 +572,7 @@ def _execute_pc_branch(
         from ai_modules.optimize.desktop_runtime_heal import (
             run_desktop_step_with_optional_heal,
         )
-        from step_executor import validate_desktop_step_result
+        from modules.execution.step_executor import validate_desktop_step_result
     except ImportError as ie:
         base["error"] = f"PC 分支依赖不可用: {ie}"
         base["error_code"] = "PC_BRANCH_DEPS_MISSING"
@@ -645,7 +645,7 @@ def _execute_mobile_branch(
     device: Optional[Dict[str, Any]] = None
     if dev_id:
         try:
-            from mobile_device_manager import get_device_info
+            from modules.mobile.mobile_device_manager import get_device_info
 
             info = get_device_info(dev_id)
             device = {

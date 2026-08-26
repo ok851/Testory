@@ -131,7 +131,7 @@ def analyze_steps_for_self_heal(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
             desc = (step.get("description") or "").strip()
             if desc and act in ("click", "input"):
                 try:
-                    from hermes_heal_bridge import build_vlm_ground_heal_candidate
+                    from modules.hermes.hermes_heal_bridge import build_vlm_ground_heal_candidate
 
                     if build_vlm_ground_heal_candidate(desc):
                         suggestions.append(

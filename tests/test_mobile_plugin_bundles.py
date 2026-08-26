@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from mobile_plugin_bundles import (
+from modules.mobile.mobile_plugin_bundles import (
     _resolve_download_url,
     _resolve_local_zip,
     _sanitize_env_value,
@@ -36,7 +36,7 @@ def test_local_zip_optional():
 
 
 def test_resolve_adb_in_dir_finds_nested(tmp_path):
-    from mobile_plugin_bundles import resolve_adb_in_dir
+    from modules.mobile.mobile_plugin_bundles import resolve_adb_in_dir
 
     nested = tmp_path / "platform-tools"
     nested.mkdir()

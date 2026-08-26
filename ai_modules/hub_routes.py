@@ -15,7 +15,7 @@ def hub_heal_analyze_steps(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def hub_heal_diagnose_text(error_message: str, step_summary: str = "", url: str = "") -> Dict[str, Any]:
-    from execution_diag_bundle import build_failure_bundle, classify_failure_with_llm, merge_bundle_and_draft
+    from modules.execution.execution_diag_bundle import build_failure_bundle, classify_failure_with_llm, merge_bundle_and_draft
 
     bundle = build_failure_bundle(
         {"description": (step_summary or "")[:2000]},
@@ -52,7 +52,7 @@ def _parse_design_request(request) -> Dict[str, Any]:
         raw = f.read() or b""
         fname = (f.filename or "upload.txt").strip()
         upload_filename = fname
-        from requirements_document_extract import extract_text_from_bytes
+        from modules.integration.requirements_document_extract import extract_text_from_bytes
 
         requirements_text, file_warns = extract_text_from_bytes(fname, raw)
         requirements_text = (requirements_text or "").strip()

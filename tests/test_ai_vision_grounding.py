@@ -1,12 +1,12 @@
 """ai_vision_grounding 解析与开关单测。"""
 import os
 
-from ai_vision_grounding import (
+from modules.ai.ai_vision_grounding import (
     parse_grounding_response,
     locator_tier_vlm_enabled,
     collect_vlm_prompts,
 )
-from locator_tier_utils import build_vlm_ground_candidate
+from modules.web.locator_tier_utils import build_vlm_ground_candidate
 
 
 def test_parse_grounding_pixels():

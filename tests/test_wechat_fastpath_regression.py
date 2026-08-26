@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 class TestWeChatResolveArgs(unittest.TestCase):
     def test_looks_like_and_regex_resolve(self):
-        from agent_desktop_fastpath import looks_like_wechat_send_task, resolve_wechat_send_args
+        from modules.desktop.agent_desktop_fastpath import looks_like_wechat_send_task, resolve_wechat_send_args
 
         s = (
             "帮我打开电脑中已经在运行的微信，并给一个备注名为“舒琪宝宝大王”的人发送消息，"
@@ -20,7 +20,7 @@ class TestWeChatResolveArgs(unittest.TestCase):
         self.assertEqual(args, ("舒琪宝宝大王", "你好，我是AI"))
 
     def test_llm_fallback_when_regex_misses(self):
-        from agent_desktop_fastpath import resolve_wechat_send_args
+        from modules.desktop.agent_desktop_fastpath import resolve_wechat_send_args
 
         s = "微信里找那个叫张三的朋友，跟他说今晚聚餐别迟到"
         # 无引号，正则通常失败；注入假 LLM
@@ -42,7 +42,7 @@ class TestWeChatResolveArgs(unittest.TestCase):
 
 class TestWeChatParse(unittest.TestCase):
     def test_curly_quotes_user_sentence(self):
-        from agent_desktop_fastpath import _parse_wechat_send
+        from modules.desktop.agent_desktop_fastpath import _parse_wechat_send
 
         s = (
             "帮我打开电脑中已经在运行的微信，并给一个备注名为“舒琪宝宝大王”的人发送消息，"
@@ -51,7 +51,7 @@ class TestWeChatParse(unittest.TestCase):
         self.assertEqual(_parse_wechat_send(s), ("舒琪宝宝大王", "你好，我是AI"))
 
     def test_rejects_structural_filler(self):
-        from agent_desktop_fastpath import _parse_wechat_send
+        from modules.desktop.agent_desktop_fastpath import _parse_wechat_send
 
         self.assertIsNone(_parse_wechat_send("打开微信给为发消息，消息内容为"))
         self.assertIsNone(_parse_wechat_send("微信 备注名为 发送消息，消息内容为"))
@@ -59,7 +59,7 @@ class TestWeChatParse(unittest.TestCase):
 
 class TestWeChatDirectComposite(unittest.TestCase):
     def test_desktop_opt_in_has_generic_tools_not_wechat_macro(self):
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         msg = "打开微信，给备注舒琪宝宝大王发消息你好"
         names = [
@@ -76,7 +76,7 @@ class TestWeChatDirectComposite(unittest.TestCase):
         self.assertIn("windows_focus_app", names)
 
     def test_run_desktop_steps_does_not_mark_unrun_as_ok(self):
-        from agent_desktop_fastpath import _run_desktop_steps
+        from modules.desktop.agent_desktop_fastpath import _run_desktop_steps
 
         calls = {"n": 0}
 
@@ -103,7 +103,7 @@ class TestWeChatDirectComposite(unittest.TestCase):
         self.assertIn("10061", err)
 
     def test_wechat_partial_only_includes_executed_steps(self):
-        from agent_desktop_fastpath import _try_wechat_send_message_inner
+        from modules.desktop.agent_desktop_fastpath import _try_wechat_send_message_inner
 
         with patch(
             "agent_desktop_fastpath._find_running_window",

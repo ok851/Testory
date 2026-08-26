@@ -1,7 +1,7 @@
 """install_paths 解析（保护版安装目录布局）。"""
 from pathlib import Path
 
-from install_paths import helper_executable, protected_backend_exe, resolve_install_root
+from modules.core.install_paths import helper_executable, protected_backend_exe, resolve_install_root
 
 
 def test_resolve_install_root_dev():

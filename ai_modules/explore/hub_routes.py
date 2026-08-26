@@ -35,7 +35,7 @@ def start_explore():
 
     try:
         if layer == "web":
-            from browser_manager import get_page
+            from modules.web.browser_manager import get_page
             page = get_page()
             if page is None:
                 return jsonify({"success": False, "error": "没有活动的浏览器页面"}), 400

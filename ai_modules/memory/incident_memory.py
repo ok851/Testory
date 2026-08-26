@@ -174,7 +174,7 @@ def record_incident(
             "yes",
             "on",
         ):
-            from ai_memory_store import ingest
+            from modules.ai.ai_memory_store import ingest
 
             ingest(
                 user_id=0,

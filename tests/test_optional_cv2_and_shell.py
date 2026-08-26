@@ -6,7 +6,7 @@ import unittest
 
 class OptionalCv2Tests(unittest.TestCase):
     def test_module_imports(self):
-        from optional_cv2 import CV2_AVAILABLE, get_cv2
+        from modules.core.optional_cv2 import CV2_AVAILABLE, get_cv2
 
         self.assertIsInstance(CV2_AVAILABLE, bool)
         # get_cv2 may be None on Lite; just ensure callable contract

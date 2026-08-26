@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def test_resource_root_prefers_repo_when_not_frozen(monkeypatch, tmp_path):
-    import install_paths
+    from modules.core import install_paths
 
     repo = Path(install_paths.__file__).resolve().parent
     stale = tmp_path / "stale_install"

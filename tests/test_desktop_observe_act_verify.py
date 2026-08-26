@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 class TestTypeObserveActVerify(unittest.TestCase):
     def test_search_type_fails_when_uia_and_ocr_miss(self):
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             arm_search_input_focus,
             clear_desktop_target,
             set_desktop_target,
@@ -63,7 +63,7 @@ class TestTypeObserveActVerify(unittest.TestCase):
             clear_desktop_target()
 
     def test_type_succeeds_when_uia_readback_ok_even_if_ocr_fails(self):
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             arm_search_input_focus,
             clear_desktop_target,
             set_desktop_target,
@@ -114,7 +114,7 @@ class TestTypeObserveActVerify(unittest.TestCase):
             clear_desktop_target()
 
     def test_verify_typed_text_prefers_uia_over_ocr(self):
-        from windows_desktop_tools import _verify_typed_text
+        from modules.desktop.windows_desktop_tools import _verify_typed_text
 
         with (
             patch(
@@ -132,7 +132,7 @@ class TestTypeObserveActVerify(unittest.TestCase):
         ocr.assert_not_called()
 
     def test_type_succeeds_when_ocr_sees_text(self):
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             clear_desktop_target,
             set_desktop_target,
             windows_type_text,

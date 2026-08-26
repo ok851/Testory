@@ -1,6 +1,6 @@
 """探测注册表：id 应优先于 name 作为 recommended_selector。"""
 
-from ai_page_probe import (
+from modules.ai.ai_page_probe import (
     _recommended_selector,
     _selector_for_registry_row,
     heuristic_repair_plan_selectors_from_registry,

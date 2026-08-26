@@ -11,7 +11,7 @@ class TestNoWeChatDeadTemplateInOuterFC(unittest.TestCase):
     def test_default_desktop_fc_has_windows_tools(self):
         """桌面默认走外层 windows_*（OpenClaw 式），不再只剩 hermes_execute。"""
         import os
-        from ai_chat_tool_loop import chat_tool_schemas, _should_enable_desktop_windows_tools
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas, _should_enable_desktop_windows_tools
 
         os.environ.pop("PLATFORM_OUTER_DESKTOP_TOOLS", None)
         self.assertTrue(_should_enable_desktop_windows_tools("desktop"))
@@ -26,7 +26,7 @@ class TestNoWeChatDeadTemplateInOuterFC(unittest.TestCase):
 
     def test_outer_desktop_tools_can_disable(self):
         import os
-        from ai_chat_tool_loop import chat_tool_schemas, _should_enable_desktop_windows_tools
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas, _should_enable_desktop_windows_tools
 
         os.environ["PLATFORM_OUTER_DESKTOP_TOOLS"] = "0"
         try:
@@ -46,7 +46,7 @@ class TestNoWeChatDeadTemplateInOuterFC(unittest.TestCase):
 
     def test_outer_desktop_tools_opt_in(self):
         import os
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         os.environ["PLATFORM_OUTER_DESKTOP_TOOLS"] = "1"
         try:
@@ -65,7 +65,7 @@ class TestNoWeChatDeadTemplateInOuterFC(unittest.TestCase):
         self.assertIn("windows_type_text", names)
 
     def test_wechat_send_message_deprecated(self):
-        from windows_desktop_tools import wechat_send_message
+        from modules.desktop.windows_desktop_tools import wechat_send_message
 
         r = wechat_send_message("张三", "你好")
         self.assertFalse(r.get("success"))
@@ -75,7 +75,7 @@ class TestNoWeChatDeadTemplateInOuterFC(unittest.TestCase):
 
 class TestCaptureAfterSemantics(unittest.TestCase):
     def test_type_fails_when_screen_unchanged(self):
-        from windows_desktop_tools import windows_type_text, set_desktop_target, clear_desktop_target
+        from modules.desktop.windows_desktop_tools import windows_type_text, set_desktop_target, clear_desktop_target
 
         set_desktop_target(hwnd=12345, label="记事本", title="无标题 - 记事本")
         try:
@@ -116,7 +116,7 @@ class TestCaptureAfterSemantics(unittest.TestCase):
             clear_desktop_target()
 
     def test_press_returns_capture_after(self):
-        from windows_desktop_tools import windows_press_key, set_desktop_target, clear_desktop_target
+        from modules.desktop.windows_desktop_tools import windows_press_key, set_desktop_target, clear_desktop_target
 
         set_desktop_target(hwnd=99, label="app")
         try:
@@ -144,7 +144,7 @@ class TestCaptureAfterSemantics(unittest.TestCase):
 
 class TestSkillHintsNoWeChatTemplate(unittest.TestCase):
     def test_desktop_hint_mentions_gateways_not_wechat_macro(self):
-        from hermes_skill_hints import desktop_gateway_auth_hint, build_explore_instruction
+        from modules.hermes.hermes_skill_hints import desktop_gateway_auth_hint, build_explore_instruction
 
         hint = desktop_gateway_auth_hint()
         self.assertIn("8642", hint)
@@ -157,7 +157,7 @@ class TestSkillHintsNoWeChatTemplate(unittest.TestCase):
 
 class TestExecuteDesktopNlNoAutoWechat(unittest.TestCase):
     def test_skips_wechat_macro_by_default(self):
-        from agent_desktop_fastpath import execute_desktop_nl
+        from modules.desktop.agent_desktop_fastpath import execute_desktop_nl
 
         with patch(
             "agent_desktop_fastpath._try_wechat_send_message",
@@ -189,7 +189,7 @@ class TestMcpHasNoWechatTool(unittest.TestCase):
 
 class TestHermesStreamNoRerun(unittest.TestCase):
     def test_empty_stream_does_not_call_nonstream(self):
-        from hermes_gateway_client import HermesGatewayClient
+        from modules.hermes.hermes_gateway_client import HermesGatewayClient
 
         client = HermesGatewayClient()
         client.base_url = "http://127.0.0.1:9"
@@ -219,7 +219,7 @@ class TestHermesStreamNoRerun(unittest.TestCase):
         self.assertIn("stream_empty", (result.get("content") or ""))
 
     def test_parses_hermes_tool_progress_sse(self):
-        from hermes_gateway_client import HermesGatewayClient
+        from modules.hermes.hermes_gateway_client import HermesGatewayClient
 
         client = HermesGatewayClient()
         client.base_url = "http://127.0.0.1:9"
@@ -247,7 +247,7 @@ class TestHermesStreamNoRerun(unittest.TestCase):
 
 class TestActionRecorderNoFakeInputOk(unittest.TestCase):
     def test_json_ok_false_yields_no_records(self):
-        from ai_action_recorder import ActionRecorder
+        from modules.ai.ai_action_recorder import ActionRecorder
 
         rec = ActionRecorder()
         out = rec.capture_from_hermes_result(
@@ -256,7 +256,7 @@ class TestActionRecorderNoFakeInputOk(unittest.TestCase):
         self.assertEqual(out, [])
 
     def test_prose_with_type_does_not_invent_input_ok(self):
-        from ai_action_recorder import ActionRecorder
+        from modules.ai.ai_action_recorder import ActionRecorder
 
         rec = ActionRecorder()
         prose = '我将 type "ok" 到记事本\n输入完成 status success'
@@ -264,7 +264,7 @@ class TestActionRecorderNoFakeInputOk(unittest.TestCase):
         self.assertEqual(out, [])
 
     def test_tool_event_records_real_name(self):
-        from ai_action_recorder import ActionRecorder
+        from modules.ai.ai_action_recorder import ActionRecorder
 
         rec = ActionRecorder()
         out = rec.capture_from_tool_event(
@@ -279,7 +279,7 @@ class TestActionRecorderNoFakeInputOk(unittest.TestCase):
         self.assertIn("computer", out[0].action_type.lower() + out[0].raw_text.lower())
 
     def test_completed_without_result_is_warning_not_success(self):
-        from ai_action_recorder import ActionRecorder
+        from modules.ai.ai_action_recorder import ActionRecorder
 
         rec = ActionRecorder()
         out = rec.capture_from_tool_event(
@@ -293,7 +293,7 @@ class TestActionRecorderNoFakeInputOk(unittest.TestCase):
 
 class TestStreamEmptyRetryGate(unittest.TestCase):
     def test_stream_empty_blocks_second_hermes_execute(self):
-        from ai_chat_tool_loop import (
+        from modules.ai.ai_chat_tool_loop import (
             _hermes_retry_blocked,
             _result_is_stream_empty,
             _hermes_retry_blocked_payload,
@@ -312,7 +312,7 @@ class TestStreamEmptyRetryGate(unittest.TestCase):
 
 class TestThinOuterDesktopPrompt(unittest.TestCase):
     def test_desktop_prompt_uses_windows_tools_directly(self):
-        from ai_chat_tool_loop import _build_system_prompt
+        from modules.ai.ai_chat_tool_loop import _build_system_prompt
 
         sp = _build_system_prompt(
             project_name="t",
@@ -331,7 +331,7 @@ class TestThinOuterDesktopPrompt(unittest.TestCase):
 
 class TestOcrNeedleShortMatch(unittest.TestCase):
     def test_short_needle_not_matched_by_superset_fragment(self):
-        from windows_desktop_tools import verify_screen_contains
+        from modules.desktop.windows_desktop_tools import verify_screen_contains
 
         with patch(
             "windows_desktop_tools.observe_screen_texts",

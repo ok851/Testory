@@ -16,7 +16,7 @@ import sys
 
 
 def _port():
-    from vision_action_port import WebVisionActionPort
+    from modules.ai.vision_action_port import WebVisionActionPort
 
     sid = (os.environ.get("TESTORY_MCP_SESSION_ID") or "").strip()
     if not sid:

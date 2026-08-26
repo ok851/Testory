@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 class TestHermesLlmConfigSync(unittest.TestCase):
     def test_normalize_base_url_adds_v1(self):
-        from hermes_config import _normalize_openai_compatible_base_url
+        from modules.hermes.hermes_config import _normalize_openai_compatible_base_url
 
         self.assertEqual(
             _normalize_openai_compatible_base_url("https://api.deepseek.com"),
@@ -23,7 +23,7 @@ class TestHermesLlmConfigSync(unittest.TestCase):
         )
 
     def test_sync_writes_config_yaml_custom_provider(self):
-        from hermes_config import (
+        from modules.hermes.hermes_config import (
             hermes_env_llm_snapshot,
             sync_platform_llm_to_hermes_config_yaml,
         )
@@ -64,7 +64,7 @@ class TestHermesLlmConfigSync(unittest.TestCase):
                 self.assertFalse(info2.get("changed"))
 
     def test_sync_env_also_sets_inference_provider(self):
-        from hermes_config import sync_platform_llm_credentials_to_hermes_env
+        from modules.hermes.hermes_config import sync_platform_llm_credentials_to_hermes_env
 
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
@@ -110,7 +110,7 @@ class TestHermesLlmConfigSync(unittest.TestCase):
 
     def test_xiaomi_active_does_not_fallback_to_deepseek(self):
         """前端选 MiMo 时，Hermes 必须同步 MiMo，禁止静默改写为 DeepSeek。"""
-        from hermes_config import hermes_upstream_llm_status, sync_platform_llm_credentials_to_hermes_env
+        from modules.hermes.hermes_config import hermes_upstream_llm_status, sync_platform_llm_credentials_to_hermes_env
 
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)

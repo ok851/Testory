@@ -24,7 +24,7 @@ def main() -> int:
         check_desktop_preflight,
     )
     from ai_modules.execute.orchestrator import execute_cross_end_plan
-    from desktop_run_context import reset_desktop_run_context
+    from modules.desktop.desktop_run_context import reset_desktop_run_context
 
     pre = check_desktop_preflight()
     print(json.dumps({"preflight": pre}, ensure_ascii=False, indent=2))

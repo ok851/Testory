@@ -52,7 +52,7 @@ def _fetch_history_rows(
     scan_limit: int = 500,
     db: Any = None,
 ) -> List[Dict[str, Any]]:
-    from test_report import TestReportGenerator
+    from modules.integration.test_report import TestReportGenerator
 
     gen = TestReportGenerator(db=db) if db is not None else TestReportGenerator()
     # 复用治理查询：含无 case 跨端
@@ -345,7 +345,7 @@ def build_customer_audit_pack(
 
     # 登录 / SSO 审计串联（同时间窗）
     try:
-        from auth_audit import list_auth_audit_events
+        from modules.auth.auth_audit import list_auth_audit_events
 
         auth_events = list_auth_audit_events(
             start_date=start_date,

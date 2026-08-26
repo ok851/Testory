@@ -8,7 +8,7 @@ _root = Path(__file__).resolve().parents[1]
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from ai_local_inference import LocalAIService, _ollama_api_chat_assistant_text
+from modules.ai.ai_local_inference import LocalAIService, _ollama_api_chat_assistant_text
 
 
 def test_list_content_parts_joined() -> None:

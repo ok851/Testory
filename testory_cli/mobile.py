@@ -62,13 +62,13 @@ def _resolve_udid(udid: str) -> str:
     u = (udid or "").strip()
     if u:
         return u
-    from mobile_device_manager import get_connected_udid
+    from modules.mobile.mobile_device_manager import get_connected_udid
 
     return (get_connected_udid() or "").strip()
 
 
 def _port(udid: str):
-    from vision_action_port import MobileVisionActionPort
+    from modules.ai.vision_action_port import MobileVisionActionPort
 
     u = _resolve_udid(udid)
     if not u:
@@ -77,7 +77,7 @@ def _port(udid: str):
 
 
 def _normalize_step(raw: dict) -> dict:
-    from ai_step_normalization import normalize_ai_step
+    from modules.ai.ai_step_normalization import normalize_ai_step
 
     raw = dict(raw)
     raw.setdefault("automation_layer", "android")
@@ -158,7 +158,7 @@ def _cmd_run_steps(args: argparse.Namespace) -> int:
 
 
 def _cmd_readiness(args: argparse.Namespace) -> int:
-    from vision_platform_readiness import check_vision_automation_readiness
+    from modules.ai.vision_platform_readiness import check_vision_automation_readiness
 
     out = check_vision_automation_readiness()
     print(json.dumps(out, ensure_ascii=False, indent=2))

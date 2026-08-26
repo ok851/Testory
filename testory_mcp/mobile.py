@@ -10,11 +10,11 @@ from testory_mcp.web import _run_stdio_json
 
 def main():
     os.environ.setdefault("TESTORY_MCP_PLATFORM", "android")
-    from vision_action_port import MobileVisionActionPort
+    from modules.ai.vision_action_port import MobileVisionActionPort
 
     udid = (os.environ.get("TESTORY_MCP_UDID") or "").strip()
     if not udid:
-        from mobile_device_manager import get_connected_udid
+        from modules.mobile.mobile_device_manager import get_connected_udid
 
         udid = (get_connected_udid() or "").strip()
     if not udid:

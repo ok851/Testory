@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from mobile_device_manager import adb_path
+from modules.mobile.mobile_device_manager import adb_path
 
 _logger = logging.getLogger(__name__)
 

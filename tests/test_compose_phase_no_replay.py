@@ -9,12 +9,12 @@ from unittest.mock import patch
 
 class TestComposePhaseNoSearchReclick(unittest.TestCase):
     def tearDown(self):
-        from windows_desktop_tools import clear_desktop_target
+        from modules.desktop.windows_desktop_tools import clear_desktop_target
 
         clear_desktop_target()
 
     def test_duplicate_search_type_short_circuits(self):
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             arm_search_input_focus,
             set_desktop_target,
             windows_type_text,
@@ -41,7 +41,7 @@ class TestComposePhaseNoSearchReclick(unittest.TestCase):
 
 class TestGeneralAntiReplay(unittest.TestCase):
     def test_skip_exact_succeeded_fingerprint(self):
-        from ai_chat_tool_loop import (
+        from modules.ai.ai_chat_tool_loop import (
             _record_succeeded_desktop_action,
             _should_skip_replay_desktop_tool,
         )
@@ -61,7 +61,7 @@ class TestGeneralAntiReplay(unittest.TestCase):
         )
 
     def test_ocr_fail_still_locks_typed_text(self):
-        from ai_chat_tool_loop import (
+        from modules.ai.ai_chat_tool_loop import (
             _record_succeeded_desktop_action,
             _should_skip_replay_desktop_tool,
         )
@@ -95,7 +95,7 @@ class TestGeneralAntiReplay(unittest.TestCase):
         self.assertIsNotNone(skip2)
 
     def test_search_family_click_blocked_after_query(self):
-        from ai_chat_tool_loop import _should_skip_replay_desktop_tool
+        from modules.ai.ai_chat_tool_loop import _should_skip_replay_desktop_tool
 
         meta = {
             "desktop_phase": "query_typed",
@@ -112,7 +112,7 @@ class TestGeneralAntiReplay(unittest.TestCase):
             self.assertIsNotNone(skip, desc)
 
     def test_fail_sets_forward_only(self):
-        from ai_chat_tool_loop import _desktop_fail_stop_message, _should_skip_replay_desktop_tool
+        from modules.ai.ai_chat_tool_loop import _desktop_fail_stop_message, _should_skip_replay_desktop_tool
 
         meta = {
             "desktop_phase": "query_typed",

@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from logger import uat_logger
+from modules.core.logger import uat_logger
 
 IMPACT_SCHEMA_HINT = """{
   "change_types": ["ui_copy|component_add|component_remove|api_param|flow_logic|style_only|config|test_only|other"],
@@ -218,9 +218,9 @@ def build_change_impact_report(
         return heuristic
 
     try:
-        from ai_selector_recovery import _extract_json_obj
-        from ai_local_inference import local_ai_service
-        from ai_multi_provider import dispatch_chat
+        from modules.ai.ai_selector_recovery import _extract_json_obj
+        from modules.ai.ai_local_inference import local_ai_service
+        from modules.ai.ai_multi_provider import dispatch_chat
         from ai_modules.code_intel.policy import llm_timeout_s
         import concurrent.futures
 

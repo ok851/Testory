@@ -77,7 +77,7 @@ def check_selenium_ide_import():
     print("4b. 检查 selenium_ide_import 模块")
     print("=" * 60)
     try:
-        from selenium_ide_import import parse_selenium_ide_to_steps
+        from modules.web.selenium_ide_import import parse_selenium_ide_to_steps
         sample = '{"url":"https://x.com","tests":[{"commands":[{"command":"open","target":"/","value":""}]}]}'
         steps, _ = parse_selenium_ide_to_steps(sample)
         if steps and steps[0].get("action") == "navigate":
@@ -97,7 +97,7 @@ def check_codegen_import():
     print("=" * 60)
     
     try:
-        from playwright_codegen_import import parse_playwright_codegen_to_steps
+        from modules.web.playwright_codegen_import import parse_playwright_codegen_to_steps
         sample = "await page.goto('https://example.com')\nawait page.click('text=Submit')"
         steps, warnings = parse_playwright_codegen_to_steps(sample)
         if steps:

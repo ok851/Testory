@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def test_format_connect_error_unauthorized():
-    from mobile_device_manager import format_connect_error
+    from modules.mobile.mobile_device_manager import format_connect_error
 
     msg = format_connect_error({"udid": "ABCD1234", "state": "unauthorized"})
     assert "尚未授权" in msg
@@ -21,14 +21,14 @@ def test_format_connect_error_unauthorized():
 
 
 def test_format_connect_error_offline():
-    from mobile_device_manager import format_connect_error
+    from modules.mobile.mobile_device_manager import format_connect_error
 
     msg = format_connect_error({"udid": "192.168.1.5:5555", "state": "offline"})
     assert "离线" in msg
 
 
 def test_pick_default_real_device_skips_pq_prefix():
-    from mobile_device_manager import pick_default_real_device
+    from modules.mobile.mobile_device_manager import pick_default_real_device
 
     devices = [
         {"udid": "PQFAKE001", "state": "device", "display_name": "Ghost"},
@@ -42,7 +42,7 @@ def test_pick_default_real_device_skips_pq_prefix():
 
 
 def test_score_device_priority_usb_over_pq():
-    from mobile_device_manager import score_device_priority
+    from modules.mobile.mobile_device_manager import score_device_priority
 
     pq = score_device_priority({"udid": "PQ123", "state": "device"})
     usb = score_device_priority({"udid": "3B163L00CF800000", "state": "device"})
@@ -50,7 +50,7 @@ def test_score_device_priority_usb_over_pq():
 
 
 def test_list_devices_for_ui_real_excludes_emulator():
-    from mobile_device_manager import list_devices_for_ui
+    from modules.mobile.mobile_device_manager import list_devices_for_ui
 
     with patch(
         "mobile_device_manager.list_usb_devices",
@@ -65,7 +65,7 @@ def test_list_devices_for_ui_real_excludes_emulator():
 
 
 def test_should_prune_offline_and_pq():
-    from mobile_device_manager import should_prune_device
+    from modules.mobile.mobile_device_manager import should_prune_device
 
     assert should_prune_device({"udid": "192.168.0.1:5555", "state": "offline"})
     assert should_prune_device({"udid": "PQGHOST", "state": "device"})
@@ -73,7 +73,7 @@ def test_should_prune_offline_and_pq():
 
 
 def test_prune_stale_adb_devices_disconnects():
-    from mobile_device_manager import prune_stale_adb_devices
+    from modules.mobile.mobile_device_manager import prune_stale_adb_devices
 
     with patch(
         "mobile_device_manager.list_usb_devices",

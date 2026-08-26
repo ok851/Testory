@@ -199,7 +199,7 @@ def create_sync(
 
 
 def bind_testory_run(sync_id: str, run_id: str) -> Optional[Dict[str, Any]]:
-    from ci_adapter import get_run, is_terminal_status
+    from modules.integration.ci_adapter import get_run, is_terminal_status
 
     rec = get_sync(sync_id)
     if not rec:
@@ -216,7 +216,7 @@ def bind_testory_run(sync_id: str, run_id: str) -> Optional[Dict[str, Any]]:
     rec["testory"] = t
     # 反向写 sync_id 到 ci run
     try:
-        from ci_adapter import update_run_fields
+        from modules.integration.ci_adapter import update_run_fields
 
         update_run_fields(rid, sync_id=sync_id, sync_poll_url=f"/api/ci/sync/{sync_id}")
     except Exception:
@@ -293,7 +293,7 @@ def refresh_jenkins_side(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def refresh_testory_side(rec: Dict[str, Any]) -> Dict[str, Any]:
-    from ci_adapter import get_run, is_terminal_status
+    from modules.integration.ci_adapter import get_run, is_terminal_status
 
     t = dict(rec.get("testory") or {})
     rid = t.get("run_id")
@@ -331,7 +331,7 @@ def refresh_sync(sync_id: str) -> Optional[Dict[str, Any]]:
 
 def on_testory_run_finished(run_id: str) -> Optional[Dict[str, Any]]:
     """CI run 终态钩子：刷新关联 sync。"""
-    from ci_adapter import get_run
+    from modules.integration.ci_adapter import get_run
 
     run = get_run(run_id)
     if not run:
@@ -443,7 +443,7 @@ def apply_testory_result(
         t["run_id"] = run_id
         t["poll_url"] = f"/api/ci/runs/{run_id}"
     if status:
-        from ci_adapter import is_terminal_status
+        from modules.integration.ci_adapter import is_terminal_status
 
         t["status"] = status
         t["terminal"] = is_terminal_status(status)

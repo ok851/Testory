@@ -26,7 +26,7 @@ def _load_json_arg(path: Optional[str], stdin_fallback: bool) -> Any:
 
 def capture_snapshot_for_url(url: str) -> Tuple[Dict[str, Any], Optional[str]]:
     """使用平台主 Playwright 线程抓取与 AI 规划一致的交互快照。"""
-    from playwright_automation import (
+    from modules.web.playwright_automation import (
         sync_automation_session_usable,
         sync_get_interactive_page_snapshot,
         sync_navigate_to,
@@ -64,7 +64,7 @@ def capture_snapshot_for_url(url: str) -> Tuple[Dict[str, Any], Optional[str]]:
 def run_resolve(
     url: str, steps: List[Any], snapshot_path: Optional[str]
 ) -> Tuple[List[Any], List[str], Dict[str, Any]]:
-    from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+    from modules.ai.ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
 
     if snapshot_path:
         with open(snapshot_path, encoding="utf-8") as f:
@@ -83,7 +83,7 @@ async def run_recover_async(
 ) -> Tuple[Optional[Tuple[str, str]], Optional[str]]:
     from playwright.async_api import async_playwright
 
-    from ai_selector_recovery import try_recover_selector_with_llm
+    from modules.ai.ai_selector_recovery import try_recover_selector_with_llm
 
     u = (url or "").strip()
     if not u:

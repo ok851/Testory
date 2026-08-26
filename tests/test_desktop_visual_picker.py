@@ -3,8 +3,8 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from desktop_uia_snapshot import SnapshotCaptureResult
-from desktop_visual_picker import (
+from modules.desktop.desktop_uia_snapshot import SnapshotCaptureResult
+from modules.desktop.desktop_visual_picker import (
     CAPTURE_MODE_SMART,
     VisualRegionPickerOverlay,
     build_pick_from_smart_click,
@@ -17,7 +17,7 @@ class TestDesktopVisualPicker(unittest.TestCase):
     def test_build_pick_from_smart_click_merges_snapshot(
         self, mock_snap, mock_build
     ):
-        from desktop_visual_engine import VisualStepPayload
+        from modules.desktop.desktop_visual_engine import VisualStepPayload
 
         payload = VisualStepPayload(
             template_image_base64="e30=",
@@ -53,7 +53,7 @@ class TestDesktopVisualPicker(unittest.TestCase):
         self, mock_snap, mock_build, mock_preview
     ):
         """点击后 UI 已变时，仍使用点击瞬间冻结的预览与名称。"""
-        from desktop_visual_engine import VisualStepPayload
+        from modules.desktop.desktop_visual_engine import VisualStepPayload
 
         payload = VisualStepPayload(
             template_image_base64="e30=",
@@ -135,7 +135,7 @@ class TestDesktopVisualPicker(unittest.TestCase):
         self.assertEqual(picker._frozen_preview_b64, "IMG")
 
     def test_capture_click_guard_queue(self):
-        from desktop_capture_click_shield import CaptureClickShield
+        from modules.desktop.desktop_capture_click_shield import CaptureClickShield
 
         sink = CaptureClickShield()
         self.assertFalse(sink.enabled)
@@ -145,7 +145,7 @@ class TestDesktopVisualPicker(unittest.TestCase):
         self.assertFalse(sink.enabled)
 
     def test_reliable_hit_rejects_cursor_fallback(self):
-        from desktop_visual_picker import _is_reliable_element_hit, _is_shell_noise_label
+        from modules.desktop.desktop_visual_picker import _is_reliable_element_hit, _is_shell_noise_label
 
         self.assertFalse(_is_shell_noise_label(""))
         self.assertFalse(
@@ -169,7 +169,7 @@ class TestDesktopVisualPicker(unittest.TestCase):
         )
 
     def test_uia_factory_creates_instance(self):
-        from desktop_uia_core import _element_from_point, _get_uia
+        from modules.desktop.desktop_uia_core import _element_from_point, _get_uia
 
         uia = _get_uia()
         self.assertIsNotNone(uia, "IUIAutomation 工厂不可用，应用内捕获会全部失败")

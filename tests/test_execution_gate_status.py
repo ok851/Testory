@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """企业流水线门禁：evaluate_batch_case_status / is_execution_gate_success 回归。"""
 
-from auth_batch_helpers import (
+from modules.auth.auth_batch_helpers import (
     count_batch_gate_failures,
     evaluate_batch_case_status,
     is_execution_gate_success,

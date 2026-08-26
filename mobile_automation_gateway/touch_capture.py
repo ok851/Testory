@@ -4,7 +4,7 @@
 from __future__ import annotations
 import re, subprocess, threading, time
 from typing import Any, Dict, List, Optional, Tuple
-from mobile_adb_control import adb_path, adb_get_screen_size
+from modules.mobile.mobile_adb_control import adb_path, adb_get_screen_size
 
 EV_ABS = 0x03
 EV_KEY = 0x01

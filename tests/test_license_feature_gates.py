@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from license_manager import LicenseManager, LicenseType
+from modules.auth.license_manager import LicenseManager, LicenseType
 
 
 @pytest.fixture()

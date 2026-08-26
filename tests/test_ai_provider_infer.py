@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from ai_provider_infer import infer_provider_from_simple_config
+from modules.ai.ai_provider_infer import infer_provider_from_simple_config
 
 CATALOG_PATH = Path(__file__).resolve().parents[1] / "ai_provider_catalog.json"
 

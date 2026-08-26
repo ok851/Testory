@@ -78,7 +78,7 @@ assert r2.status_code == 200 and r2.get_json().get("success")
 assert int(lic["activation_count"]) == 1
 
 print("=== 3. report_license_activation (urllib -> test handler) ===")
-import platform_sync
+from modules.core import platform_sync
 from unittest import mock
 import urllib.request
 

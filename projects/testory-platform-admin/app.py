@@ -26,7 +26,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from admin_database import PlatformAdminDB  # noqa: E402
-from license_manager import LicenseManager, LicenseType  # noqa: E402
+from modules.auth.license_manager import LicenseManager, LicenseType  # noqa: E402
 from testory_common.pay_token import verify_pay_token  # noqa: E402
 
 RELEASE_FILES_DIR = PROJECT_DIR / "data" / "release_files"

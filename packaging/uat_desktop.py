@@ -30,7 +30,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from desktop_user_data import ensure_user_data_dirs, resolve_env_file
+from modules.desktop.desktop_user_data import ensure_user_data_dirs, resolve_env_file
 from packaging.desktop_shell import run_native_shell
 from packaging.instance_lock import acquire_instance_lock, instance_lock_message
 from packaging.launch_checks import run_launch_preflight
@@ -49,7 +49,7 @@ def _backend_exe_path(root: Path) -> Optional[Path]:
         if p.is_file():
             return p
     try:
-        from install_paths import protected_backend_exe
+        from modules.core.install_paths import protected_backend_exe
 
         p = protected_backend_exe()
         if p is not None and p.is_file():
@@ -70,7 +70,7 @@ def install_root() -> Path:
     if (here / "uat_desktop.py").is_file() and (root / "Testory.exe").is_file():
         return root
     try:
-        from install_paths import resolve_install_root
+        from modules.core.install_paths import resolve_install_root
 
         return resolve_install_root()
     except ImportError:
@@ -274,7 +274,7 @@ def _check_components_hint(root: Path, user_data: Path) -> None:
         def _do_check():
             try:
                 sys.path.insert(0, str(root))
-                from components_manager import _check_chromium_installed
+                from modules.core.components_manager import _check_chromium_installed
 
                 if not _check_chromium_installed():
                     hint_file = user_data / "hints" / "missing_chromium.txt"
@@ -530,7 +530,7 @@ def _shutdown_all(proc: Optional[subprocess.Popen], *, port: int = DEFAULT_PORT)
     del port
     _terminate_backend(proc)
     try:
-        from desktop_startup import shutdown_all_services
+        from modules.desktop.desktop_startup import shutdown_all_services
 
         shutdown_all_services()
     except Exception:

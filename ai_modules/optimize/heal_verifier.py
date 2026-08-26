@@ -15,7 +15,7 @@ def verify_healed_step(
 
     try:
         if layer == "web":
-            from browser_manager import get_page
+            from modules.web.browser_manager import get_page
             page = get_page()
             if page is None:
                 return False, "无活动浏览器页面"
@@ -42,7 +42,7 @@ def verify_healed_step(
 
         if layer in ("android", "mobile"):
             try:
-                from mobile_executor import get_mobile_executor
+                from modules.mobile.mobile_executor import get_mobile_executor
                 executor = get_mobile_executor()
                 executor.execute_steps([step])
                 return True, ""
@@ -51,7 +51,7 @@ def verify_healed_step(
 
         if layer == "desktop":
             try:
-                from desktop_automation import sync_desktop_execute_step
+                from modules.desktop.desktop_automation import sync_desktop_execute_step
                 sync_desktop_execute_step(step)
                 return True, ""
             except Exception as e:

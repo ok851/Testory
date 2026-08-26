@@ -75,7 +75,7 @@ class VisualHealer:
             成功则返回 StepResult (status=SUCCESS + healed_locator),
             失败则返回 None
         """
-        from mobile_env_config import self_healing_enabled
+        from modules.mobile.mobile_env_config import self_healing_enabled
 
         if not self_healing_enabled():
             return None

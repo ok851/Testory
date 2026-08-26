@@ -38,7 +38,7 @@ def resolve_erp_alias(
     order_id: str = "",
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """解析 ERP 启动别名；缺失时返回诚实错误码文案。"""
-    from desktop_env_config import load_app_alias_specs, resolve_launch_spec
+    from modules.desktop.desktop_env_config import load_app_alias_specs, resolve_launch_spec
 
     key = (alias or "erp").strip().lstrip("@").lower() or "erp"
     specs = load_app_alias_specs()

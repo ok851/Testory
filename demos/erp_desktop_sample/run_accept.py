@@ -41,7 +41,7 @@ def main() -> int:
         resolve_erp_alias,
     )
     from ai_modules.execute.orchestrator import execute_cross_end_plan
-    from desktop_run_context import reset_desktop_run_context
+    from modules.desktop.desktop_run_context import reset_desktop_run_context
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--order-id", default="ORD-DEMO-404")
@@ -86,7 +86,7 @@ def main() -> int:
 
     if args.customer_exe:
         args.mode = "alias"
-        from desktop_env_config import probe_app_alias, save_user_alias
+        from modules.desktop.desktop_env_config import probe_app_alias, save_user_alias
 
         cargs = [a.strip() for a in (args.customer_args or "").split(",") if a.strip()]
         tre = (args.window_title_re or "").strip() or f"(?i).*{args.order_id}.*"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from install_paths import configure_install_root_env
+from modules.core.install_paths import configure_install_root_env
 
 
 def main() -> None:

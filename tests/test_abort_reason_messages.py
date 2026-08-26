@@ -8,7 +8,7 @@ import unittest
 
 class TestAbortReasonMessages(unittest.TestCase):
     def test_timeout_not_user_cancel(self):
-        from ai_chat_tool_loop import _abort_user_message
+        from modules.ai.ai_chat_tool_loop import _abort_user_message
 
         ev = threading.Event()
         setattr(ev, "_timed_out", True)
@@ -18,7 +18,7 @@ class TestAbortReasonMessages(unittest.TestCase):
         self.assertNotIn("用户取消", msg)
 
     def test_tool_loop_not_user_cancel(self):
-        from ai_chat_tool_loop import _abort_user_message
+        from modules.ai.ai_chat_tool_loop import _abort_user_message
 
         ev = threading.Event()
         setattr(ev, "_abort_reason", "tool_loop")
@@ -28,8 +28,8 @@ class TestAbortReasonMessages(unittest.TestCase):
         self.assertTrue("中止" in msg or "死循环" in msg or "重复" in msg)
 
     def test_web_prompt_forbids_skill_tools(self):
-        from ai_chat_tool_loop import _web_hermes_system_prompt
-        from hermes_skill_hints import build_explore_instruction
+        from modules.ai.ai_chat_tool_loop import _web_hermes_system_prompt
+        from modules.hermes.hermes_skill_hints import build_explore_instruction
 
         sp = _web_hermes_system_prompt()
         self.assertIn("禁止", sp)
@@ -45,7 +45,7 @@ class TestAbortReasonMessages(unittest.TestCase):
         self.assertIn("DOM", text)
 
     def test_gateway_abort_helper(self):
-        from hermes_gateway_client import _abort_error_message
+        from modules.hermes.hermes_gateway_client import _abort_error_message
 
         ev = threading.Event()
         setattr(ev, "_abort_reason", "tool_loop")

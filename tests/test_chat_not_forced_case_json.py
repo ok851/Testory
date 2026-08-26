@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 
-from ai_chat_tool_loop import (
+from modules.ai.ai_chat_tool_loop import (
     _instruction_from_case_json_hint,
     _is_plausible_case_plan,
     _looks_like_case_json_blob,
@@ -15,7 +15,7 @@ from ai_chat_tool_loop import (
     _strip_invented_case_json,
     _synthesize_auto_execute_tool_calls,
 )
-from ai_multi_provider import dispatch_chat, openai_compatible_chat
+from modules.ai.ai_multi_provider import dispatch_chat, openai_compatible_chat
 
 
 def test_garbage_assert_plan_rejected() -> None:

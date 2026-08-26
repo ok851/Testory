@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 class TestDesktopAppCatalog(unittest.TestCase):
     def test_build_and_load_catalog(self):
-        from desktop_app_catalog import build_catalog_from_start_menu, _catalog_path
+        from modules.desktop.desktop_app_catalog import build_catalog_from_start_menu, _catalog_path
 
         with patch("desktop_discovery._refresh_start_menu_index") as mock_idx:
             mock_idx.return_value = {
@@ -23,7 +23,7 @@ class TestDesktopAppCatalog(unittest.TestCase):
                     self.assertGreaterEqual(len(data.get("apps") or []), 1)
 
     def test_find_catalog_installer_style_exe_name(self):
-        from desktop_app_catalog import find_catalog_app
+        from modules.desktop.desktop_app_catalog import find_catalog_app
 
         apps = [
             {
@@ -41,7 +41,7 @@ class TestDesktopAppCatalog(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "win32", "windows only")
     def test_attachment_spec_has_hwnd(self):
-        from desktop_discovery import attachment_spec_for_window, list_visible_windows
+        from modules.desktop.desktop_discovery import attachment_spec_for_window, list_visible_windows
 
         wins = list_visible_windows()
         if not wins:

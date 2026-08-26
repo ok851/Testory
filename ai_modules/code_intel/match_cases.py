@@ -178,7 +178,7 @@ def _embedding_boosts(
 ) -> Dict[int, float]:
     """LOCAL_MEMORY_ENABLE 时用余弦相似度加权；失败则空。"""
     try:
-        from ai_memory_store import memory_enabled, embed_text, _cosine
+        from modules.ai.ai_memory_store import memory_enabled, embed_text, _cosine
     except Exception:
         return {}
     if not memory_enabled():

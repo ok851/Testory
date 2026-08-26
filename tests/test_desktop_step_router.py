@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from desktop_automation import normalize_automation_layer, validate_step_for_layer
-from step_executor import case_steps_include_desktop, enrich_execution_step, is_desktop_step
+from modules.desktop.desktop_automation import normalize_automation_layer, validate_step_for_layer
+from modules.execution.step_executor import case_steps_include_desktop, enrich_execution_step, is_desktop_step
 
 
 class TestDesktopStepRouter(unittest.TestCase):

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 class TestChatToolSchemasDesktop(unittest.TestCase):
     def test_desktop_includes_windows_tools_when_opt_in(self):
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         names = [
             s["function"]["name"]
@@ -31,7 +31,7 @@ class TestChatToolSchemasDesktop(unittest.TestCase):
 
     def test_desktop_default_includes_windows_tools(self):
         import os
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         os.environ.pop("PLATFORM_OUTER_DESKTOP_TOOLS", None)
         names = [s["function"]["name"] for s in chat_tool_schemas(platform_type="desktop")]
@@ -40,7 +40,7 @@ class TestChatToolSchemasDesktop(unittest.TestCase):
         self.assertNotIn("hermes_execute", names)
 
     def test_screen_tools_on_desktop_by_default(self):
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         names = [
             s["function"]["name"]
@@ -51,7 +51,7 @@ class TestChatToolSchemasDesktop(unittest.TestCase):
         self.assertIn("get_screen_description", names)
 
     def test_web_without_desktop_tools(self):
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         names = [s["function"]["name"] for s in chat_tool_schemas(platform_type="web", allow_hermes=False)]
         self.assertNotIn("windows_focus_app", names)
@@ -60,7 +60,7 @@ class TestChatToolSchemasDesktop(unittest.TestCase):
 
 class TestScreenToolsCache(unittest.TestCase):
     def test_ocr_cache_hit_skips_second_ocr(self):
-        import screen_tools as st
+        from modules.ai import screen_tools as st
 
         st.clear_ocr_cache()
         fake_png = b"\x89PNG" + b"\x00" * 2000
@@ -83,7 +83,7 @@ class TestScreenToolsCache(unittest.TestCase):
         self.assertEqual(calls["n"], 1)
 
     def test_ocr_unavailable_returns_structured_error(self):
-        import screen_tools as st
+        from modules.ai import screen_tools as st
 
         with patch("desktop_ocr.ocr_available", return_value=False), patch(
             "desktop_ocr.engine_name", return_value="none"
@@ -94,7 +94,7 @@ class TestScreenToolsCache(unittest.TestCase):
         self.assertTrue(r.get("suggestion"))
 
     def test_description_hard_truncate(self):
-        import screen_tools as st
+        from modules.ai import screen_tools as st
 
         long_text = "窗" * 500
         with patch.object(st, "capture_primary_monitor_png", return_value=b"\x89PNG" + b"\x00" * 100), patch(
@@ -107,14 +107,14 @@ class TestScreenToolsCache(unittest.TestCase):
 
 class TestWindowsClickElementErrors(unittest.TestCase):
     def test_empty_description(self):
-        from windows_desktop_tools import windows_click_element
+        from modules.desktop.windows_desktop_tools import windows_click_element
 
         r = windows_click_element("")
         self.assertFalse(r.get("success"))
         self.assertIn("空", r.get("error") or "")
 
     def test_no_match_returns_structured_error(self):
-        from windows_desktop_tools import windows_click_element
+        from modules.desktop.windows_desktop_tools import windows_click_element
 
         with patch("windows_desktop_tools._uia_find_candidates", return_value=[]), patch(
             "screen_tools.capture_primary_monitor_png", return_value=b"\x89PNG" + b"\x00" * 100
@@ -131,7 +131,7 @@ class TestWindowsClickElementErrors(unittest.TestCase):
 
     def test_multi_candidate_picks_instead_of_halt(self):
         """多候选时择优点击，不再直接 flow_halt（避免模型空转）。"""
-        from windows_desktop_tools import windows_click_element
+        from modules.desktop.windows_desktop_tools import windows_click_element
 
         cands = [
             {"name": "确定", "x": 10, "y": 40, "score": 0.9, "via": "uia"},
@@ -164,7 +164,7 @@ class TestWindowsClickElementErrors(unittest.TestCase):
         self.assertIn(int(r.get("y") or 0), (40, 200))
 
     def test_generate_case_flag_controls_refine_schema(self):
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         with_refine = [
             s["function"]["name"]
@@ -180,14 +180,14 @@ class TestWindowsClickElementErrors(unittest.TestCase):
 
 class TestWindowsFocusAppAliases(unittest.TestCase):
     def test_focus_needles_wechat(self):
-        from windows_desktop_tools import _focus_needles
+        from modules.desktop.windows_desktop_tools import _focus_needles
 
         needles = _focus_needles("微信")
         self.assertTrue(any("weixin" in n for n in needles))
         self.assertTrue(any("wechat" in n for n in needles))
 
     def test_score_prefers_iconic_titled_window(self):
-        from windows_desktop_tools import _score_focus_candidate
+        from modules.desktop.windows_desktop_tools import _score_focus_candidate
 
         needles = ["微信", "weixin", "wechat"]
         mini = {
@@ -214,7 +214,7 @@ class TestWindowsFocusAppAliases(unittest.TestCase):
 
 class TestExtractTextBlocks(unittest.TestCase):
     def test_extract_text_blocks_empty(self):
-        from desktop_ocr import extract_text_blocks
+        from modules.desktop.desktop_ocr import extract_text_blocks
 
         self.assertEqual(extract_text_blocks(b""), [])
 
@@ -251,7 +251,7 @@ class TestMcpWindowsToolsRegistered(unittest.TestCase):
 
 class TestWindowsLaunchApp(unittest.TestCase):
     def test_schema_includes_launch_app(self):
-        from ai_chat_tool_loop import chat_tool_schemas
+        from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
         names = [
             s["function"]["name"]
@@ -264,14 +264,14 @@ class TestWindowsLaunchApp(unittest.TestCase):
         self.assertIn("windows_launch_app", names)
 
     def test_resolve_launch_aliases(self):
-        from windows_desktop_tools import _resolve_launch_input
+        from modules.desktop.windows_desktop_tools import _resolve_launch_input
 
         self.assertEqual(_resolve_launch_input("记事本")[0], "notepad")
         self.assertEqual(_resolve_launch_input("Notepad")[0], "notepad")
         self.assertEqual(_resolve_launch_input("计算器")[0], "calc")
 
     def test_focus_miss_auto_launches(self):
-        import windows_desktop_tools as wdt
+        from modules.desktop import windows_desktop_tools as wdt
 
         miss = {
             "success": False,
@@ -294,7 +294,7 @@ class TestWindowsLaunchApp(unittest.TestCase):
         mock_launch.assert_called_once_with("Notepad")
 
     def test_focus_miss_without_can_launch_does_not_auto_launch(self):
-        import windows_desktop_tools as wdt
+        from modules.desktop import windows_desktop_tools as wdt
 
         reclaim_fail = {
             "success": False,
@@ -309,20 +309,20 @@ class TestWindowsLaunchApp(unittest.TestCase):
         mock_launch.assert_not_called()
 
     def test_type_content_phrase_redirects_to_type_text(self):
-        from windows_desktop_tools import windows_click_element
+        from modules.desktop.windows_desktop_tools import windows_click_element
 
         r = windows_click_element('编辑内容为我已经学会写记事本了')
         self.assertFalse(r.get("success"))
         self.assertEqual(r.get("redirect"), "windows_type_text")
 
     def test_uia_score_rejects_menu_edit_in_long_term(self):
-        from windows_desktop_tools import _uia_score_name_term
+        from modules.desktop.windows_desktop_tools import _uia_score_name_term
 
         self.assertLess(_uia_score_name_term("编辑", "编辑内容"), 0.5)
         self.assertEqual(_uia_score_name_term("编辑", "编辑"), 1.0)
 
     def test_noise_gdi_window_filter(self):
-        from windows_desktop_tools import _is_noise_focus_window
+        from modules.desktop.windows_desktop_tools import _is_noise_focus_window
 
         self.assertTrue(_is_noise_focus_window("GDI+ Window", "foo.exe", ""))
         self.assertTrue(_is_noise_focus_window("", "GDI+windows.exe", ""))
@@ -331,7 +331,7 @@ class TestWindowsLaunchApp(unittest.TestCase):
 
 class TestHermesStartUrl(unittest.TestCase):
     def test_resolve_start_url_from_probe(self):
-        from ai_chat_tool_loop import ChatToolLoopParams, _resolve_start_url_for_hermes
+        from modules.ai.ai_chat_tool_loop import ChatToolLoopParams, _resolve_start_url_for_hermes
 
         params = ChatToolLoopParams(
             message="测一下搜索",
@@ -353,7 +353,7 @@ class TestHermesStartUrl(unittest.TestCase):
         )
 
     def test_resolve_start_url_from_message(self):
-        from ai_chat_tool_loop import _resolve_start_url_for_hermes
+        from modules.ai.ai_chat_tool_loop import _resolve_start_url_for_hermes
 
         self.assertIn(
             "example.com",

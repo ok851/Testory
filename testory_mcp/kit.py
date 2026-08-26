@@ -8,7 +8,7 @@ ToolFn = Callable[..., Any]
 
 def mcp_windows_desktop_tools() -> List[Dict[str, Any]]:
     """语义化 Windows 桌面 + 屏幕观察工具（通用原语，供 Hermes MCP 使用）。"""
-    from windows_desktop_tools import dispatch_windows_or_screen_tool
+    from modules.desktop.windows_desktop_tools import dispatch_windows_or_screen_tool
 
     def _h(name: str):
         def _inner(**kwargs):

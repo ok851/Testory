@@ -6,7 +6,7 @@ import re
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
-from api_http_helper import execute_api_spec_sync, get_json_path_value
+from modules.integration.api_http_helper import execute_api_spec_sync, get_json_path_value
 
 
 def _url_assert_match_variants(actual_url: str, expected: str, equals: bool) -> bool:

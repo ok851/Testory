@@ -70,7 +70,7 @@ def software_extensions_root() -> Path:
 
     if getattr(sys, "frozen", False):
         try:
-            from install_paths import resolve_install_root
+            from modules.core.install_paths import resolve_install_root
 
             root = resolve_install_root() / "extensions"
         except ImportError:
@@ -197,11 +197,11 @@ def _mobile_runtime_installed(plugin_id: str) -> bool:
     pid = (plugin_id or "").strip()
     try:
         if pid == "mobile-android-platform-tools":
-            from mobile_plugin_bundles import get_installed_adb_path
+            from modules.mobile.mobile_plugin_bundles import get_installed_adb_path
 
             return bool(get_installed_adb_path())
         if pid == "mobile-testory-assistant":
-            from mobile_assistant_bundles import (
+            from modules.mobile.mobile_assistant_bundles import (
                 assistant_installed_on_device,
                 is_assistant_prepared,
                 resolve_target_udid_for_push,
@@ -212,7 +212,7 @@ def _mobile_runtime_installed(plugin_id: str) -> bool:
             on_device = assistant_installed_on_device(udid) if udid else False
             return prepared or on_device
         if pid == "mobile-scrcpy":
-            from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+            from modules.mobile.mobile_scrcpy_bundles import get_installed_scrcpy_exe
             return bool(get_installed_scrcpy_exe())
     except Exception:
         return False
@@ -238,7 +238,7 @@ def is_plugin_installed(plugin_id: str) -> bool:
     # 组件类型由 components_manager 管理
     if pid in _COMPONENT_IDS:
         try:
-            from components_manager import is_installed as _comp_installed
+            from modules.core.components_manager import is_installed as _comp_installed
             return _comp_installed(pid)
         except Exception:
             return False
@@ -319,7 +319,7 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
     if pid in _COMPONENT_IDS:
         out = dict(plugin)
         try:
-            from components_manager import is_installed as _comp_installed
+            from modules.core.components_manager import is_installed as _comp_installed
             installed = _comp_installed(pid)
         except Exception:
             installed = False
@@ -342,7 +342,7 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
         out["status_tone"] = "ok"
         if pid == "mobile-android-platform-tools":
             try:
-                from mobile_plugin_bundles import get_installed_adb_path
+                from modules.mobile.mobile_plugin_bundles import get_installed_adb_path
 
                 ap = get_installed_adb_path()
                 if ap:
@@ -351,7 +351,7 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
                 pass
         if pid == "mobile-testory-assistant":
             try:
-                from mobile_assistant_bundles import (
+                from modules.mobile.mobile_assistant_bundles import (
                     assistant_installed_on_device,
                     is_assistant_prepared,
                     resolve_target_udid_for_push,
@@ -391,25 +391,25 @@ def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
     """网页捕获 + 移动端等全部可安装插件（安装与列表须共用此目录）。"""
     items = list(_catalog_raw(platform_origin=platform_origin))
     try:
-        from mobile_plugin_bundles import get_android_platform_tools_catalog_entry
+        from modules.mobile.mobile_plugin_bundles import get_android_platform_tools_catalog_entry
 
         items.append(get_android_platform_tools_catalog_entry())
     except Exception:
         pass
     try:
-        from mobile_assistant_bundles import get_testory_assistant_catalog_entry
+        from modules.mobile.mobile_assistant_bundles import get_testory_assistant_catalog_entry
 
         items.append(get_testory_assistant_catalog_entry())
     except Exception:
         pass
     try:
-        from mobile_scrcpy_bundles import get_scrcpy_catalog_entry
+        from modules.mobile.mobile_scrcpy_bundles import get_scrcpy_catalog_entry
         items.append(get_scrcpy_catalog_entry())
     except Exception:
         pass
     # 运行组件（Chromium、OpenCV 等）
     try:
-        from components_manager import COMPONENT_DEFS
+        from modules.core.components_manager import COMPONENT_DEFS
 
         for _cid, _cdef in COMPONENT_DEFS.items():
             items.append(
@@ -586,7 +586,7 @@ def install_plugin(plugin_id: str, *, background: Optional[bool] = None) -> Dict
 
     if background is None:
         try:
-            from plugin_install_jobs import should_install_in_background
+            from modules.core.plugin_install_jobs import should_install_in_background
 
             background = should_install_in_background(pid)
         except Exception:
@@ -598,7 +598,7 @@ def install_plugin(plugin_id: str, *, background: Optional[bool] = None) -> Dict
 
     if background and meta.get("type") in ("runtime_bundle", "component"):
         try:
-            from plugin_install_jobs import start_install_job
+            from modules.core.plugin_install_jobs import start_install_job
 
             job_id = start_install_job(pid)
             return {
@@ -640,7 +640,7 @@ def install_plugin_sync(
     # 组件类型由 components_manager 安装
     if meta.get("type") == "component":
         try:
-            from components_manager import install as _comp_install
+            from modules.core.components_manager import install as _comp_install
             def _comp_progress(_status: str, _percent: float, _message: str) -> None:
                 _progress(int(_percent), _message)
             ok = _comp_install(pid, progress=_comp_progress)
@@ -658,14 +658,14 @@ def install_plugin_sync(
     if meta.get("type") == "runtime_bundle":
         if pid == "mobile-android-platform-tools":
             try:
-                from mobile_plugin_bundles import install_android_platform_tools
+                from modules.mobile.mobile_plugin_bundles import install_android_platform_tools
 
                 return install_android_platform_tools(progress_cb=progress_cb)
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
         if pid == "mobile-testory-assistant":
             try:
-                from mobile_assistant_bundles import (
+                from modules.mobile.mobile_assistant_bundles import (
                     assistant_installed_on_device,
                     is_assistant_prepared,
                     install_testory_assistant,
@@ -694,7 +694,7 @@ def install_plugin_sync(
                 return {"success": False, "error": str(exc)}
         if pid == "mobile-scrcpy":
             try:
-                from mobile_scrcpy_bundles import install_mobile_scrcpy
+                from modules.mobile.mobile_scrcpy_bundles import install_mobile_scrcpy
                 return install_mobile_scrcpy(progress_cb=progress_cb)
             except Exception as exc:
                 return {"success": False, "error": str(exc)}

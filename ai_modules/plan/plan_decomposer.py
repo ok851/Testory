@@ -7,12 +7,12 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from ai_local_inference import local_ai_service
+from modules.ai.ai_local_inference import local_ai_service
 
 
 def _load_active_profile() -> Dict[str, Any]:
     try:
-        from ai_config_paths import ai_model_registry_path
+        from modules.ai.ai_config_paths import ai_model_registry_path
         path = str(ai_model_registry_path())
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
@@ -183,7 +183,7 @@ class CrossEndPlanDecomposer:
             user_input=user_input, schema_version=SCHEMA_VERSION
         )
         try:
-            from ai_multi_provider import dispatch_chat
+            from modules.ai.ai_multi_provider import dispatch_chat
             profile = _load_active_profile()
             raw = dispatch_chat(prompt, profile, local_ai_service)
         except Exception as e:

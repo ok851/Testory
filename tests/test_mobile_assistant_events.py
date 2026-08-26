@@ -11,7 +11,7 @@
 """
 import json
 
-from mobile_assistant_events import normalize_assistant_event, suggest_locator_from_node
+from modules.mobile.mobile_assistant_events import normalize_assistant_event, suggest_locator_from_node
 
 
 # ============================================================

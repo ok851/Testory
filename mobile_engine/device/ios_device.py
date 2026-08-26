@@ -486,7 +486,7 @@ def _search_tree(node: Any, label: str, _depth: int = 0, _max_depth: int = 50) -
 def is_ios_supported() -> bool:
     """检查当前环境是否支持 iOS 自动化。"""
     try:
-        from mobile_env_config import ios_enabled
+        from modules.mobile.mobile_env_config import ios_enabled
         if not ios_enabled():
             return False
     except ImportError:
@@ -500,7 +500,7 @@ def get_ios_manager() -> Optional[IOSDeviceManager]:
     if not is_ios_supported():
         return None
     try:
-        from mobile_env_config import idb_path
+        from modules.mobile.mobile_env_config import idb_path
         return IOSDeviceManager(idb_path=idb_path())
     except ImportError:
         return IOSDeviceManager()

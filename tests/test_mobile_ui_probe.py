@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """mobile_ui_probe 单元测试。"""
 
-from mobile_ui_probe import find_node_at_point, suggest_locator_from_node
+from modules.mobile.mobile_ui_probe import find_node_at_point, suggest_locator_from_node
 
 
 _SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>

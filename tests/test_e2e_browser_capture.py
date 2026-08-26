@@ -4,8 +4,8 @@ import sys
 import json
 sys.path.insert(0, '.')
 
-from hermes_gateway_client import _tool_call_delta_to_event
-from ai_action_recorder import ActionRecorder
+from modules.hermes.hermes_gateway_client import _tool_call_delta_to_event
+from modules.ai.ai_action_recorder import ActionRecorder
 
 # 模拟 Chat Completions delta.tool_calls
 mock_tool_calls = [

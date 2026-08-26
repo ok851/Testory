@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 
-from desktop_embed_cdp import (
+from modules.desktop.desktop_embed_cdp import (
     _build_selector_from_dom,
     _first_css_candidate,
     _is_embed_host_class,
@@ -61,7 +61,7 @@ class TestDesktopEmbedCdp(unittest.TestCase):
     @patch("desktop_embed_cdp.discover_listening_ports_for_pid", return_value=[])
     @patch("desktop_embed_cdp._get_pid_from_hwnd", return_value=1234)
     def test_capture_returns_none_without_cdp(self, *_mocks):
-        from desktop_embed_cdp import capture_embed_element_at_point
+        from modules.desktop.desktop_embed_cdp import capture_embed_element_at_point
 
         with patch(
             "desktop_win32_snapshot.window_from_point", return_value=1

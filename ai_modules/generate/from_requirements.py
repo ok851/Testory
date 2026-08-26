@@ -38,7 +38,7 @@ def try_structured_scenarios(
     profile: Optional[Dict[str, Any]],
     extra_context: str = "",
 ) -> Tuple[Dict[str, Any], List[str]]:
-    from ai_structured_scenarios import (
+    from modules.ai.ai_structured_scenarios import (
         generate_structured_scenarios_from_requirements,
         generate_structured_scenarios_from_requirements_chunked,
         structured_scenarios_chunk_size,

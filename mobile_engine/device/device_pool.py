@@ -57,7 +57,7 @@ class DevicePool:
         Returns:
             DeviceInfo 列表
         """
-        from mobile_device_manager import (
+        from modules.mobile.mobile_device_manager import (
             get_device_info,
             list_emulators,
             list_real_usb_devices,

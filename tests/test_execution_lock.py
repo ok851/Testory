@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from execution_lock import LocalExecutionLock, acquire, lock_file_path, release
+from modules.execution.execution_lock import LocalExecutionLock, acquire, lock_file_path, release
 
 
 class TestExecutionLock(unittest.TestCase):

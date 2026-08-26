@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from desktop_uia_snapshot import (
+from modules.desktop.desktop_uia_snapshot import (
     SnapshotCaptureResult,
     _class_matches,
     _is_volatile_name,
@@ -66,7 +66,7 @@ class TestDesktopUiaSnapshot(unittest.TestCase):
         self.assertEqual(r.error_code, "timeout")
 
     def test_desktop_root_name(self):
-        from desktop_uia_snapshot import _is_desktop_root_name
+        from modules.desktop.desktop_uia_snapshot import _is_desktop_root_name
 
         self.assertTrue(_is_desktop_root_name("桌面"))
         self.assertTrue(_is_desktop_root_name("Desktop"))
@@ -74,7 +74,7 @@ class TestDesktopUiaSnapshot(unittest.TestCase):
         self.assertFalse(_is_desktop_root_name("记事本"))
 
     def test_fake_container_patterns_aligned(self):
-        from desktop_visual_picker import _is_fake_container
+        from modules.desktop.desktop_visual_picker import _is_fake_container
 
         self.assertTrue(_is_fake_container("Chrome_RenderWidgetHostHWND", ""))
         self.assertTrue(_is_fake_container("", "CefBrowserWindow"))

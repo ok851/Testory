@@ -26,7 +26,7 @@ def enterprise_ops_readiness() -> Dict[str, Any]:
 
     # License / 功能（不强行要求 enforce）
     try:
-        from license_manager import license_manager
+        from modules.auth.license_manager import license_manager
 
         feats = {
             "parallel_execution": license_manager.check_feature_available("parallel_execution"),

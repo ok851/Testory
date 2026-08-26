@@ -15,7 +15,7 @@ def generate_functional_case(
     profile: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    from ai_local_inference import local_ai_service
+    from modules.ai.ai_local_inference import local_ai_service
 
     return local_ai_service.generate_case_and_steps(
         goal,

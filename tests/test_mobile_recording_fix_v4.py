@@ -20,7 +20,7 @@ import unittest
 # 确保可以导入项目模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mobile_assistant_events import (
+from modules.mobile.mobile_assistant_events import (
     _select_primary_node,
     _validate_coord_node_consistency,
     normalize_assistant_event,

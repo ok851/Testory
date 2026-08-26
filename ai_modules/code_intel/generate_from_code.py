@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from logger import uat_logger
+from modules.core.logger import uat_logger
 
 CODE_GEN_SCHEMA = """{
   "cases": [
@@ -252,9 +252,9 @@ def generate_cases_from_code(
     drafts: List[Dict[str, Any]] = []
     if use_llm:
         try:
-            from ai_selector_recovery import _extract_json_obj
-            from ai_local_inference import local_ai_service
-            from ai_multi_provider import dispatch_chat
+            from modules.ai.ai_selector_recovery import _extract_json_obj
+            from modules.ai.ai_local_inference import local_ai_service
+            from modules.ai.ai_multi_provider import dispatch_chat
             from ai_modules.generate.design_from_requirements import _normalize_draft
 
             prompt = _build_code_gen_prompt(

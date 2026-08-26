@@ -1,5 +1,5 @@
 """桌面 AI 用例：归一化与 Web 污染修复。"""
-from ai_step_normalization import (
+from modules.ai.ai_step_normalization import (
     apply_step_normalization_to_plan,
     repair_desktop_ai_steps_inplace,
 )
@@ -58,7 +58,7 @@ def test_normalize_desktop_skips_navigate_warning():
 
 
 def test_local_inference_desktop_normalize_output():
-    from ai_local_inference import LocalAIService
+    from modules.ai.ai_local_inference import LocalAIService
 
     svc = LocalAIService()
     raw = {

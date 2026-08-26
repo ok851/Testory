@@ -436,7 +436,7 @@ class LicenseManager:
         if not btype or btype == "none" or not bid:
             return None
         try:
-            from instance_identity import get_instance_id, get_machine_id
+            from modules.core.instance_identity import get_instance_id, get_machine_id
         except ImportError:
             return None
         if btype == "machine":

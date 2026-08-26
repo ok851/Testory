@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hitl import reset_hitl_state_for_tests
+from modules.ai.agent_hitl import reset_hitl_state_for_tests
 from ai_modules.security.risk_guard import reset_risk_guard_for_tests
 
 _ROOT = Path(__file__).resolve().parents[1]

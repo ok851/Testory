@@ -5,7 +5,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from logger import uat_logger
+from modules.core.logger import uat_logger
 
 _PLATFORM_SKILL_HINT: Dict[str, str] = {
     "web": "testory-web-browser",
@@ -34,7 +34,7 @@ def hermes_execute_available(platform_type: str = "web") -> bool:
     if plat not in _PLATFORM_SKILL_HINT:
         return False
     try:
-        from hermes_gateway_client import HermesGatewayClient
+        from modules.hermes.hermes_gateway_client import HermesGatewayClient
 
         client = HermesGatewayClient()
         if not client.is_configured():
@@ -46,7 +46,7 @@ def hermes_execute_available(platform_type: str = "web") -> bool:
 
 def mobile_bridge_available() -> bool:
     try:
-        from mobile_sync_store import _DEVICE_TOKENS, _load_persisted
+        from modules.mobile.mobile_sync_store import _DEVICE_TOKENS, _load_persisted
 
         _load_persisted()
         return bool(_DEVICE_TOKENS)
@@ -193,7 +193,7 @@ def hermes_execute_stage(
 
     t0 = time.perf_counter()
     try:
-        from hermes_gateway_client import HermesGatewayClient
+        from modules.hermes.hermes_gateway_client import HermesGatewayClient
 
         client = HermesGatewayClient()
 

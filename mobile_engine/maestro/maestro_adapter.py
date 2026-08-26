@@ -90,7 +90,7 @@ class MaestroAdapter(MobileTestEngine):
         self._device = device
 
         # 自动下载/校验 Maestro
-        from mobile_env_config import maestro_auto_install
+        from modules.mobile.mobile_env_config import maestro_auto_install
 
         if maestro_auto_install():
             try:
@@ -167,7 +167,7 @@ class MaestroAdapter(MobileTestEngine):
     def capture_screenshot(self) -> bytes:
         if not self._device:
             return b""
-        from mobile_device_manager import capture_screenshot_png
+        from modules.mobile.mobile_device_manager import capture_screenshot_png
 
         png = capture_screenshot_png(self._device.udid)
         return png or b""
@@ -218,7 +218,7 @@ class MaestroAdapter(MobileTestEngine):
         self._last_flow_file = flow_file
 
         # 执行
-        from mobile_env_config import maestro_timeout_seconds
+        from modules.mobile.mobile_env_config import maestro_timeout_seconds
 
         timeout = maestro_timeout_seconds()
         cli_result = self._cli.run_test(
@@ -287,7 +287,7 @@ class MaestroAdapter(MobileTestEngine):
         if not self._last_flow_file:
             return self.execute_flow(flow[from_index:])
 
-        from mobile_env_config import maestro_timeout_seconds
+        from modules.mobile.mobile_env_config import maestro_timeout_seconds
 
         cli_result = self._cli.run_test(
             self._last_flow_file,
@@ -362,7 +362,7 @@ class MaestroAdapter(MobileTestEngine):
                 steps=[], total_duration_ms=0, passed_count=0, failed_count=0,
             )
 
-        from mobile_env_config import maestro_timeout_seconds
+        from modules.mobile.mobile_env_config import maestro_timeout_seconds
 
         cli_result = self._cli.run_test(
             yaml_path,

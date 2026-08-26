@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 class TestDesktopHotkeyDelivery(unittest.TestCase):
     def test_press_key_rejects_bare_ctrl(self):
-        from windows_desktop_tools import windows_press_key
+        from modules.desktop.windows_desktop_tools import windows_press_key
 
         with patch("windows_desktop_tools.get_desktop_target", return_value={"hwnd": 0}):
             r = windows_press_key("ctrl")
@@ -16,7 +16,7 @@ class TestDesktopHotkeyDelivery(unittest.TestCase):
         self.assertIn("修饰键", r.get("error") or "")
 
     def test_deliver_keys_reclaims_foreground_then_sends(self):
-        from desktop_input import deliver_keys_to_hwnd
+        from modules.desktop.desktop_input import deliver_keys_to_hwnd
 
         calls = {"pm": 0, "si": 0, "reclaim": 0}
 
@@ -54,7 +54,7 @@ class TestDesktopHotkeyDelivery(unittest.TestCase):
         self.assertTrue(out.get("fg_captured"))
 
     def test_deliver_keys_fails_only_after_reclaim_exhausted(self):
-        from desktop_input import deliver_keys_to_hwnd
+        from modules.desktop.desktop_input import deliver_keys_to_hwnd
 
         with (
             patch(
@@ -79,7 +79,7 @@ class TestDesktopHotkeyDelivery(unittest.TestCase):
 
 class TestDesktopFocusCapture(unittest.TestCase):
     def test_score_prefers_weixin_process_over_browser(self):
-        from windows_desktop_tools import _score_focus_candidate
+        from modules.desktop.windows_desktop_tools import _score_focus_candidate
 
         needles = ["微信", "weixin", "wechat", "weixin.exe"]
         wechat = {
@@ -102,7 +102,7 @@ class TestDesktopFocusCapture(unittest.TestCase):
         )
 
     def test_refresh_rebinds_by_process_when_hwnd_dead(self):
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             clear_desktop_target,
             refresh_desktop_target_hwnd,
             set_desktop_target,

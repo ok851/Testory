@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 class TestHermesDesktopMcpConfig(unittest.TestCase):
     def test_upsert_config_yaml_idempotent(self):
-        from hermes_desktop_enable import ensure_hermes_config_desktop_control
+        from modules.hermes.hermes_desktop_enable import ensure_hermes_config_desktop_control
 
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
@@ -32,7 +32,7 @@ class TestHermesDesktopMcpConfig(unittest.TestCase):
                 self.assertFalse(r2.get("changed"))
 
     def test_desktop_hint_mentions_mcp_not_cua_first(self):
-        from hermes_skill_hints import desktop_gateway_auth_hint
+        from modules.hermes.hermes_skill_hints import desktop_gateway_auth_hint
 
         hint = desktop_gateway_auth_hint()
         self.assertIn("9820", hint)
@@ -42,7 +42,7 @@ class TestHermesDesktopMcpConfig(unittest.TestCase):
 
 class TestThinOuterDesktopPrompt(unittest.TestCase):
     def test_desktop_prompt_mentions_mcp(self):
-        from ai_chat_tool_loop import _build_system_prompt
+        from modules.ai.ai_chat_tool_loop import _build_system_prompt
 
         sp = _build_system_prompt(
             project_name="t",

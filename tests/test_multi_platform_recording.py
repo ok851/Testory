@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Test script for verifying the multi-platform step recording fixes."""
 import re as _re
-from ai_action_recorder import ActionRecorder, sanitize_target, is_state_observation, contains_negative_snippet
+from modules.ai.ai_action_recorder import ActionRecorder, sanitize_target, is_state_observation, contains_negative_snippet
 
 # Test 1: ActionRecorder captures all platform tools
 print("=" * 60)
@@ -241,7 +241,7 @@ assert total_fallback_cn >= 5, f"Expected at least 5 fallback Chinese matches, g
 print("\n" + "=" * 60)
 print("Test 5: Observation filter + console lift")
 print("=" * 60)
-from ai_action_recorder import lift_console_expression, is_observation_tool, is_replayable_action_type
+from modules.ai.ai_action_recorder import lift_console_expression, is_observation_tool, is_replayable_action_type
 
 assert is_observation_tool("browser_snapshot")
 assert is_observation_tool("get_screen_text")

@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from captcha_engine import (
+from modules.web.captcha_engine import (
     build_human_drag_path,
     captcha_allow_heuristic_slide,
     captcha_max_retry,
@@ -89,7 +89,7 @@ def test_ddddocr_disabled_by_default():
 
 def test_resolve_captcha_solve_attempts_step_override(monkeypatch):
     monkeypatch.setenv("CAPTCHA_SOLVE_RETRY", "3")
-    from captcha_engine import captcha_solve_attempts, resolve_captcha_solve_attempts
+    from modules.web.captcha_engine import captcha_solve_attempts, resolve_captcha_solve_attempts
 
     assert captcha_solve_attempts() == 3
     assert resolve_captcha_solve_attempts(None) == 3
@@ -100,7 +100,7 @@ def test_resolve_captcha_solve_attempts_step_override(monkeypatch):
 def test_recovery_honors_step_solve_attempts(monkeypatch):
     import asyncio
 
-    from captcha_recovery import CaptchaManualRequiredError, run_captcha_with_recovery
+    from modules.web.captcha_recovery import CaptchaManualRequiredError, run_captcha_with_recovery
 
     monkeypatch.setenv("CAPTCHA_AUTO_REFRESH", "0")
     calls = {"n": 0}
@@ -127,7 +127,7 @@ def test_captcha_max_retry_default():
 
 def test_captcha_solve_attempts_env(monkeypatch):
     monkeypatch.setenv("CAPTCHA_SOLVE_RETRY", "5")
-    from captcha_engine import captcha_solve_attempts
+    from modules.web.captcha_engine import captcha_solve_attempts
 
     assert captcha_solve_attempts() == 5
 
@@ -184,7 +184,7 @@ def test_heuristic_slide_default_off(monkeypatch):
 
 
 def test_captcha_distance_retry_offset():
-    from captcha_engine import captcha_distance_retry_offset, set_captcha_solve_attempt_index
+    from modules.web.captcha_engine import captcha_distance_retry_offset, set_captcha_solve_attempt_index
 
     set_captcha_solve_attempt_index(1)
     assert captcha_distance_retry_offset() == 0
@@ -195,7 +195,7 @@ def test_captcha_distance_retry_offset():
 
 
 def test_solve_slider_gap_synthetic():
-    from captcha_engine import solve_slider_gap
+    from modules.web.captcha_engine import solve_slider_gap
 
     bg = np.full((80, 320, 3), 180, dtype=np.uint8)
     cv2.rectangle(bg, (0, 0), (319, 79), (120, 120, 120), -1)

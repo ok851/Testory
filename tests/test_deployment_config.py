@@ -1,5 +1,5 @@
 """部署模式配置测试。"""
-from deployment_config import (
+from modules.core.deployment_config import (
     DeploymentMode,
     get_deployment_mode,
     hide_billing_ui,
@@ -30,7 +30,7 @@ def test_server_mode(monkeypatch):
 
 
 def test_website_url_defaults_to_official(monkeypatch):
-    from deployment_config import get_website_url
+    from modules.core.deployment_config import get_website_url
     from packages.testory_common.brand import OFFICIAL_WEBSITE_URL
 
     monkeypatch.delenv("WEBSITE_URL", raising=False)
@@ -39,7 +39,7 @@ def test_website_url_defaults_to_official(monkeypatch):
 
 
 def test_website_url_rejects_localhost_on_client(monkeypatch):
-    from deployment_config import get_website_url
+    from modules.core.deployment_config import get_website_url
     from packages.testory_common.brand import OFFICIAL_WEBSITE_URL
 
     monkeypatch.setenv("DEPLOYMENT_MODE", "client")
@@ -48,7 +48,7 @@ def test_website_url_rejects_localhost_on_client(monkeypatch):
 
 
 def test_website_url_allows_localhost_on_standalone(monkeypatch):
-    from deployment_config import get_website_url
+    from modules.core.deployment_config import get_website_url
 
     monkeypatch.setenv("DEPLOYMENT_MODE", "standalone")
     monkeypatch.delenv("UAT_DESKTOP_MODE", raising=False)

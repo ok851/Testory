@@ -293,7 +293,7 @@ class VisualFallbackAdapter(MobileTestEngine):
                          locator: LocatorInfo) -> Optional[Tuple[int, int, float]]:
         """通过 Mobile Agent Gateway AI Vision 匹配"""
         try:
-            from mobile_agent_client import mobile_agent_enabled, agent_vision_query
+            from modules.mobile.mobile_agent_client import mobile_agent_enabled, agent_vision_query
 
             if not mobile_agent_enabled():
                 return None
@@ -433,7 +433,7 @@ class VisualFallbackAdapter(MobileTestEngine):
 
     def _adb_screencap(self) -> Optional[bytes]:
         try:
-            from mobile_device_manager import capture_screenshot_png
+            from modules.mobile.mobile_device_manager import capture_screenshot_png
 
             return capture_screenshot_png(self._get_udid())
         except Exception:

@@ -57,7 +57,7 @@ def _cmd_screenshot(args: argparse.Namespace) -> int:
 
 
 def _normalize_step(raw: dict) -> dict:
-    from ai_step_normalization import normalize_ai_step
+    from modules.ai.ai_step_normalization import normalize_ai_step
 
     return normalize_ai_step(raw)
 
@@ -116,7 +116,7 @@ def _cmd_run_steps(args: argparse.Namespace) -> int:
 
 
 def _cmd_readiness(args: argparse.Namespace) -> int:
-    from vision_platform_readiness import check_vision_automation_readiness
+    from modules.ai.vision_platform_readiness import check_vision_automation_readiness
 
     out = check_vision_automation_readiness(embedded_session_id=(args.session_id or "").strip())
     print(json.dumps(out, ensure_ascii=False, indent=2))
@@ -124,7 +124,7 @@ def _cmd_readiness(args: argparse.Namespace) -> int:
 
 
 def _cmd_assert(args: argparse.Namespace) -> int:
-    from vision_action_port import WebVisionActionPort
+    from modules.ai.vision_action_port import WebVisionActionPort
 
     port = WebVisionActionPort(args.session_id)
     result = port.assert_vision(args.condition)

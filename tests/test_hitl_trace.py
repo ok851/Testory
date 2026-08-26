@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hitl import (
+from modules.ai.agent_hitl import (
     cancel_hitl_gate,
     get_hitl_events,
     hitl_outcome_from_events,

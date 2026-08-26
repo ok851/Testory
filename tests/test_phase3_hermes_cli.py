@@ -1,12 +1,12 @@
 """hermes_heal_bridge vlm_ground 与 testory_cli 单测。"""
 import json
 
-from hermes_heal_bridge import (
+from modules.hermes.hermes_heal_bridge import (
     apply_vlm_ground_heal_to_step,
     build_vlm_ground_heal_candidate,
     merge_vlm_ground_into_locator_candidates,
 )
-from locator_tier_utils import parse_vlm_ground_prompt, split_locator_candidates
+from modules.web.locator_tier_utils import parse_vlm_ground_prompt, split_locator_candidates
 
 
 def test_build_vlm_ground_heal_candidate(monkeypatch):

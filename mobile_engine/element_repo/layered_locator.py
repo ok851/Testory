@@ -185,7 +185,7 @@ _default_locator: Optional[LayeredLocator] = None
 
 def get_layered_locator(strategy: str = "cascade") -> LayeredLocator:
     """获取分层定位器实例"""
-    from mobile_env_config import layered_locator_strategy
+    from modules.mobile.mobile_env_config import layered_locator_strategy
 
     global _default_locator
     if _default_locator is None:

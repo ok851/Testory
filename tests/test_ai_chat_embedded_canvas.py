@@ -4,7 +4,7 @@ import os
 
 
 def _reload_loop():
-    import ai_chat_tool_loop as m
+    from modules.ai import ai_chat_tool_loop as m
 
     return importlib.reload(m)
 
@@ -14,7 +14,7 @@ def test_hermes_blocked_when_embedded_gateway_configured(monkeypatch):
     monkeypatch.setenv("EMBEDDED_BROWSER_GATEWAY_SECRET", "test-secret")
     monkeypatch.delenv("AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK", raising=False)
     monkeypatch.delenv("HERMES_CDP_ENDPOINT", raising=False)
-    import hermes_config as hc
+    from modules.hermes import hermes_config as hc
 
     importlib.reload(hc)
     m = _reload_loop()
@@ -56,14 +56,14 @@ def test_embedded_playwright_headless_defaults_true(monkeypatch):
 def test_hermes_gateway_client_not_configured_without_key(monkeypatch):
     monkeypatch.delenv("HERMES_API_SERVER_KEY", raising=False)
     monkeypatch.setenv("HERMES_GATEWAY_URL", "http://127.0.0.1:8642")
-    from hermes_gateway_client import HermesGatewayClient
+    from modules.hermes.hermes_gateway_client import HermesGatewayClient
 
     assert HermesGatewayClient().is_configured() is False
 
 
 def test_hermes_skills_export_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
-    from ai_hermes_skills import apply_skill_to_plan, export_plan_to_skill, list_skills
+    from modules.hermes.ai_hermes_skills import apply_skill_to_plan, export_plan_to_skill, list_skills
 
     plan = {
         "case_name": "登录流程",

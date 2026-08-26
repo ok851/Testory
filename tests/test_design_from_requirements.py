@@ -6,7 +6,7 @@ from ai_modules.generate.design_from_requirements import (
     _normalize_draft,
     enforce_base_url_on_draft,
 )
-from auth_batch_helpers import maybe_strip_duplicate_login_steps, reorder_case_ids_for_batch
+from modules.auth.auth_batch_helpers import maybe_strip_duplicate_login_steps, reorder_case_ids_for_batch
 
 
 def test_enforce_base_url():

@@ -33,7 +33,7 @@ def check_desktop_preflight(*, timeout_sec: float = 1.5) -> Dict[str, Any]:
         return out
 
     try:
-        from desktop_env_config import desktop_execution_mode
+        from modules.desktop.desktop_env_config import desktop_execution_mode
 
         mode = (desktop_execution_mode() or "inprocess").strip().lower()
     except Exception:
@@ -42,7 +42,7 @@ def check_desktop_preflight(*, timeout_sec: float = 1.5) -> Dict[str, Any]:
 
     if mode in ("gateway", "remote"):
         try:
-            from desktop_agent_client import desktop_agent_enabled, desktop_agent_json
+            from modules.desktop.desktop_agent_client import desktop_agent_enabled, desktop_agent_json
 
             if not desktop_agent_enabled():
                 out["error_code"] = "DESKTOP_NO_SESSION"
@@ -105,7 +105,7 @@ def check_desktop_preflight(*, timeout_sec: float = 1.5) -> Dict[str, Any]:
     out["ok"] = True
     out["detail"] = "inprocess_win32"
     try:
-        from desktop_runtime import desktop_runtime_available
+        from modules.desktop.desktop_runtime import desktop_runtime_available
 
         if desktop_runtime_available():
             out["detail"] = "inprocess_win32+vision"

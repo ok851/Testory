@@ -9,7 +9,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from logger import uat_logger
+from modules.core.logger import uat_logger
 
 DESIGN_SCHEMA_HINT = """{
   "cases": [
@@ -376,7 +376,7 @@ def generate_design_drafts(
     probe_registry: list = []
     if entry and platform == "web":
         try:
-            from ai_page_probe import collect_page_controls
+            from modules.ai.ai_page_probe import collect_page_controls
             uat_logger.info("[AI_DESIGN] Probing page: %s", entry)
             page_snapshot, probe_err, probe_registry = collect_page_controls(entry)
             if probe_err:
@@ -395,9 +395,9 @@ def generate_design_drafts(
         entry_target=entry,
         page_snapshot=page_snapshot,
     )
-    from ai_selector_recovery import _extract_json_obj
-    from ai_local_inference import local_ai_service
-    from ai_multi_provider import dispatch_chat
+    from modules.ai.ai_selector_recovery import _extract_json_obj
+    from modules.ai.ai_local_inference import local_ai_service
+    from modules.ai.ai_multi_provider import dispatch_chat
 
     try:
         raw = dispatch_chat(prompt, profile, local_ai_service)
@@ -427,7 +427,7 @@ def generate_design_drafts(
     # 解析 probe_index → 真实 selector（仅 web 有探测数据时）
     if probe_registry and platform == "web":
         try:
-            from ai_local_inference import clamp_plan_steps_to_probe_registry
+            from modules.ai.ai_local_inference import clamp_plan_steps_to_probe_registry
             _tech_warns = []
             for d in drafts:
                 steps = d.get("steps") or []
@@ -457,7 +457,7 @@ def save_design_drafts_to_project(
 ) -> Dict[str, Any]:
     """将选中的草案写入项目，返回 count / created_case_ids / warnings。"""
     from ai_modules.generate.input_classify import normalize_platform
-    from license_manager import license_manager, LicenseType
+    from modules.auth.license_manager import license_manager, LicenseType
 
     platform = normalize_platform(platform_type)
     case_type = "api" if platform == "api" else "ui"
@@ -471,7 +471,7 @@ def save_design_drafts_to_project(
     # 对 web 平台草案做断言回放修正（填充交互后才出现的文本）
     if platform == "web":
         try:
-            from ai_page_probe import ground_plan_assertions_with_replay
+            from modules.ai.ai_page_probe import ground_plan_assertions_with_replay
             _has_assert = any(
                 isinstance(d, dict) and any(
                     isinstance(s, dict) and str(s.get("action") or "").strip().lower() == "assert"

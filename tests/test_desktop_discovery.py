@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from desktop_discovery import (
+from modules.desktop.desktop_discovery import (
     ResolveResult,
     _normalize_query,
     _resolve_via_app_paths,
@@ -26,7 +26,7 @@ class TestDesktopDiscovery(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "win32", "windows only")
     def test_resolve_installer_style_exe_via_catalog_data(self):
-        from desktop_app_catalog import find_catalog_app
+        from modules.desktop.desktop_app_catalog import find_catalog_app
 
         app = find_catalog_app("AweSun_16.2.0.27059_x64.exe")
         if not app or not (app.get("path") or "").strip():

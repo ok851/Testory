@@ -79,7 +79,7 @@ def build_heal_proposals_from_run(
         })
 
     try:
-        from execution_events import ExecutionEventCollector, HEAL_ATTEMPT
+        from modules.execution.execution_events import ExecutionEventCollector, HEAL_ATTEMPT
         collector = ExecutionEventCollector()
         collector.emit(
             HEAL_ATTEMPT,

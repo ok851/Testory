@@ -51,13 +51,13 @@ def batch_mobile_cases_from_scenarios(
     audit_fn=None,
 ) -> Dict[str, Any]:
     """批量创建 UI 用例（automation_layer=android 步骤）。"""
-    from ai_local_inference import local_ai_service
+    from modules.ai.ai_local_inference import local_ai_service
 
     created_ids: List[int] = []
     warnings: List[str] = []
     limits = None
     try:
-        from license_manager import license_manager, LicenseType
+        from modules.auth.license_manager import license_manager, LicenseType
 
         license_info = license_manager.get_current_license()
         limits = license_manager.get_limits()

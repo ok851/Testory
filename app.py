@@ -43,7 +43,7 @@ if sys.platform == "win32":
 
         def _boot_desktop_side_services() -> None:
             try:
-                from desktop_service_bootstrap import bootstrap_desktop_services
+                from modules.desktop.desktop_service_bootstrap import bootstrap_desktop_services
 
                 bootstrap_desktop_services()
             except Exception:
@@ -69,7 +69,7 @@ try:
 
     def _boot_mobile_side_services() -> None:
         try:
-            from mobile_service_bootstrap import bootstrap_mobile_services
+            from modules.mobile.mobile_service_bootstrap import bootstrap_mobile_services
 
             bootstrap_mobile_services()
         except Exception:
@@ -91,7 +91,7 @@ except Exception:
     pass
 
 try:
-    from hermes_config import ensure_hermes_home
+    from modules.hermes.hermes_config import ensure_hermes_home
 
     ensure_hermes_home()
 except Exception:
@@ -117,12 +117,12 @@ import io
 import tempfile
 import subprocess
 from database import Database
-from time_utils import beijing_now_iso, utc_now_sqlite_str as utc_sql_str
-from api_spec_pipeline import run_api_spec_pipeline
-from execution_context import ExecutionContext
-from embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled, embedded_gateway_json
-from batch_input_parse import parse_batch_input_lines
-from playwright_automation import (
+from modules.core.time_utils import beijing_now_iso, utc_now_sqlite_str as utc_sql_str
+from modules.integration.api_spec_pipeline import run_api_spec_pipeline
+from modules.execution.execution_context import ExecutionContext
+from modules.web.embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled, embedded_gateway_json
+from modules.execution.batch_input_parse import parse_batch_input_lines
+from modules.web.playwright_automation import (
     automation,
     normalize_playwright_browser_name,
     force_reset_execution_state,
@@ -190,33 +190,33 @@ from playwright_automation import (
     worker,
     _url_assert_matches_pa,
 )
-from playwright_codegen_import import (
+from modules.web.playwright_codegen_import import (
     enrich_steps_with_xpath_priority,
     parse_playwright_codegen_to_steps,
 )
-from selenium_ide_import import parse_selenium_ide_to_steps
-from test_report import TestReportGenerator
-from report_exporter import ReportExporter
-from logger import uat_logger
-from license_manager import license_manager, LicenseType
-from deployment_hooks import (
+from modules.web.selenium_ide_import import parse_selenium_ide_to_steps
+from modules.integration.test_report import TestReportGenerator
+from modules.integration.report_exporter import ReportExporter
+from modules.core.logger import uat_logger
+from modules.auth.license_manager import license_manager, LicenseType
+from modules.core.deployment_hooks import (
     guard_billing_route,
     init_server_instance,
     patch_run_case_for_server,
     register_deployment_hooks,
 )
-from deployment_config import is_client_mode, should_delegate_execution_to_clients
-from client_run_helpers import load_case_and_steps, sync_run_to_team_server
-from cloud_llm_gateway import CloudLLMGateway
-from ai_config_paths import ai_model_registry_path, ai_provider_catalog_path, load_ai_provider_catalog_dict
-from ai_local_inference import local_ai_service
-from mail_service import send_verify_code, verify_code
-from ai_step_normalization import (
+from modules.core.deployment_config import is_client_mode, should_delegate_execution_to_clients
+from modules.core.client_run_helpers import load_case_and_steps, sync_run_to_team_server
+from modules.ai.cloud_llm_gateway import CloudLLMGateway
+from modules.ai.ai_config_paths import ai_model_registry_path, ai_provider_catalog_path, load_ai_provider_catalog_dict
+from modules.ai.ai_local_inference import local_ai_service
+from modules.integration.mail_service import send_verify_code, verify_code
+from modules.ai.ai_step_normalization import (
     ai_plan_steps_to_playwright_script_steps,
     apply_step_normalization_to_plan,
     dedupe_and_validate_ai_steps,
 )
-from ai_platform_audit import log_ai_plan_to_audit
+from modules.ai.ai_platform_audit import log_ai_plan_to_audit
 import asyncio
 import threading
 import datetime
@@ -246,7 +246,7 @@ if sys.platform == "win32":
 
         def _log_desktop_runtime() -> None:
             try:
-                from desktop_runtime import (
+                from modules.desktop.desktop_runtime import (
                     desktop_runtime_available,
                     desktop_runtime_unavailable_reason,
                 )
@@ -408,7 +408,7 @@ def _on_case_execution_failure(payload: dict) -> None:
     trigger = (payload.get("trigger") or "").strip() or "unknown"
 
     try:
-        import ai_memory_store
+        from modules.ai import ai_memory_store
 
         if uid is not None and ai_memory_store.memory_enabled():
             lines = [f"[{trigger}] 用例执行失败: {case_name}", f"case_id={case_id}"]
@@ -598,7 +598,7 @@ def _init_cors(flask_app: Flask) -> None:
 
 
 try:
-    from install_paths import resource_root as _testory_resource_root
+    from modules.core.install_paths import resource_root as _testory_resource_root
 
     _rr = _testory_resource_root()
     app = Flask(
@@ -780,7 +780,7 @@ def _catalog_provider_meta(provider_id: str) -> dict:
 
 
 def _infer_ai_provider_simple(base_url: str = '', api_key: str = '') -> str:
-    from ai_provider_infer import infer_provider_from_simple_config
+    from modules.ai.ai_provider_infer import infer_provider_from_simple_config
 
     catalog = _load_ai_provider_catalog()
     return infer_provider_from_simple_config(
@@ -974,7 +974,7 @@ def _ai_memory_context_block(
 ) -> str:
     """LOCAL_MEMORY_ENABLE=1 时从 SQLite 向量记忆检索相似片段，拼入本地 LLM 提示。"""
     try:
-        from ai_memory_store import build_query_for_case, format_memory_block, memory_enabled, search
+        from modules.ai.ai_memory_store import build_query_for_case, format_memory_block, memory_enabled, search
 
         if not memory_enabled():
             return ""
@@ -993,7 +993,7 @@ def _ai_build_dom_pack(snap, embed_remote: bool = False) -> str:
     if not isinstance(snap, dict) or not snap:
         return ""
     try:
-        from ai_page_probe import dom_context_pack, dom_context_pack_enabled
+        from modules.ai.ai_page_probe import dom_context_pack, dom_context_pack_enabled
 
         if not dom_context_pack_enabled():
             return ""
@@ -1073,7 +1073,7 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         crc = _norm_click_repeat_count(step.get("click_repeat_count"))
     cmp_out = "equals"
     if action == "assert":
-        from auth_batch_helpers import normalize_assert_compare_type
+        from modules.auth.auth_batch_helpers import normalize_assert_compare_type
 
         cmp_out = normalize_assert_compare_type(
             _ai_str(step.get("compare_type")) or "text_contains",
@@ -1381,7 +1381,7 @@ register_deployment_hooks(app, Database, UserModel)
 init_server_instance(Database)
 
 try:
-    from mobile_routes import register_mobile_routes
+    from modules.mobile.mobile_routes import register_mobile_routes
 
     register_mobile_routes(
         app,
@@ -1479,7 +1479,7 @@ def api_plugin_market_install():
 @login_required
 @api_error_handler
 def api_plugin_market_install_job(job_id):
-    from plugin_install_jobs import get_job
+    from modules.core.plugin_install_jobs import get_job
 
     job = get_job(job_id)
     if not job:
@@ -1491,7 +1491,7 @@ def api_plugin_market_install_job(job_id):
 @login_required
 @api_error_handler
 def api_plugin_market_install_active():
-    from plugin_install_jobs import list_active_jobs
+    from modules.core.plugin_install_jobs import list_active_jobs
 
     return jsonify({'success': True, 'jobs': list_active_jobs()})
 
@@ -1551,7 +1551,7 @@ def _basic_email_format(email: str) -> bool:
 def _allow_local_auth() -> bool:
     """本机桌面 / 单机部署允许免 SMTP 注册与找回密钥重置（零外部成本）。"""
     try:
-        from deployment_config import is_client_mode, is_standalone_mode, is_local_standalone_desktop
+        from modules.core.deployment_config import is_client_mode, is_standalone_mode, is_local_standalone_desktop
 
         return bool(is_client_mode() or is_standalone_mode() or is_local_standalone_desktop())
     except Exception:
@@ -1619,7 +1619,7 @@ def api_register_local():
 
     uat_logger.info("本地简易注册: %s (role=%s)", username, role)
     try:
-        from auth_audit import ACTION_REGISTER, record_auth_audit
+        from modules.auth.auth_audit import ACTION_REGISTER, record_auth_audit
 
         record_auth_audit(
             action=ACTION_REGISTER,
@@ -1680,7 +1680,7 @@ def api_forgot_password_recovery_reset():
 
     uat_logger.info("用户 %s 已通过找回密钥重置密码", username)
     try:
-        from auth_audit import ACTION_PASSWORD_RESET, record_auth_audit
+        from modules.auth.auth_audit import ACTION_PASSWORD_RESET, record_auth_audit
 
         record_auth_audit(
             action=ACTION_PASSWORD_RESET,
@@ -1940,7 +1940,7 @@ def api_login():
     if not user_data or not check_password_hash(user_data['password_hash'], password):
         _login_record_failure(ip)
         try:
-            from auth_audit import ACTION_LOGIN_FAILURE, record_auth_audit
+            from modules.auth.auth_audit import ACTION_LOGIN_FAILURE, record_auth_audit
 
             record_auth_audit(
                 action=ACTION_LOGIN_FAILURE,
@@ -1955,7 +1955,7 @@ def api_login():
         return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
     if not user_data.get('is_active', 1):
         try:
-            from auth_audit import ACTION_LOGIN_FAILURE, record_auth_audit
+            from modules.auth.auth_audit import ACTION_LOGIN_FAILURE, record_auth_audit
 
             record_auth_audit(
                 action=ACTION_LOGIN_FAILURE,
@@ -1977,7 +1977,7 @@ def api_login():
     _db.update_user_last_login(user_data['id'])
     uat_logger.info(f"用户 {username} 登录成功")
     try:
-        from auth_audit import ACTION_LOGIN_SUCCESS, record_auth_audit
+        from modules.auth.auth_audit import ACTION_LOGIN_SUCCESS, record_auth_audit
 
         record_auth_audit(
             action=ACTION_LOGIN_SUCCESS,
@@ -1990,9 +1990,9 @@ def api_login():
     except Exception:
         pass
     try:
-        from client_config_store import get_team_server_url
-        from deployment_config import is_client_mode
-        from platform_sync import sync_product_user
+        from modules.core.client_config_store import get_team_server_url
+        from modules.core.deployment_config import is_client_mode
+        from modules.core.platform_sync import sync_product_user
 
         sync_product_user(
             user_data["id"],
@@ -2011,7 +2011,7 @@ def api_logout():
     username = current_user.username
     uid = getattr(current_user, 'id', None)
     try:
-        from auth_audit import ACTION_LOGOUT, record_auth_audit
+        from modules.auth.auth_audit import ACTION_LOGOUT, record_auth_audit
 
         record_auth_audit(
             action=ACTION_LOGOUT,
@@ -2047,8 +2047,8 @@ def api_me():
             'email': current_user.email if hasattr(current_user, 'email') else (Database().get_user_by_id(current_user.id) or {}).get('email')
         },
         'deployment': {
-            'mode': __import__('deployment_config').get_deployment_mode().value,
-            'team_server_url': __import__('client_config_store').get_team_server_url() if is_client_mode() else '',
+            'mode': __import__('modules.core.deployment_config').get_deployment_mode().value,
+            'team_server_url': __import__('modules.core.client_config_store').get_team_server_url() if is_client_mode() else '',
         },
         'license': {
             'type': license_info.license_type,
@@ -2597,9 +2597,9 @@ def api_ai_hub_cross_platform_execute():
 @login_required
 def ai_test_page():
     """AI 生成测试步骤；内嵌区与后台 Playwright 会话同步（可选远程画布为另一进程）。"""
-    from ai_chat_tool_loop import ai_chat_tools_enabled
-    from agent_gateway_client import agent_gateway_configured
-    from hermes_config import hermes_cdp_attached
+    from modules.ai.ai_chat_tool_loop import ai_chat_tools_enabled
+    from modules.ai.agent_gateway_client import agent_gateway_configured
+    from modules.hermes.hermes_config import hermes_cdp_attached
 
     resp = make_response(
         render_template(
@@ -2619,8 +2619,8 @@ def ai_test_page():
 @login_required
 def mobile_testing_page():
     """Android 移动端测试：配对/用例；Agent 与 /ai-test 同一大脑（一脑多端双手）。"""
-    from ai_chat_tool_loop import ai_chat_tools_enabled
-    from agent_gateway_client import agent_gateway_configured
+    from modules.ai.ai_chat_tool_loop import ai_chat_tools_enabled
+    from modules.ai.agent_gateway_client import agent_gateway_configured
 
     hermes_cfg = agent_gateway_configured()
     template_kw = dict(
@@ -2631,7 +2631,7 @@ def mobile_testing_page():
         openclaw_gateway_configured=hermes_cfg,
     )
     try:
-        from mobile_env_config import mobile_enabled, mobile_runtime_unavailable_reason
+        from modules.mobile.mobile_env_config import mobile_enabled, mobile_runtime_unavailable_reason
 
         if not mobile_enabled():
             return render_template(
@@ -2668,14 +2668,14 @@ def mobile_h264_player_page():
     bridge_ok = False
     bridge_message = ""
     try:
-        from mobile_env_config import scrcpy_bridge_port, scrcpy_available as _scrcpy_available
+        from modules.mobile.mobile_env_config import scrcpy_bridge_port, scrcpy_available as _scrcpy_available
         bridge_port = scrcpy_bridge_port()
         scrcpy_available = bool(_scrcpy_available())
     except Exception:
         pass
     # 打开页面即确保 bridge 进程起来（避免前端 WS 探活一直离线）
     try:
-        from mobile_scrcpy_bridge import ensure_bridge_started
+        from modules.mobile.mobile_scrcpy_bridge import ensure_bridge_started
 
         bridge_ok, bridge_message = ensure_bridge_started()
     except Exception as exc:
@@ -2684,7 +2684,7 @@ def mobile_h264_player_page():
     serial = (request.args.get("serial") or request.args.get("udid") or "").strip()
     if serial and bridge_ok:
         try:
-            from mobile_scrcpy_bridge import warm_scrcpy_session
+            from modules.mobile.mobile_scrcpy_bridge import warm_scrcpy_session
 
             warm_scrcpy_session(serial)
         except Exception:
@@ -3059,7 +3059,7 @@ def api_execute_multiple_cases():
                     execution_context=_make_batch_execution_context("ui", data),
                 )
                 if results.get('error') and not results.get('case_results'):
-                    from auth_batch_helpers import record_cases_run_rejected
+                    from modules.auth.auth_batch_helpers import record_cases_run_rejected
 
                     reject_reason = str(results.get('error') or '批量执行未启动')
                     record_cases_run_rejected(thread_db, case_ids, reject_reason)
@@ -3089,7 +3089,7 @@ def api_execute_multiple_cases():
                     ]
                 }
                 try:
-                    from auth_batch_helpers import record_cases_run_rejected
+                    from modules.auth.auth_batch_helpers import record_cases_run_rejected
 
                     record_cases_run_rejected(thread_db, case_ids, str(e))
                 except Exception:
@@ -3123,7 +3123,7 @@ def api_execute_multiple_cases():
             ]
         }
         try:
-            from auth_batch_helpers import record_cases_run_rejected
+            from modules.auth.auth_batch_helpers import record_cases_run_rejected
 
             record_cases_run_rejected(Database(), case_ids, str(e))
         except Exception:
@@ -3155,7 +3155,7 @@ def api_execute_multiple_cases():
             'error': '批量执行未返回结果（服务可能已中断，请重启后重试）',
         }
         try:
-            from auth_batch_helpers import record_cases_run_rejected
+            from modules.auth.auth_batch_helpers import record_cases_run_rejected
 
             record_cases_run_rejected(_db, case_ids, results['error'])
         except Exception:
@@ -3350,7 +3350,7 @@ def api_get_ai_models():
     catalog = _load_ai_provider_catalog()
     providers = catalog.get('providers') if isinstance(catalog, dict) else []
     try:
-        from ai_config_paths import ai_provider_catalog_source
+        from modules.ai.ai_config_paths import ai_provider_catalog_source
 
         catalog_path = ai_provider_catalog_source()
     except ImportError:
@@ -3377,7 +3377,7 @@ def api_get_ai_models():
 @log_api_request
 def api_ai_vision_readiness():
     """面向用户的视觉自动化就绪状态（画布、网关、本地视觉模型）。"""
-    from vision_platform_readiness import check_vision_automation_readiness
+    from modules.ai.vision_platform_readiness import check_vision_automation_readiness
 
     embedded_sid = (request.args.get('embedded_session_id') or '').strip()
     payload = check_vision_automation_readiness(
@@ -3393,7 +3393,7 @@ def api_ai_vision_readiness():
 def api_ai_vision_replay_html(run_id: str):
     """打开单次测试步骤回放页（HTML）。"""
     from flask import abort, send_from_directory
-    from vision_step_report import replay_index_path
+    from modules.ai.vision_step_report import replay_index_path
 
     path = replay_index_path(run_id)
     if not path:
@@ -3480,7 +3480,7 @@ def api_add_ai_model():
 
 
 def _api_add_ai_profile(data: dict):
-    from ai_multi_provider import normalize_api_key
+    from modules.ai.ai_multi_provider import normalize_api_key
 
     provider = (data.get('provider') or '').strip()
     base_url_early = (data.get('base_url') or '').strip() if isinstance(data.get('base_url'), str) else ''
@@ -3564,13 +3564,13 @@ def api_set_active_ai_model():
         cfg['version'] = 2
         _save_ai_model_config(cfg)
         try:
-            from vlm_grounding import configure_vlm
+            from modules.ai.vlm_grounding import configure_vlm
             configure_vlm(None)
         except Exception:
             pass
         hermes_info: dict = {}
         try:
-            from hermes_service_bootstrap import ensure_hermes_llm_current
+            from modules.hermes.hermes_service_bootstrap import ensure_hermes_llm_current
 
             # 切换引擎 = 写入 Hermes .env + config.yaml model；若智能体在跑则重启加载
             hermes_info = ensure_hermes_llm_current(restart_if_stale=True)
@@ -3598,7 +3598,7 @@ def api_set_active_ai_model():
             _save_ai_model_config(cfg)
             hermes_info = {}
             try:
-                from hermes_service_bootstrap import ensure_hermes_llm_current
+                from modules.hermes.hermes_service_bootstrap import ensure_hermes_llm_current
 
                 hermes_info = ensure_hermes_llm_current(restart_if_stale=True)
             except Exception as e:
@@ -3673,7 +3673,7 @@ def api_ai_chat_session_clear():
         session['ai_chat_history'] = []
         session.modified = True
     try:
-        from ai_chat_tool_loop import clear_runtime_chat_context
+        from modules.ai.ai_chat_tool_loop import clear_runtime_chat_context
         clear_runtime_chat_context(user_id=session.get('user_id') or 0)
     except Exception:
         pass
@@ -3716,7 +3716,7 @@ def api_verify_ai_model_profile():
             base_url = (p.get('base_url') or '').strip()
     if not model_id:
         return jsonify({'success': False, 'error': 'model_id 不能为空'}), 400
-    from ai_multi_provider import dispatch_chat, normalize_api_key
+    from modules.ai.ai_multi_provider import dispatch_chat, normalize_api_key
 
     key_norm = normalize_api_key(api_key if isinstance(api_key, str) else '')
     if not explicit_provider:
@@ -3850,7 +3850,7 @@ def api_update_ai_profile():
         bu = bu.strip() if isinstance(bu, str) else ''
         p['base_url'] = _normalize_profile_base_url(bu, provider)
 
-    from ai_multi_provider import normalize_api_key
+    from modules.ai.ai_multi_provider import normalize_api_key
 
     api_key_in = data.get('api_key')
     if isinstance(api_key_in, str) and api_key_in.strip():
@@ -3887,7 +3887,7 @@ def api_update_ai_profile():
 
 
 # --- AI 后台任务：SQLite 持久化存储（支持进程重启恢复） ---
-from ai_job_store import get_job_store
+from modules.ai.ai_job_store import get_job_store
 
 
 def _ai_bg_prune():
@@ -3923,7 +3923,7 @@ def _ai_main_session_dom_pack(target_page_url: str, *, strict: bool):
     在主 Playwright 会话中打开 URL 并抓取可交互结构，供本地模型绑定真实 DOM。
     strict=True：任一步失败则返回 (None,..., error)；strict=False：失败时记录日志并返回错误文案供告警（仍可继续生成）。
     """
-    from ai_page_probe import probe_registry_from_interactive_snapshot
+    from modules.ai.ai_page_probe import probe_registry_from_interactive_snapshot
 
     url = (target_page_url or "").strip()
     if not url:
@@ -3969,7 +3969,7 @@ def _attach_vision_replay_to_execution(execution: dict) -> None:
     if not isinstance(execution, dict):
         return
     try:
-        from vision_step_report import pop_last_replay_meta
+        from modules.ai.vision_step_report import pop_last_replay_meta
 
         meta = pop_last_replay_meta()
         if meta:
@@ -4007,7 +4007,7 @@ def _ai_embedded_run_script_steps_sequentially(user_id: int, embedded_sid: str, 
     """
     import time
 
-    from vision_step_report import VisionReplaySession, vision_replay_enabled
+    from modules.ai.vision_step_report import VisionReplaySession, vision_replay_enabled
 
     replay_sess = VisionReplaySession.start() if vision_replay_enabled() else None
     results = []
@@ -4075,7 +4075,7 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
     if not isinstance(plan_dict, dict) or not isinstance(plan_dict.get("steps"), list):
         return plan_dict, norm_warnings
     try:
-        from ai_step_normalization import infer_plan_platform_type
+        from modules.ai.ai_step_normalization import infer_plan_platform_type
 
         if infer_plan_platform_type(plan_dict) in ("desktop", "android"):
             return plan_dict, norm_warnings
@@ -4084,11 +4084,11 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
     try:
         registry = None
         if snap_data:
-            from ai_page_probe import probe_registry_from_interactive_snapshot
+            from modules.ai.ai_page_probe import probe_registry_from_interactive_snapshot
 
             _, registry, _ = probe_registry_from_interactive_snapshot(snap_data)
         if not registry:
-            from ai_page_probe import fetch_page_controls_bundle, resolve_steps_probe_url
+            from modules.ai.ai_page_probe import fetch_page_controls_bundle, resolve_steps_probe_url
 
             probe_u = resolve_steps_probe_url(
                 plan_dict.get("steps") or [],
@@ -4097,7 +4097,7 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
             if probe_u.startswith(("http://", "https://")):
                 _, _pe, registry = fetch_page_controls_bundle(probe_u)
         if registry:
-            from ai_page_probe import heuristic_repair_plan_selectors_from_registry
+            from modules.ai.ai_page_probe import heuristic_repair_plan_selectors_from_registry
 
             repaired, hw = heuristic_repair_plan_selectors_from_registry(
                 plan_dict["steps"], registry
@@ -4106,7 +4106,7 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
             if hw:
                 norm_warnings = list(norm_warnings or []) + list(hw)
         if snap_data:
-            from ai_locator_resolution import ai_locator_resolve_enabled, resolve_plan_steps_locators_with_snapshot
+            from modules.ai.ai_locator_resolution import ai_locator_resolve_enabled, resolve_plan_steps_locators_with_snapshot
 
             if ai_locator_resolve_enabled():
                 new_steps, lw = resolve_plan_steps_locators_with_snapshot(
@@ -4116,7 +4116,7 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
                 if lw:
                     norm_warnings = list(norm_warnings or []) + list(lw)
 
-        from ai_page_probe import apply_ai_assert_grounding_to_plan
+        from modules.ai.ai_page_probe import apply_ai_assert_grounding_to_plan
 
         plan_dict, norm_warnings = apply_ai_assert_grounding_to_plan(plan_dict, norm_warnings)
     except Exception as e:
@@ -4127,7 +4127,7 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
 def _ai_desktop_planning_snapshot() -> tuple:
     """返回 (snapshot_text, warning) 供桌面用例规划。"""
     try:
-        from desktop_discovery import desktop_runtime_snapshot, discovery_available
+        from modules.desktop.desktop_discovery import desktop_runtime_snapshot, discovery_available
 
         if not discovery_available():
             return "", "桌面自动化当前仅支持 Windows"
@@ -4157,8 +4157,8 @@ def _ai_execute_desktop_plan_steps(steps: list) -> list:
     支持混编步骤：desktop / cross_end (extract_otp/api_call) 正常分发，
     web 步骤跳过（需 Playwright 上下文），android 步骤跳过（需移动端设备）。
     """
-    from desktop_run_context import reset_desktop_run_context
-    from step_executor import enrich_execution_step, sync_execute_step_by_layer, clear_case_vars
+    from modules.desktop.desktop_run_context import reset_desktop_run_context
+    from modules.execution.step_executor import enrich_execution_step, sync_execute_step_by_layer, clear_case_vars
 
     reset_desktop_run_context()
     clear_case_vars()  # 清空跨端变量（如 sms_otp），避免上轮残留
@@ -4199,7 +4199,7 @@ def _ai_execute_desktop_plan_steps(steps: list) -> list:
 
 def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
     """规划逻辑（供同步 API 与后台线程共用）。返回体可含 _http 表示建议 HTTP 状态码。"""
-    from ai_page_probe import probe_registry_from_interactive_snapshot
+    from modules.ai.ai_page_probe import probe_registry_from_interactive_snapshot
 
     data = data or {}
     task_type = (data.get('task_type') or 'test_case_generation').strip()
@@ -4295,7 +4295,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
                     "（可配置 Playwright / 主浏览器，或使用「运行生成」强制探测。设置 LOCAL_AI_SKIP_URL_PROBE=1 可关闭自动打开浏览器。）"
                 )
         elif embedded_gateway_enabled():
-            from ai_page_probe import fetch_page_controls_bundle
+            from modules.ai.ai_page_probe import fetch_page_controls_bundle
 
             summary, probe_err, headless_registry = fetch_page_controls_bundle(target_page_url)
             if headless_registry:
@@ -4357,7 +4357,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
     if run_execute:
         try:
             if platform_type == 'desktop':
-                from desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
+                from modules.desktop.desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
 
                 if not desktop_runtime_available():
                     out["execution"] = {
@@ -4422,7 +4422,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
 
 def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr, *, abort_event=None):
     """多轮优化逻辑（供同步 API 与后台线程共用）。"""
-    from ai_page_probe import probe_registry_from_interactive_snapshot
+    from modules.ai.ai_page_probe import probe_registry_from_interactive_snapshot
 
     data = data or {}
     message = (data.get('message') or '').strip()
@@ -4435,7 +4435,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr, 
         return {'success': False, 'error': 'message不能为空', '_http': 400}
 
     route = _route_ai_model('test_case_generation')
-    from ai_chat_tool_loop import ai_chat_tools_enabled, profile_supports_ai_chat_tools
+    from modules.ai.ai_chat_tool_loop import ai_chat_tools_enabled, profile_supports_ai_chat_tools
 
     _ai_chat_tools_on = ai_chat_tools_enabled() and profile_supports_ai_chat_tools(profile, legacy_model)
     if route['provider'] != 'local' and not _ai_chat_tools_on:
@@ -4494,7 +4494,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr, 
                         "（选择器约束可能较弱；请填写目标 URL 或确认主浏览器可用。）"
                     )
             else:
-                from ai_page_probe import fetch_page_controls_bundle
+                from modules.ai.ai_page_probe import fetch_page_controls_bundle
 
                 summary, probe_err, headless_registry = fetch_page_controls_bundle(url_for_probe)
                 if headless_registry:
@@ -4537,7 +4537,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr, 
     tool_meta_extra = None
     try:
         if _ai_chat_tools_on:
-            from ai_chat_tool_loop import ChatToolLoopParams, run_ai_chat_with_tools
+            from modules.ai.ai_chat_tool_loop import ChatToolLoopParams, run_ai_chat_with_tools
 
             _ctp = ChatToolLoopParams(
                 message=message,
@@ -4565,7 +4565,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr, 
                 if isinstance(tool_meta_extra, dict) and tool_meta_extra.get("chat_reply"):
                     reply = (tool_meta_extra.get("reply_text") or "").strip()
                     if not reply:
-                        from ai_chat_tool_loop import _nl_fallback_when_case_json
+                        from modules.ai.ai_chat_tool_loop import _nl_fallback_when_case_json
 
                         reply = _nl_fallback_when_case_json()
                     out = {
@@ -4765,7 +4765,7 @@ def api_ai_task_cloud_analyze():
         }
     })
     try:
-        from ai_memory_store import ingest_repair_case, memory_enabled
+        from modules.ai.ai_memory_store import ingest_repair_case, memory_enabled
 
         if memory_enabled():
             _dbm = Database()
@@ -4801,7 +4801,7 @@ def api_ai_memory_ingest():
     if not text or len(text) < 4:
         return jsonify({'success': False, 'error': 'text 过短或为空'}), 400
     try:
-        from ai_memory_store import ingest, memory_enabled
+        from modules.ai.ai_memory_store import ingest, memory_enabled
 
         if not memory_enabled():
             return jsonify({'success': False, 'error': '未开启：设置 LOCAL_MEMORY_ENABLE=1'}), 400
@@ -4838,7 +4838,7 @@ def api_ai_structured_scenarios():
         f = request.files['file']
         raw = f.read() or b''
         fname = (f.filename or 'upload.txt').strip()
-        from requirements_document_extract import extract_text_from_bytes
+        from modules.integration.requirements_document_extract import extract_text_from_bytes
 
         requirements_text, file_warns = extract_text_from_bytes(fname, raw)
         requirements_text = (requirements_text or '').strip()
@@ -4855,7 +4855,7 @@ def api_ai_structured_scenarios():
     profile, _legacy = _resolve_inference_profile(mid)
     route = _route_ai_model('test_case_generation')
     try:
-        from ai_structured_scenarios import (
+        from modules.ai.ai_structured_scenarios import (
             generate_structured_scenarios_from_requirements,
             generate_structured_scenarios_from_requirements_chunked,
             structured_scenarios_chunk_size,
@@ -4905,7 +4905,7 @@ def api_ai_locator_resolve_preview():
         return jsonify({'success': False, 'error': err}), code
 
     try:
-        from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+        from modules.ai.ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
 
         resolved, warns = resolve_plan_steps_locators_with_snapshot(steps, snap_data, force=True)
     except Exception as e:
@@ -4980,7 +4980,7 @@ def api_case_ai_locator_resolve_save(case_id: int):
         )
 
     try:
-        from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+        from modules.ai.ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
 
         resolved, warns = resolve_plan_steps_locators_with_snapshot(plan, snap_data, force=True)
     except Exception as e:
@@ -5255,7 +5255,7 @@ def api_ai_import_api_spec_preview():
         content = (data.get('content') or data.get('text') or '').strip()
         base_url = (data.get('base_url') or data.get('server_url') or '').strip()
 
-    from api_doc_import import detect_and_parse_api_doc
+    from modules.integration.api_doc_import import detect_and_parse_api_doc
 
     kind, items, warns, variables = detect_and_parse_api_doc(content, base_url_override=base_url)
     if kind == 'unknown':
@@ -5413,7 +5413,7 @@ def api_ai_cases_import_ui_plan():
 @api_error_handler
 def api_ai_skills_list():
     """列出 Hermes Skills（UAT_DATA_DIR/hermes/skills）。"""
-    from ai_hermes_skills import list_skills
+    from modules.hermes.ai_hermes_skills import list_skills
 
     return jsonify({'success': True, 'skills': list_skills()})
 
@@ -5425,7 +5425,7 @@ def api_ai_skills_list():
 @log_api_request
 def api_ai_skills_export_from_plan():
     """将 AI 计划导出为 Hermes SKILL.md。"""
-    from ai_hermes_skills import export_plan_to_skill
+    from modules.hermes.ai_hermes_skills import export_plan_to_skill
 
     data = request.get_json(silent=True) or {}
     plan = data.get('plan') or data.get('current_plan') or {}
@@ -5511,7 +5511,7 @@ def api_ai_skills_promoted_list():
 @log_api_request
 def api_ai_skills_apply_to_case():
     """从 Skill 导入步骤到用例或返回合并后的 plan。"""
-    from ai_hermes_skills import apply_skill_to_plan
+    from modules.hermes.ai_hermes_skills import apply_skill_to_plan
 
     data = request.get_json(silent=True) or {}
     skill_id = _ai_str(data.get('skill_id'))
@@ -5557,7 +5557,7 @@ def api_ai_skills_apply_to_case():
 @log_api_request
 def api_ai_skills_update():
     """对话式更新 Skill（UI 变更 / 自愈）。"""
-    from ai_hermes_skills import request_hermes_skill_update
+    from modules.hermes.ai_hermes_skills import request_hermes_skill_update
 
     data = request.get_json(silent=True) or {}
     skill_id = _ai_str(data.get('skill_id'))
@@ -5728,7 +5728,7 @@ def api_ai_cross_end_erp_desktop_plan():
 @api_error_handler
 def api_desktop_aliases_list():
     """列出桌面应用别名（catalog + 用户文件 + env）。"""
-    from desktop_env_config import load_app_alias_specs, load_user_alias_specs, user_aliases_path
+    from modules.desktop.desktop_env_config import load_app_alias_specs, load_user_alias_specs, user_aliases_path
 
     specs = load_app_alias_specs()
     user = load_user_alias_specs()
@@ -5747,7 +5747,7 @@ def api_desktop_aliases_list():
 @api_error_handler
 def api_desktop_alias_upsert(alias):
     """保存客户 ERP 等别名到 data/desktop_aliases.json（不改 .env）。"""
-    from desktop_env_config import probe_app_alias, save_user_alias
+    from modules.desktop.desktop_env_config import probe_app_alias, save_user_alias
 
     data = request.get_json(silent=True) or {}
     path = _ai_str(data.get('path') or data.get('exe') or '')
@@ -5775,7 +5775,7 @@ def api_desktop_alias_upsert(alias):
 @api_error_handler
 def api_desktop_alias_probe(alias):
     """探测别名 path 是否存在（不启动）。"""
-    from desktop_env_config import probe_app_alias
+    from modules.desktop.desktop_env_config import probe_app_alias
 
     data = request.get_json(silent=True) or {}
     order_id = _ai_str(data.get('order_id') or request.args.get('order_id') or '')
@@ -6410,7 +6410,7 @@ def api_cross_end_var_diff(run_id, stage_id):
 def api_cross_end_debug_panel():
     """返回调试面板数据。"""
     from ai_modules.execute.timeline_tracker import list_trackers
-    from agent_capability_registry import snapshot_capabilities
+    from modules.ai.agent_capability_registry import snapshot_capabilities
     active = list_trackers(status='running', limit=10)
     recent = list_trackers(limit=10)
     caps = snapshot_capabilities()
@@ -7337,7 +7337,7 @@ def api_ai_heal_history():
 @api_error_handler
 def api_ai_llm_readiness():
     """混合 LLM 就绪检测（Ollama 优先，否则云端 profile）。"""
-    from ai_llm_readiness import assess_llm_readiness
+    from modules.ai.ai_llm_readiness import assess_llm_readiness
 
     return jsonify({'success': True, **assess_llm_readiness(local_ai_service=local_ai_service)})
 
@@ -7357,7 +7357,7 @@ def api_ai_llm_wizard_dismiss():
 @log_api_request
 def api_ai_skills_record_success():
     """记录一次成功执行，可选自动导出 Skill。"""
-    from hermes_skill_loop import record_execution_success
+    from modules.hermes.hermes_skill_loop import record_execution_success
 
     data = request.get_json(silent=True) or {}
     plan = data.get('plan') if isinstance(data.get('plan'), dict) else {}
@@ -7386,7 +7386,7 @@ def api_ai_failure_diag_bundle():
     exception_message = (data.get('exception_message') or data.get('error') or '').strip()
 
     try:
-        from playwright_automation import sync_automation_session_usable, sync_gather_failure_signals
+        from modules.web.playwright_automation import sync_automation_session_usable, sync_gather_failure_signals
 
         if not sync_automation_session_usable():
             return jsonify({'success': False, 'error': '主浏览器未就绪，无法采集页面信号'}), 503
@@ -7396,7 +7396,7 @@ def api_ai_failure_diag_bundle():
         return jsonify({'success': False, 'error': str(e)}), 500
 
     try:
-        from execution_diag_bundle import (
+        from modules.execution.execution_diag_bundle import (
             build_failure_bundle,
             classify_failure_with_llm,
             merge_bundle_and_draft,
@@ -7493,7 +7493,7 @@ def api_ai_generate_case_and_save():
         None,
     )
     generated, warnings = apply_step_normalization_to_plan(generated)
-    from ai_page_probe import apply_ai_assert_grounding_to_plan
+    from modules.ai.ai_page_probe import apply_ai_assert_grounding_to_plan
 
     generated, ground_warns = apply_ai_assert_grounding_to_plan(generated, warnings)
     warnings = ground_warns
@@ -7565,7 +7565,7 @@ def api_ai_studio_steps_assist():
     编排入口：若请求体未带 current_plan 但含 case_id，则从数据库装载步骤后再调用本地模型 chat；
     append_after_chat 为真且 chat 成功时，将返回的 plan.steps 追加到该用例末尾（权限与 /api/ai/cases/append-steps 一致）。
     """
-    from assistant_gateway import merge_case_into_chat_payload
+    from modules.ai.assistant_gateway import merge_case_into_chat_payload
 
     data = request.get_json(silent=True) or {}
     err = merge_case_into_chat_payload(db, data)
@@ -7646,7 +7646,7 @@ def api_ai_agent_gateway_stream():
     若预览首步不是 navigate 但请求携带了目标 URL（或 plan.case_url），网关会自动插入一步导航再执行。
     复杂规划仍请用「生成用例 / 优化」或 /api/ai/task/chat。
     """
-    from agent_intent import parse_agent_intent
+    from modules.ai.agent_intent import parse_agent_intent
 
     data = request.get_json(silent=True) or {}
     message = (data.get('message') or '').strip()
@@ -7669,7 +7669,7 @@ def api_ai_agent_gateway_stream():
     def generate():
         if use_embedded and cdp_ws_client:
             try:
-                from hermes_config import sync_hermes_cdp_endpoint
+                from modules.hermes.hermes_config import sync_hermes_cdp_endpoint
 
                 if sync_hermes_cdp_endpoint(cdp_ws_client, restart_gateway=True):
                     yield _agent_gateway_sse_line({"t": "log", "message": "已同步画布 CDP 到 Hermes。"})
@@ -7687,8 +7687,8 @@ def api_ai_agent_gateway_stream():
             return
 
         if kind == "hermes_explore":
-            from agent_gateway_client import agent_gateway_configured, get_agent_gateway_client
-            from hermes_config import hermes_cdp_attached, sync_hermes_cdp_endpoint
+            from modules.ai.agent_gateway_client import agent_gateway_configured, get_agent_gateway_client
+            from modules.hermes.hermes_config import hermes_cdp_attached, sync_hermes_cdp_endpoint
 
             if not agent_gateway_configured():
                 yield _agent_gateway_sse_line(
@@ -7721,7 +7721,7 @@ def api_ai_agent_gateway_stream():
             client = get_agent_gateway_client()
             result = ""
             try:
-                from hermes_skill_hints import build_explore_instruction
+                from modules.hermes.hermes_skill_hints import build_explore_instruction
 
                 explore_instr = build_explore_instruction(
                     meta.get("message") or message,
@@ -7752,7 +7752,7 @@ def api_ai_agent_gateway_stream():
                 result = client.execute_user_instruction(explore_instr)
             yield _agent_gateway_sse_line({"t": "hermes_result", "content": (result or "")[:48000]})
             try:
-                from hermes_skill_loop import record_execution_success
+                from modules.hermes.hermes_skill_loop import record_execution_success
 
                 loop_out = record_execution_success(
                     plan if isinstance(plan, dict) else {},
@@ -7910,7 +7910,7 @@ def api_ai_agent_gateway_stream():
                 break
         if all_ok and isinstance(plan, dict) and plan.get('steps'):
             try:
-                from hermes_skill_loop import record_execution_success
+                from modules.hermes.hermes_skill_loop import record_execution_success
 
                 loop_out = record_execution_success(
                     plan,
@@ -8034,7 +8034,7 @@ def api_ai_task_chat_stream():
 
     # gateway-stream 同样走统一路由，避免桌面话术却挂网页工具
     try:
-        from agent_intent import resolve_task_route
+        from modules.ai.agent_intent import resolve_task_route
 
         _gs_route = resolve_task_route(message, ui_platform=platform_type)
         if _gs_route.needs_automation and _gs_route.platform in ("web", "desktop", "android"):
@@ -8046,9 +8046,9 @@ def api_ai_task_chat_stream():
 
     def generate():
         try:
-            from ai_local_inference import local_ai_service
-            from ai_chat_tool_loop import ChatToolLoopParams, run_ai_chat_with_tools_stream, ai_chat_tools_enabled, profile_supports_ai_chat_tools
-            from ai_page_probe import probe_registry_from_interactive_snapshot
+            from modules.ai.ai_local_inference import local_ai_service
+            from modules.ai.ai_chat_tool_loop import ChatToolLoopParams, run_ai_chat_with_tools_stream, ai_chat_tools_enabled, profile_supports_ai_chat_tools
+            from modules.ai.ai_page_probe import probe_registry_from_interactive_snapshot
 
             profile, legacy_model = _resolve_inference_profile(selected_model)
 
@@ -8162,7 +8162,7 @@ def api_ai_task_execute():
     engine = (data.get('engine') or '').strip()  # profile_id from UI
     # 起始 URL 一律从用户任务原文解析（前端已无独立 URL 输入框）
     try:
-        from agent_intent import extract_task_url
+        from modules.ai.agent_intent import extract_task_url
 
         url = extract_task_url(task) or ''
     except Exception:
@@ -8172,7 +8172,7 @@ def api_ai_task_execute():
         explicit = (data.get('url') or data.get('case_url') or '').strip()
         if explicit:
             try:
-                from agent_intent import extract_task_url as _etu
+                from modules.ai.agent_intent import extract_task_url as _etu
 
                 url = _etu(explicit) or (
                     explicit if explicit.lower().startswith(('http://', 'https://')) else ''
@@ -8193,7 +8193,7 @@ def api_ai_task_execute():
 
     # 统一路由：chat / web / desktop / android（消息信号可纠正错误的 UI 平台）
     try:
-        from agent_intent import resolve_task_route
+        from modules.ai.agent_intent import resolve_task_route
 
         _route = resolve_task_route(task, ui_platform=platform)
         if _route.platform in ("web", "desktop", "android") and _route.platform != platform:
@@ -8224,18 +8224,18 @@ def api_ai_task_execute():
     )
     if engine:
         try:
-            from ai_multi_provider import get_llm_profile_by_id, set_active_llm_profile_id
+            from modules.ai.ai_multi_provider import get_llm_profile_by_id, set_active_llm_profile_id
 
             if get_llm_profile_by_id(engine):
                 set_active_llm_profile_id(engine)
                 if not _desk_skip_hermes_restart:
                     try:
-                        from hermes_service_bootstrap import ensure_hermes_llm_current
+                        from modules.hermes.hermes_service_bootstrap import ensure_hermes_llm_current
 
                         ensure_hermes_llm_current(restart_if_stale=True)
                     except Exception:
                         try:
-                            from hermes_config import sync_platform_llm_credentials_to_hermes_env
+                            from modules.hermes.hermes_config import sync_platform_llm_credentials_to_hermes_env
 
                             sync_platform_llm_credentials_to_hermes_env()
                         except Exception:
@@ -8243,7 +8243,7 @@ def api_ai_task_execute():
                 else:
                     # 桌面路径：仅轻量同步凭证到 env，绝不在进流前重启 Gateway
                     try:
-                        from hermes_config import sync_platform_llm_credentials_to_hermes_env
+                        from modules.hermes.hermes_config import sync_platform_llm_credentials_to_hermes_env
 
                         sync_platform_llm_credentials_to_hermes_env()
                     except Exception:
@@ -8269,7 +8269,7 @@ def api_ai_task_execute():
 
     def _friendly_sse_error(err: object) -> str:
         try:
-            from hermes_gateway_client import _friendly_corrupt_msg, _is_corrupt_session_error
+            from modules.hermes.hermes_gateway_client import _friendly_corrupt_msg, _is_corrupt_session_error
 
             s = err if isinstance(err, str) else str(err)
             if _is_corrupt_session_error(s) or (
@@ -8315,7 +8315,7 @@ def api_ai_task_execute():
             # 立刻推送，避免用户感觉「点了没反应」
             yield send('think', text='已收到任务，正在解析意图…', status='running')
 
-            from agent_intent import message_needs_automation, resolve_task_route
+            from modules.ai.agent_intent import message_needs_automation, resolve_task_route
 
             # 勿在本生成器内给闭包名 platform 赋值，否则整函数变成局部变量 → UnboundLocalError
             run_platform = (platform or "auto").strip().lower() or "auto"
@@ -8348,7 +8348,7 @@ def api_ai_task_execute():
                 )
 
             # 不自动启动：仅检测用户是否已手动点「启动智能体」
-            from hermes_gateway_client import HermesGatewayClient
+            from modules.hermes.hermes_gateway_client import HermesGatewayClient
             hermes_client = HermesGatewayClient()
             # 桌面外层工具不依赖 Hermes；缩短探测，避免再卡 1.5s+
             _needs_mobile_await = bool(
@@ -8396,8 +8396,8 @@ def api_ai_task_execute():
             if not needs_automation:
                 yield send('think', text='正在思考回复…', status='running')
                 try:
-                    from ai_multi_provider import get_active_llm_profile, dispatch_chat
-                    from ai_local_inference import local_ai_service
+                    from modules.ai.ai_multi_provider import get_active_llm_profile, dispatch_chat
+                    from modules.ai.ai_local_inference import local_ai_service
 
                     profile = get_active_llm_profile()
                     if not profile:
@@ -8423,7 +8423,7 @@ def api_ai_task_execute():
                         return
                     # 兜底：若模型仍吐出用例 JSON，剥掉后给用户可读回复
                     try:
-                        from ai_chat_tool_loop import (
+                        from modules.ai.ai_chat_tool_loop import (
                             _strip_invented_case_json,
                             _looks_like_case_json_blob,
                             _nl_fallback_when_case_json,
@@ -8456,8 +8456,8 @@ def api_ai_task_execute():
                 "1", "true", "yes", "on",
             )
             if _fastpath:
-                from agent_intent import message_needs_browser
-                from agent_desktop_fastpath import is_desktop_nl_task, execute_desktop_nl
+                from modules.ai.agent_intent import message_needs_browser
+                from modules.desktop.agent_desktop_fastpath import is_desktop_nl_task, execute_desktop_nl
 
                 if is_desktop_nl_task(task) or (needs_automation and not message_needs_browser(task)):
                     yield send('think', text='（调试）桌面快路径 DESKTOP_NL_FASTPATH=1 …', status='running')
@@ -8521,8 +8521,8 @@ def api_ai_task_execute():
                     return
 
             # 预检 + 能力注册表 + 任务上下文总线
-            from agent_capability_registry import preflight_for_task, snapshot_capabilities
-            from agent_task_context import new_task_context
+            from modules.ai.agent_capability_registry import preflight_for_task, snapshot_capabilities
+            from modules.ai.agent_task_context import new_task_context
 
             # 桌面外层工具：不强制 Hermes；避免重复 health 拖慢首包
             _pf_need_hermes = not _outer_tools_ok
@@ -8564,19 +8564,19 @@ def api_ai_task_execute():
                 
                 关键修复：一旦浏览器已导航到目标页并开始操作，禁止再次 navigate（避免表单清空）。
                 """
-                from agent_intent import extract_task_url, message_needs_browser
+                from modules.ai.agent_intent import extract_task_url, message_needs_browser
 
                 needs_br = message_needs_browser(task) or (run_platform == "web")
                 if not needs_br:
                     return True, ""
                 nav_url = (extract_task_url(task) or url or "").strip()
                 if browser_ready_holder["ready"]:
-                    from hermes_config import hermes_cdp_attached
+                    from modules.hermes.hermes_config import hermes_cdp_attached
                     if hermes_cdp_attached():
                         # 关键修复：已完成导航后，不再重新 navigate
                         if nav_url and not browser_ready_holder.get("nav_done"):
                             try:
-                                from ai_external_browser_bridge import ensure_browser
+                                from modules.ai.ai_external_browser_bridge import ensure_browser
                                 ensure_browser(headless=False, url=nav_url, browser="edge")
                                 browser_ready_holder["nav_done"] = True
                             except Exception:
@@ -8585,8 +8585,8 @@ def api_ai_task_execute():
                 if not hermes_available:
                     return False, "智能体未启动，无法执行浏览器自动化"
                 try:
-                    from ai_external_browser_bridge import ensure_browser, is_browser_alive, force_cleanup_browser
-                    from hermes_config import hermes_cdp_attached
+                    from modules.ai.ai_external_browser_bridge import ensure_browser, is_browser_alive, force_cleanup_browser
+                    from modules.hermes.hermes_config import hermes_cdp_attached
                     if hermes_cdp_attached() and not is_browser_alive():
                         force_cleanup_browser()
                     if not hermes_cdp_attached() or not is_browser_alive():
@@ -8624,12 +8624,12 @@ def api_ai_task_execute():
             # Hermes 上游鉴权不兼容时：若聊天工具循环可用，仍走 windows_* FC；
             # 仅在工具循环关闭时才回退到本机桌面确定性路径（不再对微信任务抢跑热键方案）。
             try:
-                from hermes_config import (
+                from modules.hermes.hermes_config import (
                     hermes_upstream_llm_status,
                     sync_platform_llm_credentials_to_hermes_env,
                 )
-                from agent_desktop_fastpath import is_desktop_nl_task, execute_desktop_nl
-                from ai_chat_tool_loop import ai_chat_tools_enabled
+                from modules.desktop.agent_desktop_fastpath import is_desktop_nl_task, execute_desktop_nl
+                from modules.ai.ai_chat_tool_loop import ai_chat_tools_enabled
 
                 # 桌面/跨端外层路径已不依赖 Hermes 子进程模型；跳过二次 sync
                 if not _outer_tools_ok:
@@ -8740,8 +8740,8 @@ def api_ai_task_execute():
             _resolved_route = None
             _force_browser_path = False
             try:
-                from ai_chat_tool_loop import prefer_outer_desktop_tools
-                from agent_intent import resolve_task_route, message_needs_browser
+                from modules.ai.ai_chat_tool_loop import prefer_outer_desktop_tools
+                from modules.ai.agent_intent import resolve_task_route, message_needs_browser
 
                 route2 = resolve_task_route(task, ui_platform=run_platform_early)
                 _resolved_route = route2
@@ -8782,7 +8782,7 @@ def api_ai_task_execute():
             except Exception:
                 # 异常时：若明确是浏览器任务，仍标记 web 路径
                 try:
-                    from agent_intent import message_needs_browser as _fallback_check
+                    from modules.ai.agent_intent import message_needs_browser as _fallback_check
                     if _fallback_check(task):
                         _force_browser_path = True
                         run_platform_early = "web"
@@ -8806,13 +8806,13 @@ def api_ai_task_execute():
             )
 
             try:
-                from ai_chat_tool_loop import (
+                from modules.ai.ai_chat_tool_loop import (
                     run_ai_chat_with_tools_stream,
                     ChatToolLoopParams,
                     hermes_execute_allowed,
                 )
-                from ai_multi_provider import get_active_llm_profile
-                from ai_local_inference import local_ai_service
+                from modules.ai.ai_multi_provider import get_active_llm_profile
+                from modules.ai.ai_local_inference import local_ai_service
 
                 profile = get_active_llm_profile()
 
@@ -8839,13 +8839,13 @@ def api_ai_task_execute():
                 _dom_context_pack = ""
 
                 screen_share_state = _screen_share_states.get(user_id, {})
-                from execution_events import ExecutionEventCollector, ROUTE_DECIDED
+                from modules.execution.execution_events import ExecutionEventCollector, ROUTE_DECIDED
                 _exec_evt_collector = ExecutionEventCollector()
                 allow_screen_tools = bool(
                     screen_share_state.get('enabled', False) or enable_vision
                 )
 
-                from ai_action_recorder import ActionRecorder
+                from modules.ai.ai_action_recorder import ActionRecorder
                 recorder = ActionRecorder(vision_enabled=bool(allow_screen_tools), platform=run_platform)
 
                 run_platform = run_platform_early
@@ -8880,7 +8880,7 @@ def api_ai_task_execute():
                     )
                     # Use timeline formatter for rich event
                     try:
-                        from timeline_formatter import format_timeline_event
+                        from modules.integration.timeline_formatter import format_timeline_event
                         timeline_evt = format_timeline_event("route_decided", {
                             "platform": run_platform,
                             "allow_agent": allow_agent,
@@ -8915,7 +8915,7 @@ def api_ai_task_execute():
 
                 _hands = {}
                 try:
-                    from agent_unified_session import snapshot_connected_hands
+                    from modules.ai.agent_unified_session import snapshot_connected_hands
 
                     _hands = snapshot_connected_hands(_uid)
                 except Exception:
@@ -8940,7 +8940,7 @@ def api_ai_task_execute():
                 )
 
                 # 浏览器任务：提前告知用户正在启动浏览器
-                from agent_intent import message_needs_browser as _msg_needs_br
+                from modules.ai.agent_intent import message_needs_browser as _msg_needs_br
                 if _force_browser_path or _msg_needs_br(task) or run_platform == "web":
                     yield send('think', text='检测到浏览器任务，正在准备浏览器环境...', status='running')
 
@@ -9049,7 +9049,7 @@ def api_ai_task_execute():
                             pass
                             # Use timeline formatter for tool_call_start
                             try:
-                                from timeline_formatter import format_timeline_event
+                                from modules.integration.timeline_formatter import format_timeline_event
                                 timeline_evt = format_timeline_event("tool_call_start", {
                                     "tool": tool_name,
                                     "args_summary": args_summary[:200],
@@ -9076,7 +9076,7 @@ def api_ai_task_execute():
                             _had_tools = False
                             _stream_empty = False
                             try:
-                                from hermes_gateway_client import _is_corrupt_session_error
+                                from modules.hermes.hermes_gateway_client import _is_corrupt_session_error
                                 import json as _j_prev
                                 _preview_l = (result_preview or "").lower()
                                 _stream_empty = "stream_empty_text" in _preview_l
@@ -9111,7 +9111,7 @@ def api_ai_task_execute():
                                     hermes_failed = True
                                 else:
                                     hermes_partial = True
-                            from agent_hitl import looks_like_hitl_needed, set_need_user_action
+                            from modules.ai.agent_hitl import looks_like_hitl_needed, set_need_user_action
                             # 【关键】中间轮次 ONLY 接受显式 NEED_USER_ACTION: 前缀，
                             # 绝不因「验证码」「登录」等关键词在中途停下——AI 还有工具可用。
                             if (result_preview or "").startswith("NEED_USER_ACTION:") or "NEED_USER_ACTION:" in (result_preview or ""):
@@ -9252,7 +9252,7 @@ def api_ai_task_execute():
                         except Exception:
                             # Use timeline formatter for tool_call_end
                             try:
-                                from timeline_formatter import format_timeline_event
+                                from modules.integration.timeline_formatter import format_timeline_event
                                 timeline_evt = format_timeline_event("tool_call_end", {
                                     "tool": tool_name,
                                     "result_preview": result_preview[:300],
@@ -9306,7 +9306,7 @@ def api_ai_task_execute():
                             # 1. ONLY 接受显式 NEED_USER_ACTION: 前缀（与 hermes_execute 中间轮次规则统一）
                             # 2. 必须传递 tools_used 和 cross_end_vars，避免 AI 有自动处理能力时误触发
                             if (reply_text or "").startswith("NEED_USER_ACTION:") or "NEED_USER_ACTION:" in (reply_text or ""):
-                                from agent_hitl import looks_like_hitl_needed, set_need_user_action
+                                from modules.ai.agent_hitl import looks_like_hitl_needed, set_need_user_action
                                 _tools_used = [str(tr.get("tool") or "") for tr in task_ctx.tool_trace]
                                 _ce_vars = dict(task_ctx.vars)
                                 if looks_like_hitl_needed(
@@ -9355,7 +9355,7 @@ def api_ai_task_execute():
                             )
                             # Use timeline formatter for done
                             try:
-                                from timeline_formatter import format_timeline_event
+                                from modules.integration.timeline_formatter import format_timeline_event
                                 timeline_evt = format_timeline_event("done", {
                                     "failed": bool(hermes_failed),
                                     "tools_used": list((done_meta or {}).get("tools_used") or []),
@@ -9442,7 +9442,7 @@ def api_ai_task_execute():
                                 if not hermes_failed or is_partial_success:
                                     savable = True
                                     try:
-                                        from hermes_skill_loop import record_execution_success
+                                        from modules.hermes.hermes_skill_loop import record_execution_success
                                         record_execution_success(
                                             final_plan,
                                             case_url=url or final_plan.get('case_url', ''),
@@ -9494,7 +9494,7 @@ def api_ai_task_execute():
                         instruction = f"目标URL: {url}\n\n任务: {task}"
                     try:
                         _ensure_browser_before_agent()
-                        from hermes_skill_hints import build_explore_instruction
+                        from modules.hermes.hermes_skill_hints import build_explore_instruction
                         instruction = build_explore_instruction(
                             instruction,
                             {
@@ -9522,7 +9522,7 @@ def api_ai_task_execute():
             except Exception as e:
                 err_text = _friendly_sse_error(e)
                 try:
-                    from agent_task_context import reset_task_context
+                    from modules.ai.agent_task_context import reset_task_context
                     reset_task_context(task_ctx.session_id)
                 except Exception:
                     pass
@@ -9594,7 +9594,7 @@ def api_ai_task_execute_stop():
 def api_ai_hermes_status():
     """获取 Hermes Gateway 运行状态（含启动中状态）"""
     try:
-        from hermes_service_bootstrap import get_bootstrap_status
+        from modules.hermes.hermes_service_bootstrap import get_bootstrap_status
         status = get_bootstrap_status()
     except Exception as e:
         status = {"running": False, "configured": False, "starting": False, "start_error": str(e), "cdp_connected": False}
@@ -9607,14 +9607,14 @@ def api_ai_hermes_status():
 def api_ai_hermes_start():
     """一键启动 Hermes Gateway（后台异步启动，不阻塞请求）"""
     try:
-        from hermes_service_bootstrap import get_bootstrap_status, _force_stale_stopping_unlock
-        from hermes_gateway_client import HermesGatewayClient
+        from modules.hermes.hermes_service_bootstrap import get_bootstrap_status, _force_stale_stopping_unlock
+        from modules.hermes.hermes_gateway_client import HermesGatewayClient
         client = HermesGatewayClient()
         if not client.is_configured():
             return jsonify({"success": True, "started": False, "message": "Hermes Gateway 未配置"})
         if client.health_check(timeout_sec=1.0):
             try:
-                from hermes_service_bootstrap import ensure_hermes_llm_current
+                from modules.hermes.hermes_service_bootstrap import ensure_hermes_llm_current
 
                 llm_info = ensure_hermes_llm_current(restart_if_stale=True)
             except Exception as e:
@@ -9638,11 +9638,11 @@ def api_ai_hermes_start():
         import threading as _threading
         def _boot():
             try:
-                from hermes_service_bootstrap import bootstrap_hermes_services
+                from modules.hermes.hermes_service_bootstrap import bootstrap_hermes_services
                 bootstrap_hermes_services(force=True, manual=True)
             except Exception as exc:
                 try:
-                    from hermes_service_bootstrap import _LIFECYCLE_LOCK, _clear_starting_locked
+                    from modules.hermes.hermes_service_bootstrap import _LIFECYCLE_LOCK, _clear_starting_locked
                     with _LIFECYCLE_LOCK:
                         _clear_starting_locked(error=str(exc)[:200], finished=True)
                 except Exception:
@@ -9668,7 +9668,7 @@ def api_ai_hermes_stop():
                     pass
             _ai_task_abort_events.clear()
 
-        from hermes_service_bootstrap import stop_hermes_gateway, get_bootstrap_status
+        from modules.hermes.hermes_service_bootstrap import stop_hermes_gateway, get_bootstrap_status
         # 同步停止但内部有总超时；finally 保证 clearing stopping
         detail = stop_hermes_gateway() or {}
         status = get_bootstrap_status()
@@ -9685,7 +9685,7 @@ def api_ai_hermes_stop():
     except Exception as e:
         # 异常时也尽量拉一次 status，避免前端永远「停止中」
         try:
-            from hermes_service_bootstrap import get_bootstrap_status, _force_stale_stopping_unlock
+            from modules.hermes.hermes_service_bootstrap import get_bootstrap_status, _force_stale_stopping_unlock
             _force_stale_stopping_unlock()
             status = get_bootstrap_status()
         except Exception:
@@ -9702,7 +9702,7 @@ def api_ai_hermes_cdp_sync():
         return jsonify({"success": False, "error": "缺少 CDP WebSocket URL"}), 400
 
     try:
-        from hermes_config import sync_hermes_cdp_endpoint
+        from modules.hermes.hermes_config import sync_hermes_cdp_endpoint
         sync_hermes_cdp_endpoint(cdp_ws_url)
         return jsonify({"success": True, "message": "CDP 端点已同步给 Hermes"})
     except Exception as e:
@@ -9714,7 +9714,7 @@ def api_ai_hermes_cdp_sync():
 @api_error_handler
 def api_ai_actions_to_case():
     """将执行动作转换为测试用例，走 ai_step_normalization 全管线，并沉淀为 Hermes Skill"""
-    from ai_step_normalization import (
+    from modules.ai.ai_step_normalization import (
         normalize_ai_step,
         repair_raw_ai_steps_for_platform,
         dedupe_and_validate_ai_steps,
@@ -9758,10 +9758,10 @@ def api_ai_actions_to_case():
 
     # Step 6: 选择器恢复（复用 4 层降级，如有 probe_registry）
     try:
-        from ai_external_browser_bridge import get_probe_registry
+        from modules.ai.ai_external_browser_bridge import get_probe_registry
         registry = get_probe_registry()
         if registry and clean_steps:
-            from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+            from modules.ai.ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
             plan = resolve_plan_steps_locators_with_snapshot(plan, registry)
     except Exception:
         pass
@@ -9789,7 +9789,7 @@ def api_ai_actions_to_case():
     # Step 8: 沉淀为 Hermes Skill
     skill_exported = False
     try:
-        from hermes_skill_loop import record_execution_success
+        from modules.hermes.hermes_skill_loop import record_execution_success
         record_execution_success(
             plan,
             case_url=case_url,
@@ -9824,7 +9824,7 @@ def api_ai_vision_capture():
     source = data.get('source', 'browser')  # browser / screen
     try:
         if source == 'browser':
-            from ai_external_browser_bridge import capture_screenshot
+            from modules.ai.ai_external_browser_bridge import capture_screenshot
             png = capture_screenshot()
         else:
             import mss
@@ -9853,13 +9853,13 @@ def api_ai_vision_capture():
 def api_ai_vision_snapshot():
     """获取最新浏览器截图 + OCR 文本。"""
     try:
-        from ai_external_browser_bridge import capture_screenshot
+        from modules.ai.ai_external_browser_bridge import capture_screenshot
         png = capture_screenshot()
         if not png:
             return jsonify({'success': False, 'error': '无可用截图'}), 404
         ocr_text = ""
         try:
-            from ai_vision_local import ocr_region_png
+            from modules.ai.ai_vision_local import ocr_region_png
             ocr_text = ocr_region_png(png)  # 实测接受 bytes
         except Exception:
             pass
@@ -9889,7 +9889,7 @@ def api_ai_screen_share_toggle():
     }
 
     try:
-        import ai_external_browser_bridge as _bridge
+        from modules.ai import ai_external_browser_bridge as _bridge
         with _bridge._bridge_lock:
             _bridge._screen_share_active = enabled
             _bridge._screen_share_interval = interval
@@ -9902,7 +9902,7 @@ def api_ai_screen_share_toggle():
     if enabled:
         # 轻量 OCR 探测（通常 <100ms）；失败不阻断开关
         try:
-            from desktop_ocr import engine_name, ocr_available
+            from modules.desktop.desktop_ocr import engine_name, ocr_available
 
             ocr_engine = engine_name() or ""
             ocr_ok = bool(ocr_available() and ocr_engine != "none")
@@ -9918,8 +9918,8 @@ def api_ai_screen_share_toggle():
         # 手机预热放到后台，避免阻塞开关请求（warm 可达数秒～十余秒）
         def _bg_warm_mobile() -> None:
             try:
-                from mobile_scrcpy_vision import get_device_serial_for_user, capture_device_frame
-                from mobile_scrcpy_bridge import ensure_bridge_started, warm_scrcpy_session
+                from modules.mobile.mobile_scrcpy_vision import get_device_serial_for_user, capture_device_frame
+                from modules.mobile.mobile_scrcpy_bridge import ensure_bridge_started, warm_scrcpy_session
 
                 serial = get_device_serial_for_user(uid_int) or ""
                 if not serial:
@@ -9983,7 +9983,7 @@ def api_ai_screen_share_status():
     st = _screen_share_states.get(user_id) or {}
     enabled = bool(st.get('enabled', False))
     try:
-        import ai_external_browser_bridge as _bridge
+        from modules.ai import ai_external_browser_bridge as _bridge
         with _bridge._bridge_lock:
             if enabled != bool(getattr(_bridge, "_screen_share_active", False)):
                 _bridge._screen_share_active = enabled
@@ -10005,7 +10005,7 @@ def api_ai_screen_share_status():
 @api_error_handler
 def api_ai_agent_capabilities():
     """能力注册表快照（预检 / 调试）。"""
-    from agent_capability_registry import snapshot_capabilities
+    from modules.ai.agent_capability_registry import snapshot_capabilities
 
     return jsonify({'success': True, **snapshot_capabilities()})
 
@@ -10020,14 +10020,14 @@ def api_ai_agent_hitl_resume():
     - 原 AI Agent 路径：按 user_id pending resume
     - 跨端阻塞门禁：按 gate_id / session_id 调用 resume_hitl_gate（不立即清 gate，由 waiter 消费）
     """
-    from agent_hitl import (
+    from modules.ai.agent_hitl import (
         mark_user_resumed,
         clear_user_action,
         get_pending,
         resume_hitl_gate,
         get_hitl_gate,
     )
-    from agent_task_context import get_task_context
+    from modules.ai.agent_task_context import get_task_context
 
     data = request.get_json(silent=True) or {}
     user_id = str(current_user.id)
@@ -10074,7 +10074,7 @@ def api_ai_agent_hitl_resume():
 @api_error_handler
 def api_ai_agent_hitl_status():
     """查询用户 pending 或指定 gate 状态（跨端轮询/调试）。"""
-    from agent_hitl import get_pending, get_hitl_gate, list_hitl_gates
+    from modules.ai.agent_hitl import get_pending, get_hitl_gate, list_hitl_gates
 
     user_id = str(current_user.id)
     gate_id = (request.args.get('gate_id') or request.args.get('session_id') or '').strip()
@@ -10098,7 +10098,7 @@ def api_ai_agent_hitl_status():
 @api_error_handler
 def api_ai_agent_hitl_cancel():
     """取消 HITL 门禁（跨端等待将失败，不会假绿）。"""
-    from agent_hitl import cancel_hitl_gate, get_pending, clear_user_action
+    from modules.ai.agent_hitl import cancel_hitl_gate, get_pending, clear_user_action
 
     data = request.get_json(silent=True) or {}
     user_id = str(current_user.id)
@@ -10127,8 +10127,8 @@ def api_ai_agent_hitl_cancel():
 @api_error_handler
 def api_ai_agent_api_http():
     """Hermes / 平台共用的临时 HTTP 执行入口。"""
-    from agent_api_runner import run_temp_http, run_api_case, summarize_for_agent
-    from agent_task_context import get_task_context
+    from modules.ai.agent_api_runner import run_temp_http, run_api_case, summarize_for_agent
+    from modules.ai.agent_task_context import get_task_context
 
     data = request.get_json(silent=True) or {}
     session_id = (data.get('session_id') or '').strip()
@@ -10529,7 +10529,7 @@ def api_browser_inspect():
 @api_error_handler
 def api_captcha_optional_deps():
     """验证码可选组件状态（ddddocr 等，不随主安装包分发）。"""
-    from captcha_engine import get_ddddocr_install_info
+    from modules.web.captcha_engine import get_ddddocr_install_info
 
     return jsonify({'success': True, 'ddddocr': get_ddddocr_install_info()})
 
@@ -10545,7 +10545,7 @@ def api_captcha_optional_deps_install():
     component = (data.get('component') or 'ddddocr').strip().lower()
     if component != 'ddddocr':
         return jsonify({'success': False, 'error': f'未知组件: {component}'}), 400
-    from captcha_engine import install_ddddocr_subprocess
+    from modules.web.captcha_engine import install_ddddocr_subprocess
 
     result = install_ddddocr_subprocess()
     return jsonify({'success': bool(result.get('success')), **result})
@@ -10564,7 +10564,7 @@ def api_desktop_verify_element():
     if err:
         return jsonify({'success': False, 'error': err}), 400
     try:
-        from desktop_automation import sync_desktop_verify_element
+        from modules.desktop.desktop_automation import sync_desktop_verify_element
 
         result = sync_desktop_verify_element(
             data.get('selector_type') or '',
@@ -10596,7 +10596,7 @@ def api_desktop_relaunch_with_embed_hooks():
     """
     data = request.get_json(silent=True) or {}
     try:
-        from desktop_embed_launch import (
+        from modules.desktop.desktop_embed_launch import (
             relaunch_foreground_with_embed_hooks,
             relaunch_path_with_embed_hooks,
         )
@@ -10625,7 +10625,7 @@ def api_desktop_inspect():
     max_depth = int(data.get('max_depth') or 4)
     max_nodes = int(data.get('max_nodes') or 120)
     try:
-        from desktop_automation import sync_desktop_inspect
+        from modules.desktop.desktop_automation import sync_desktop_inspect
 
         nodes = sync_desktop_inspect(max_depth=max_depth, max_nodes=max_nodes)
         return jsonify({'success': True, 'nodes': nodes, 'count': len(nodes)})
@@ -10648,7 +10648,7 @@ def api_desktop_pick():
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': '请提供整数坐标 x, y'}), 400
     try:
-        from desktop_visual_picker import build_pick_from_smart_click
+        from modules.desktop.desktop_visual_picker import build_pick_from_smart_click
 
         pick = build_pick_from_smart_click(x, y, action=str(data.get('action') or 'click'))
         return jsonify({'success': True, 'pick': pick})
@@ -10681,7 +10681,7 @@ def api_desktop_picker_start():
     if err:
         return jsonify({'success': False, 'error': err}), 400
     try:
-        from desktop_picker import desktop_picker_available, sync_start_desktop_picker
+        from modules.desktop.desktop_picker import desktop_picker_available, sync_start_desktop_picker
 
         if not desktop_picker_available():
             return jsonify({
@@ -10726,7 +10726,7 @@ def api_desktop_picker_start():
 def api_desktop_picker_stop():
     """关闭桌面拾取/录制悬浮窗。"""
     try:
-        from desktop_picker import sync_stop_desktop_picker
+        from modules.desktop.desktop_picker import sync_stop_desktop_picker
 
         return jsonify(sync_stop_desktop_picker())
     except Exception as e:
@@ -10741,7 +10741,7 @@ def api_desktop_picker_stop():
 def api_desktop_picker_status():
     """轮询拾取结果或录制新增步骤（与 Web check_selected_element 类似）。"""
     try:
-        from desktop_picker import sync_get_desktop_picker_status
+        from modules.desktop.desktop_picker import sync_get_desktop_picker_status
 
         consume = (request.args.get('consume') or '').strip().lower() in ('1', 'true', 'yes')
         return jsonify(sync_get_desktop_picker_status(consume_last_pick=consume))
@@ -10773,7 +10773,7 @@ def api_desktop_visual_relearn():
     if not selector_value:
         return jsonify({'success': False, 'error': '缺少 selector_value 或 step_id'}), 400
     try:
-        from desktop_visual_engine import update_visual_template_at_click
+        from modules.desktop.desktop_visual_engine import update_visual_template_at_click
 
         new_json = update_visual_template_at_click(
             selector_value, click_x, click_y, half_size=int(data.get('half_size') or 24)
@@ -10940,10 +10940,10 @@ def api_element_picker_start():
             picker_case_id = int(case_id_raw) if case_id_raw not in (None, '') else None
         except (TypeError, ValueError):
             picker_case_id = None
-        from element_picker import sync_start_element_picker
+        from modules.web.element_picker import sync_start_element_picker
 
         if capture_channel == 'desktop':
-            from desktop_runtime import (
+            from modules.desktop.desktop_runtime import (
                 desktop_runtime_available,
                 desktop_runtime_unavailable_reason,
             )
@@ -10998,7 +10998,7 @@ def api_element_picker_start():
 def api_element_picker_stop():
     """停止统一元素捕获。"""
     try:
-        from element_picker import sync_get_element_picker_status, sync_stop_element_picker
+        from modules.web.element_picker import sync_get_element_picker_status, sync_stop_element_picker
 
         pre = sync_get_element_picker_status(consume_last_pick=False)
         case_id = int(
@@ -11032,7 +11032,7 @@ def api_element_picker_stop():
 def api_element_picker_status():
     """轮询统一捕获状态（桌面 + Web）。"""
     try:
-        from element_picker import sync_get_element_picker_status
+        from modules.web.element_picker import sync_get_element_picker_status
 
         consume = (request.args.get('consume') or '').strip().lower() in ('1', 'true', 'yes')
         result = sync_get_element_picker_status(consume_last_pick=consume)
@@ -11380,7 +11380,7 @@ def api_web_capture_stop():
         return _web_dom_picker_cors(jsonify({'success': False, 'error': '捕获会话无效或已结束'})), 404
     stop_session(fast=True)
     try:
-        from element_picker import sync_stop_element_picker
+        from modules.web.element_picker import sync_stop_element_picker
 
         sync_stop_element_picker()
     except Exception:
@@ -11404,7 +11404,7 @@ def api_web_dom_picker_inject_js():
     """目标页加载的捕获脚本（凭 session 校验，无需登录 Cookie）。"""
     from pathlib import Path
 
-    from web_dom_picker import validate_session_id
+    from modules.web.web_dom_picker import validate_session_id
 
     session_id = (request.args.get('session') or '').strip()
     if not validate_session_id(session_id):
@@ -11429,7 +11429,7 @@ def api_web_dom_picker_inject_js():
 def api_web_dom_picker_pick():
     if request.method == 'OPTIONS':
         return _web_dom_picker_cors(Response('', status=204))
-    from web_dom_picker import sync_report_web_dom_pick
+    from modules.web.web_dom_picker import sync_report_web_dom_pick
 
     data = request.get_json(silent=True) or {}
     session_id = (
@@ -11444,7 +11444,7 @@ def api_web_dom_picker_pick():
 def api_web_dom_picker_close():
     if request.method == 'OPTIONS':
         return _web_dom_picker_cors(Response('', status=204))
-    from web_dom_picker import close_web_dom_picker_session
+    from modules.web.web_dom_picker import close_web_dom_picker_session
 
     data = request.get_json(silent=True) or {}
     session_id = (data.get('session') or '').strip()
@@ -11502,7 +11502,7 @@ def _web_capture_proxy_fetch_html(target_url: str, session_id: str, api_base: st
 @login_required
 def web_capture_workspace():
     """网页捕获器工作区（独立窗口，内含预览与 DOM 拾取）。"""
-    from web_dom_picker import validate_session_id
+    from modules.web.web_dom_picker import validate_session_id
 
     session_id = (request.args.get('session') or '').strip()
     if not validate_session_id(session_id):
@@ -11605,7 +11605,7 @@ def web_capture_workspace_v2():
 @app.route('/web-capture/proxy')
 def web_capture_proxy():
     """捕获预览代理：注入拾取脚本，使 iframe 内可悬停高亮。"""
-    from web_dom_picker import validate_session_id
+    from modules.web.web_dom_picker import validate_session_id
 
     session_id = (request.args.get('session') or '').strip()
     target_url = (request.args.get('url') or '').strip()
@@ -11629,7 +11629,7 @@ def web_capture_proxy():
 def api_desktop_config():
     """返回 .env 中的桌面默认配置，供步骤编辑页预填与提示。"""
     try:
-        from desktop_env_config import public_config
+        from modules.desktop.desktop_env_config import public_config
 
         return jsonify({'success': True, **public_config()})
     except ImportError:
@@ -11642,7 +11642,7 @@ def api_desktop_config():
 @api_error_handler
 def api_desktop_windows():
     """枚举本机当前可见顶层窗口（零配置附着窗口）。"""
-    from desktop_discovery import discovery_available, list_visible_windows
+    from modules.desktop.desktop_discovery import discovery_available, list_visible_windows
 
     if not discovery_available():
         return jsonify({
@@ -11658,7 +11658,7 @@ def api_desktop_windows():
 @api_error_handler
 def api_desktop_processes():
     """枚举本机当前运行进程。"""
-    from desktop_discovery import discovery_available, list_running_processes
+    from modules.desktop.desktop_discovery import discovery_available, list_running_processes
 
     if not discovery_available():
         return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
@@ -11671,14 +11671,14 @@ def api_desktop_processes():
 @api_error_handler
 def api_desktop_snapshot():
     """运行中窗口 + 进程 + 开始菜单应用目录（供步骤编辑点选）。"""
-    from desktop_discovery import desktop_runtime_snapshot, discovery_available
+    from modules.desktop.desktop_discovery import desktop_runtime_snapshot, discovery_available
 
     if not discovery_available():
         return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
     refresh = (request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
     if refresh:
         try:
-            from desktop_app_catalog import ensure_catalog_built
+            from modules.desktop.desktop_app_catalog import ensure_catalog_built
 
             ensure_catalog_built(force=True)
         except Exception:
@@ -11693,12 +11693,12 @@ def api_desktop_snapshot():
 @api_error_handler
 def api_desktop_catalog():
     """本机应用目录（开始菜单扫描，含自动别名）。"""
-    from desktop_discovery import discovery_available
+    from modules.desktop.desktop_discovery import discovery_available
 
     if not discovery_available():
         return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
     try:
-        from desktop_app_catalog import ensure_catalog_built, list_catalog_apps
+        from modules.desktop.desktop_app_catalog import ensure_catalog_built, list_catalog_apps
 
         data = ensure_catalog_built(
             force=(request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
@@ -11720,13 +11720,13 @@ def api_desktop_catalog():
 @api_error_handler
 def api_desktop_catalog_refresh():
     """强制重新扫描开始菜单并更新别名库。"""
-    from desktop_discovery import discovery_available
+    from modules.desktop.desktop_discovery import discovery_available
 
     if not discovery_available():
         return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
     try:
-        from desktop_app_catalog import ensure_catalog_built
-        from desktop_discovery import invalidate_discovery_cache
+        from modules.desktop.desktop_app_catalog import ensure_catalog_built
+        from modules.desktop.desktop_discovery import invalidate_discovery_cache
 
         invalidate_discovery_cache()
         data = ensure_catalog_built(force=True)
@@ -11753,7 +11753,7 @@ def api_desktop_window_spec():
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': '请提供整数 hwnd'}), 400
     try:
-        from desktop_discovery import attachment_spec_for_window, discovery_available
+        from modules.desktop.desktop_discovery import attachment_spec_for_window, discovery_available
 
         if not discovery_available():
             return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
@@ -11779,7 +11779,7 @@ def api_desktop_resolve_app():
     if not name:
         return jsonify({'success': False, 'error': '请提供 name 参数'}), 400
     try:
-        from desktop_discovery import (
+        from modules.desktop.desktop_discovery import (
             discovery_available,
             format_resolve_error,
             resolve_executable_with_meta,
@@ -11815,7 +11815,7 @@ def api_desktop_resolve_app():
 def api_desktop_machines():
     """远程桌面 Agent 测试机注册（Phase 3）；本地版 DEPLOYMENT_PROFILE=local 默认禁用。"""
     try:
-        from desktop_env_config import is_local_deployment
+        from modules.desktop.desktop_env_config import is_local_deployment
 
         if is_local_deployment():
             return jsonify({
@@ -12131,7 +12131,7 @@ def api_browser_ai_analyze():
         if embedded_sid
         else '用户已在内置浏览器/主 Playwright 会话中打开的当前页面'
     )
-    from ai_page_probe import probe_registry_from_interactive_snapshot
+    from modules.ai.ai_page_probe import probe_registry_from_interactive_snapshot
 
     page_snapshot_txt, probe_registry, probe_pu = probe_registry_from_interactive_snapshot(snap)
     goal_lines = [
@@ -12334,7 +12334,7 @@ def _validate_step_action_for_case(case_dict, action: str, automation_layer: str
         return "接口用例仅允许「接口请求」步骤（api_request）"
     if ct == "ui":
         try:
-            from desktop_automation import validate_step_for_layer
+            from modules.desktop.desktop_automation import validate_step_for_layer
 
             layer = (automation_layer or "web").strip().lower()
             layer_err = validate_step_for_layer(act, layer)
@@ -13184,7 +13184,7 @@ def _run_assert_automation_step(
     iframe_sel,
 ):
     """执行断言步骤（与单用例运行一致）。文本类断言返回应写入 extracted 的片段，否则返回 None。"""
-    from auth_batch_helpers import assert_empty_expected_error, normalize_assert_compare_type
+    from modules.auth.auth_batch_helpers import assert_empty_expected_error, normalize_assert_compare_type
 
     assert_type = normalize_assert_compare_type(
         step.get('compare_type', 'text_equals'),
@@ -13207,14 +13207,14 @@ def _run_assert_automation_step(
         if assert_type in ['page_text_equals', 'page_text_contains', 'page_text_regex']:
             actual_text = (sync_get_page_text() or "").strip()
             if assert_type == 'page_text_equals':
-                from auth_batch_helpers import page_text_has_exact_snippet
+                from modules.auth.auth_batch_helpers import page_text_has_exact_snippet
 
                 if not page_text_has_exact_snippet(actual_text, expected_value or ""):
                     raise Exception(
                         f"整页文本断言失败(equals): 页面未出现与预期完全一致的文案 {expected_value!r}"
                     )
             elif assert_type == 'page_text_contains':
-                from ai_page_probe import page_text_matches_assert_expected
+                from modules.ai.ai_page_probe import page_text_matches_assert_expected
 
                 if not page_text_matches_assert_expected(
                     actual_text, expected_value, 'page_text_contains'
@@ -13223,7 +13223,7 @@ def _run_assert_automation_step(
                         f"整页文本断言失败(contains): 页面未包含 {expected_value[:160]!r}"
                     )
             elif assert_type == 'page_text_regex':
-                from ai_page_probe import page_text_matches_assert_expected
+                from modules.ai.ai_page_probe import page_text_matches_assert_expected
 
                 if not page_text_matches_assert_expected(
                     actual_text, expected_value or '', 'page_text_regex'
@@ -13234,7 +13234,7 @@ def _run_assert_automation_step(
             extracted_fragment = actual_text[:500] if actual_text else ""
             uat_logger.info(f"断言成功: {assert_type}")
         elif assert_type in ['text_equals', 'text_contains', 'text_regex']:
-            from ai_page_probe import page_text_matches_assert_expected
+            from modules.ai.ai_page_probe import page_text_matches_assert_expected
 
             assert_wait_ms = int(os.environ.get("UAT_ASSERT_ELEMENT_WAIT_MS", "15000") or 15000)
             try:
@@ -13768,7 +13768,7 @@ def api_run_case(case_id):
         }), 400
 
     # steps 已由 load_case_and_steps 加载
-    from auth_batch_helpers import prepare_steps_for_execution
+    from modules.auth.auth_batch_helpers import prepare_steps_for_execution
 
     steps, _runtime_probe_warns = prepare_steps_for_execution(
         steps, (case.get("url") or "").strip()
@@ -13790,7 +13790,7 @@ def api_run_case(case_id):
                         'error': '该用例尚未添加任何步骤，请先编辑用例添加步骤后再执行。'})
 
     try:
-        from execution_factory import get_executor_factory
+        from modules.execution.execution_factory import get_executor_factory
 
         env_msg = get_executor_factory().validate_case_environment(steps)
         if env_msg and (
@@ -13800,7 +13800,7 @@ def api_run_case(case_id):
             or "未启用" in env_msg
             or "未安装" in env_msg
         ):
-            from desktop_runtime import desktop_runtime_unavailable_reason
+            from modules.desktop.desktop_runtime import desktop_runtime_unavailable_reason
 
             detail = desktop_runtime_unavailable_reason()
             return jsonify({
@@ -13819,7 +13819,7 @@ def api_run_case(case_id):
     playwright_lock_acquired = False
     with _UserUiRunGuard(user_id, f'case #{case_id}'):
         try:
-            from execution_lock import ExecutionLockError, acquire as acquire_machine_lock
+            from modules.execution.execution_lock import ExecutionLockError, acquire as acquire_machine_lock
 
             machine_lock_acquired = acquire_machine_lock(
                 owner=f"case_run:{case_id}:user:{user_id}", timeout_sec=120
@@ -13858,7 +13858,7 @@ def api_run_case(case_id):
         if not _execution_lock.acquire(blocking=True, timeout=10):
             if machine_lock_acquired:
                 try:
-                    from execution_lock import release as release_machine_lock
+                    from modules.execution.execution_lock import release as release_machine_lock
 
                     release_machine_lock()
                 except ImportError:
@@ -13875,7 +13875,7 @@ def api_run_case(case_id):
         playwright_lock_acquired = True
         # 清除上一次的强制释放信号
         try:
-            from playwright_automation import _execution_force_release_requested as _force_rel_event
+            from modules.web.playwright_automation import _execution_force_release_requested as _force_rel_event
             _force_rel_event.clear()
         except Exception:
             pass
@@ -13897,15 +13897,15 @@ def api_run_case(case_id):
                 'started_at': time.time(),
             }
         try:
-            from captcha_engine import set_captcha_status_callback
+            from modules.web.captcha_engine import set_captcha_status_callback
     
             set_captcha_status_callback(lambda msg: _case_job_update(user_id, message=msg))
         except ImportError:
             pass
     
         try:
-            from step_executor import case_steps_include_android, case_steps_include_web
-            from mobile_routes import execute_mobile_case
+            from modules.execution.step_executor import case_steps_include_android, case_steps_include_web
+            from modules.mobile.mobile_routes import execute_mobile_case
     
             if case_steps_include_android(steps) and not case_steps_include_web(steps):
                 try:
@@ -13924,7 +13924,7 @@ def api_run_case(case_id):
                             _case_run_jobs[user_id]["active"] = False
                     if machine_lock_acquired:
                         try:
-                            from execution_lock import release as release_machine_lock
+                            from modules.execution.execution_lock import release as release_machine_lock
     
                             release_machine_lock()
                         except ImportError:
@@ -13934,7 +13934,7 @@ def api_run_case(case_id):
                     uat_logger.error("Android 用例执行失败: %s", mobile_early_exc)
                     if machine_lock_acquired:
                         try:
-                            from execution_lock import release as release_machine_lock
+                            from modules.execution.execution_lock import release as release_machine_lock
     
                             release_machine_lock()
                         except ImportError:
@@ -13958,7 +13958,7 @@ def api_run_case(case_id):
         try:
             # 若用户仍处于元素/桌面拾取会话，执行前关闭拾取 UI，避免全屏遮罩与钩子干扰
             try:
-                from element_picker import sync_stop_element_picker
+                from modules.web.element_picker import sync_stop_element_picker
     
                 picker_stopped = sync_stop_element_picker()
                 if (picker_stopped.get("desktop") or {}).get("was_active"):
@@ -13966,7 +13966,7 @@ def api_run_case(case_id):
             except Exception:
                 pass
             try:
-                from web_dom_picker import get_web_dom_picker_status, sync_stop_web_dom_picker
+                from modules.web.web_dom_picker import get_web_dom_picker_status, sync_stop_web_dom_picker
     
                 if get_web_dom_picker_status().get('active'):
                     uat_logger.info("检测到网页 DOM 捕获会话，执行前自动关闭")
@@ -14007,7 +14007,7 @@ def api_run_case(case_id):
                 uat_logger.info("✅ [浏览器恢复] 状态已重置")
     
             # 纯桌面用例不启动 Playwright，避免先弹出 about:blank 空浏览器窗口
-            from step_executor import case_steps_include_web, is_desktop_step
+            from modules.execution.step_executor import case_steps_include_web, is_desktop_step
     
             def _ensure_browser_for_web_step() -> None:
                 nonlocal browser_started
@@ -14029,7 +14029,7 @@ def api_run_case(case_id):
                     case=case, case_id=case_id, steps=steps
                 )
                 try:
-                    from auth_batch_helpers import _case_role
+                    from modules.auth.auth_batch_helpers import _case_role
 
                     if _case_role(case) == "login_feature":
                         sync_prepare_fresh_web_session(initial_nav_url or "")
@@ -14066,7 +14066,7 @@ def api_run_case(case_id):
                         raise Exception("用户已停止执行")
                     # 检查跨线程强制释放信号（用户手动关闭浏览器时触发）
                     try:
-                        from playwright_automation import _execution_lock_check_force_release as _check_force_rel
+                        from modules.web.playwright_automation import _execution_lock_check_force_release as _check_force_rel
                         if _check_force_rel():
                             raise Exception("用户已停止执行")
                     except ImportError:
@@ -14095,7 +14095,7 @@ def api_run_case(case_id):
                     # ── 企业级步骤详情收集 ──
                     try:
                         automation._last_step_detail = {}  # 重置上一步残留数据
-                        from step_execution_detail import StepExecutionDetail
+                        from modules.execution.step_execution_detail import StepExecutionDetail
                         _step_detail = StepExecutionDetail(
                             step_id=step.get('id') or 0,
                             step_order=step.get('step_order', 0),
@@ -14144,8 +14144,8 @@ def api_run_case(case_id):
                     )
     
                     try:
-                        from execution_factory import get_executor_factory
-                        from step_executor import enrich_execution_step, is_desktop_step, is_mobile_step
+                        from modules.execution.execution_factory import get_executor_factory
+                        from modules.execution.step_executor import enrich_execution_step, is_desktop_step, is_mobile_step
     
                         factory = get_executor_factory()
                         exec_step = enrich_execution_step(step)
@@ -14163,7 +14163,7 @@ def api_run_case(case_id):
                             except Exception as desk_exc:
                                 if _case_run_cancelled(user_id):
                                     raise Exception("用户已停止执行")
-                                from desktop_visual_engine import VisualMatchFailed
+                                from modules.desktop.desktop_visual_engine import VisualMatchFailed
     
                                 step_duration = round(time.time() - step_start_time, 3)
                                 step_screenshot = getattr(desk_exc, "failure_screenshot", "") or ""
@@ -14178,7 +14178,7 @@ def api_run_case(case_id):
                                 if isinstance(desk_exc, VisualMatchFailed):
                                     desk_exc.step_id = step.get('id')  # type: ignore[attr-defined]
                                 raise
-                            from step_executor import validate_desktop_step_result
+                            from modules.execution.step_executor import validate_desktop_step_result
     
                             validate_desktop_step_result(desk_result, action)
                             step_status = 'success'
@@ -14229,7 +14229,7 @@ def api_run_case(case_id):
                                     'automation_layer': 'android',
                                 })
                                 raise
-                            from mobile_automation import validate_mobile_step_result
+                            from modules.mobile.mobile_automation import validate_mobile_step_result
     
                             validate_mobile_step_result(mob_result, action)
                             step_status = 'success'
@@ -14253,7 +14253,7 @@ def api_run_case(case_id):
                     except ImportError:
                         pass
     
-                    from desktop_automation import normalize_automation_layer as _norm_layer
+                    from modules.desktop.desktop_automation import normalize_automation_layer as _norm_layer
     
                     if _norm_layer(step) == "desktop":
                         raise Exception(
@@ -14563,7 +14563,7 @@ def api_run_case(case_id):
                             # 直接抛出错误，视为测试用例执行失败
                             raise
                     else:
-                        from desktop_automation import normalize_automation_layer as _norm_al_web
+                        from modules.desktop.desktop_automation import normalize_automation_layer as _norm_al_web
     
                         _layer_web = _norm_al_web(step)
                         _st_web = (selector_type or '').strip().lower()
@@ -14631,7 +14631,7 @@ def api_run_case(case_id):
                     for sr in step_results_list:
                         db.create_step_result_v2(run_id, **sr)
                     try:
-                        from ai_memory_store import ingest_successful_run, memory_ingest_run_success_enabled
+                        from modules.ai.ai_memory_store import ingest_successful_run, memory_ingest_run_success_enabled
     
                         if memory_ingest_run_success_enabled():
                             tid = db.get_user_tenant_id(user_id)
@@ -14710,7 +14710,7 @@ def api_run_case(case_id):
                 error_msg = str(e)
                 _captcha_manual = False
                 try:
-                    from captcha_recovery import CaptchaManualRequiredError as _CMR
+                    from modules.web.captcha_recovery import CaptchaManualRequiredError as _CMR
     
                     _cause_cap = e
                     while _cause_cap is not None:
@@ -14768,7 +14768,7 @@ def api_run_case(case_id):
                 _cause = e
                 while _cause is not None:
                     try:
-                        from desktop_visual_engine import VisualMatchFailed
+                        from modules.desktop.desktop_visual_engine import VisualMatchFailed
                     except ImportError:
                         break
                     if isinstance(_cause, VisualMatchFailed):
@@ -14931,7 +14931,7 @@ def api_run_case(case_id):
             }), 500
         finally:
             try:
-                from captcha_engine import set_captcha_status_callback
+                from modules.web.captcha_engine import set_captcha_status_callback
     
                 set_captcha_status_callback(None)
             except ImportError:
@@ -14944,7 +14944,7 @@ def api_run_case(case_id):
                     pass
             if machine_lock_acquired:
                 try:
-                    from execution_lock import release as release_machine_lock
+                    from modules.execution.execution_lock import release as release_machine_lock
     
                     release_machine_lock()
                 except ImportError:
@@ -15924,8 +15924,8 @@ def _ci_run_batch_and_finalize(
     sync_mode: bool,
 ):
     """执行批量用例并写入 run 终态；可选投递 callback。"""
-    from auth_batch_helpers import count_batch_gate_failures
-    from ci_adapter import (
+    from modules.auth.auth_batch_helpers import count_batch_gate_failures
+    from modules.integration.ci_adapter import (
         build_run_record_from_batch,
         deliver_run_callback,
         finalize_run_from_batch,
@@ -16018,7 +16018,7 @@ def _ci_run_batch_and_finalize(
         on_ci_run_finished(run_id, db_factory=lambda: Database())
     except Exception as heal_err:
         uat_logger.warning(f"code-change heal 钩子异常 run_id={run_id}: {heal_err}")
-    from ci_adapter import get_run
+    from modules.integration.ci_adapter import get_run
 
     return get_run(run_id) or record
 
@@ -16028,7 +16028,7 @@ def _ci_run_batch_and_finalize(
 @feature_required('ci_integration')
 def api_ci_runs_list():
     """列出近期 CI 运行（供 CI/CD 页展示）。"""
-    from ci_adapter import list_runs
+    from modules.integration.ci_adapter import list_runs
 
     try:
         limit = int(request.args.get('limit') or 30)
@@ -16188,7 +16188,7 @@ def api_ci_jenkins_trigger():
 @feature_required('ci_integration')
 def api_ci_runs_create():
     """CI 触发执行。默认同步；async=true 时立即返回 queued（202），可轮询 + webhook。"""
-    from ci_adapter import create_queued_run, new_run_id, public_run_view
+    from modules.integration.ci_adapter import create_queued_run, new_run_id, public_run_view
 
     data = request.get_json(silent=True) or {}
     _db = Database()
@@ -16246,7 +16246,7 @@ def api_ci_runs_create():
             except Exception as e:
                 uat_logger.error(f"CI async worker 失败 run_id={run_id}: {e}")
                 try:
-                    from ci_adapter import deliver_run_callback, update_run_fields
+                    from modules.integration.ci_adapter import deliver_run_callback, update_run_fields
 
                     update_run_fields(
                         run_id,
@@ -16290,7 +16290,7 @@ def api_ci_runs_create():
     # 同步路径
     run_id = new_run_id()
     if callback_url:
-        from ci_adapter import save_run
+        from modules.integration.ci_adapter import save_run
 
         save_run({
             "run_id": run_id,
@@ -16348,7 +16348,7 @@ def api_ci_runs_create():
 @app.route('/api/ci/runs/<run_id>', methods=['GET'])
 @token_or_login_required
 def api_ci_runs_get(run_id):
-    from ci_adapter import get_run, is_terminal_status, public_run_view
+    from modules.integration.ci_adapter import get_run, is_terminal_status, public_run_view
 
     record = get_run(run_id)
     if not record:
@@ -16376,7 +16376,7 @@ def api_ci_runs_get(run_id):
 @app.route('/api/ci/runs/<run_id>/junit.xml', methods=['GET'])
 @token_or_login_required
 def api_ci_runs_junit(run_id):
-    from ci_adapter import get_run
+    from modules.integration.ci_adapter import get_run
 
     record = get_run(run_id)
     if not record:
@@ -16401,7 +16401,7 @@ def _ci_code_change_run_trigger(
     trigger_source="code_change",
 ):
     """供 code-change 流水线异步触发 /api/ci/runs 等价逻辑，返回 run_id。"""
-    from ci_adapter import create_queued_run
+    from modules.integration.ci_adapter import create_queued_run
 
     if not case_ids:
         return None
@@ -16444,7 +16444,7 @@ def _ci_code_change_run_trigger(
         except Exception as e:
             uat_logger.error(f"code-change CI worker 失败 run_id={run_id}: {e}")
             try:
-                from ci_adapter import deliver_run_callback, update_run_fields
+                from modules.integration.ci_adapter import deliver_run_callback, update_run_fields
 
                 update_run_fields(
                     run_id,
@@ -16981,8 +16981,8 @@ def api_ci_case_review(case_id):
 @token_or_login_required
 def api_trigger_project(project_id):
     """CI/CD 触发指定项目的所有用例执行（兼容旧路径；推荐 /api/ci/runs）。"""
-    from auth_batch_helpers import count_batch_gate_failures
-    from ci_adapter import build_run_record_from_batch, public_run_view
+    from modules.auth.auth_batch_helpers import count_batch_gate_failures
+    from modules.integration.ci_adapter import build_run_record_from_batch, public_run_view
 
     try:
         _db = Database()
@@ -17044,8 +17044,8 @@ def api_trigger_project(project_id):
 @token_or_login_required
 def api_trigger_cases():
     """CI/CD 触发指定用例列表执行（兼容旧路径；推荐 /api/ci/runs）。"""
-    from auth_batch_helpers import count_batch_gate_failures
-    from ci_adapter import build_run_record_from_batch, public_run_view
+    from modules.auth.auth_batch_helpers import count_batch_gate_failures
+    from modules.integration.ci_adapter import build_run_record_from_batch, public_run_view
 
     try:
         data = request.get_json(silent=True) or {}
@@ -17156,7 +17156,7 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
 
         machine_lock_acquired = False
         try:
-            from execution_lock import acquire as acquire_machine_lock
+            from modules.execution.execution_lock import acquire as acquire_machine_lock
 
             machine_lock_acquired = acquire_machine_lock(
                 owner=f"dataset:{dataset_id}:case:{case_id}", timeout_sec=120
@@ -17525,7 +17525,7 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
     finally:
         if machine_lock_acquired:
             try:
-                from execution_lock import release as release_machine_lock
+                from modules.execution.execution_lock import release as release_machine_lock
 
                 release_machine_lock()
             except ImportError:
@@ -17849,7 +17849,7 @@ try:
         """调度器回调：执行定时用例（支持重跑）"""
         import datetime
         import time
-        from notifications import notify
+        from modules.integration.notifications import notify
 
         _db = Database()
         # 仅首次触发消耗执行次数，重试不重复扣减
@@ -17916,7 +17916,7 @@ try:
 
         machine_lock_acquired = False
         try:
-            from execution_lock import acquire as acquire_machine_lock
+            from modules.execution.execution_lock import acquire as acquire_machine_lock
 
             machine_lock_acquired = acquire_machine_lock(
                 owner=f"schedule:{schedule_id}", timeout_sec=120
@@ -17951,7 +17951,7 @@ try:
 
             # 门禁：仅全部 success 才记调度成功（warning/stopped 等不得当绿）
             try:
-                from auth_batch_helpers import count_batch_gate_failures, is_execution_gate_success
+                from modules.auth.auth_batch_helpers import count_batch_gate_failures, is_execution_gate_success
                 gate_failures = count_batch_gate_failures(case_results)
             except ImportError:
                 gate_failures = failed
@@ -18035,7 +18035,7 @@ try:
         finally:
             if machine_lock_acquired:
                 try:
-                    from execution_lock import release as release_machine_lock
+                    from modules.execution.execution_lock import release as release_machine_lock
 
                     release_machine_lock()
                 except ImportError:
@@ -18376,9 +18376,9 @@ def api_activate_license():
     if not license_key:
         return jsonify({'success': False, 'error': '请输入 License 密钥'}), 400
 
-    from deployment_config import is_client_mode, is_server_mode
-    from instance_identity import get_instance_id, get_machine_id
-    from platform_sync import report_license_activation
+    from modules.core.deployment_config import is_client_mode, is_server_mode
+    from modules.core.instance_identity import get_instance_id, get_machine_id
+    from modules.core.platform_sync import report_license_activation
 
     binding_type = ""
     binding_id = ""
@@ -18400,7 +18400,7 @@ def api_activate_license():
     activation_synced = False
     activation_sync_hint = ''
     if info and info.license_id and binding_id:
-        from deployment_config import get_platform_admin_url
+        from modules.core.deployment_config import get_platform_admin_url
 
         activation_synced = report_license_activation(
             info.license_id, binding_type, binding_id
@@ -18474,8 +18474,8 @@ def api_upload_license():
     if not result['valid']:
         return jsonify({'success': False, 'error': result['message']}), 400
 
-    from deployment_config import is_client_mode, is_server_mode
-    from instance_identity import get_instance_id, get_machine_id
+    from modules.core.deployment_config import is_client_mode, is_server_mode
+    from modules.core.instance_identity import get_instance_id, get_machine_id
 
     binding_type = ""
     binding_id = ""
@@ -18492,7 +18492,7 @@ def api_upload_license():
 
     info = result.get('info')
     if info and info.license_id and binding_id:
-        from platform_sync import report_license_activation
+        from modules.core.platform_sync import report_license_activation
 
         report_license_activation(info.license_id, binding_type, binding_id)
 
@@ -18837,7 +18837,7 @@ def api_health():
 def api_startup_status():
     """桌面壳启动页轮询：分阶段进度文案。"""
     try:
-        from desktop_startup import mark_app_ready, startup_status_payload
+        from modules.desktop.desktop_startup import mark_app_ready, startup_status_payload
 
         payload = startup_status_payload()
         try:
@@ -18874,7 +18874,7 @@ def api_health_ready():
     }
     if sys.platform == 'win32':
         try:
-            from desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
+            from modules.desktop.desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
 
             payload['desktop_runtime'] = {
                 'available': bool(desktop_runtime_available()),
@@ -18888,7 +18888,7 @@ def api_health_ready():
                 'python_executable': sys.executable,
             }
     try:
-        from embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled
+        from modules.web.embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled
 
         base, secret, pub_ws = embedded_gateway_config()
         payload['embedded_browser'] = {
@@ -18952,7 +18952,7 @@ def api_create_notification_config():
     config_id = db.create_notification_config(name, config_type, config_data, events, is_active)
 
     # 重新加载通知管理器配置
-    from notification_manager import notification_manager
+    from modules.integration.notification_manager import notification_manager
     notification_manager.reload_configs()
 
     return jsonify({'success': True, 'message': '配置创建成功', 'id': config_id})
@@ -18986,7 +18986,7 @@ def api_update_notification_config(config_id):
 
     if success:
         # 重新加载通知管理器配置
-        from notification_manager import notification_manager
+        from modules.integration.notification_manager import notification_manager
         notification_manager.reload_configs()
         return jsonify({'success': True, 'message': '配置更新成功'})
     else:
@@ -19004,7 +19004,7 @@ def api_delete_notification_config(config_id):
 
     if success:
         # 重新加载通知管理器配置
-        from notification_manager import notification_manager
+        from modules.integration.notification_manager import notification_manager
         notification_manager.reload_configs()
         return jsonify({'success': True, 'message': '配置删除成功'})
     else:
@@ -19016,7 +19016,7 @@ def api_delete_notification_config(config_id):
 @role_required('admin')
 def api_test_notification():
     """测试通知"""
-    from notification_manager import notification_manager, NotificationConfig
+    from modules.integration.notification_manager import notification_manager, NotificationConfig
 
     data = request.get_json(silent=True) or {}
     config_data = data.get('config', {})
@@ -19067,7 +19067,7 @@ def api_test_notification():
 @login_required
 def api_get_browsers():
     """获取支持的浏览器列表"""
-    from browser_manager import BrowserManager
+    from modules.web.browser_manager import BrowserManager
     browsers = BrowserManager.get_available_browsers()
     devices = BrowserManager.get_device_presets()
     return jsonify({
@@ -19119,7 +19119,7 @@ def sso_settings_page():
 def api_get_sso_configs():
     """获取 SSO 配置列表"""
     try:
-        from sso_manager import sso_manager
+        from modules.auth.sso_manager import sso_manager
         configs = sso_manager.get_sso_configs()
         return jsonify({'success': True, 'configs': configs})
     except Exception as e:
@@ -19134,7 +19134,7 @@ def api_get_sso_configs():
 def api_create_sso_config():
     """创建 SSO 配置"""
     try:
-        from sso_manager import sso_manager
+        from modules.auth.sso_manager import sso_manager
         data = request.get_json(silent=True) or {}
         
         if not data.get('provider_type'):
@@ -19155,7 +19155,7 @@ def api_create_sso_config():
 def api_get_sso_config_detail(config_id):
     """获取单个 SSO 配置详情（用于编辑）"""
     try:
-        from sso_manager import sso_manager
+        from modules.auth.sso_manager import sso_manager
         config = sso_manager.get_sso_config(config_id)
         if not config:
             return jsonify({'success': False, 'error': 'SSO 配置不存在'}), 404
@@ -19172,7 +19172,7 @@ def api_get_sso_config_detail(config_id):
 def api_update_sso_config(config_id):
     """更新 SSO 配置"""
     try:
-        from sso_manager import sso_manager
+        from modules.auth.sso_manager import sso_manager
         data = request.get_json(silent=True) or {}
         success = sso_manager.update_sso_config(config_id, data)
         return jsonify({'success': success})
@@ -19188,7 +19188,7 @@ def api_update_sso_config(config_id):
 def api_delete_sso_config(config_id):
     """删除 SSO 配置"""
     try:
-        from sso_manager import sso_manager
+        from modules.auth.sso_manager import sso_manager
         success = sso_manager.delete_sso_config(config_id)
         return jsonify({'success': success})
     except Exception as e:
@@ -19199,7 +19199,7 @@ def api_delete_sso_config(config_id):
 def api_sso_login_url(config_id):
     """获取 SSO 登录 URL"""
     try:
-        from sso_manager import sso_manager, SSOProviderType
+        from modules.auth.sso_manager import sso_manager, SSOProviderType
         config = sso_manager.get_sso_config(config_id)
         
         if not config:
@@ -19227,7 +19227,7 @@ def api_sso_callback(config_id):
     try:
         from urllib.parse import quote
 
-        from sso_manager import sso_manager, SSOProviderType
+        from modules.auth.sso_manager import sso_manager, SSOProviderType
 
         def _err_redirect(msg: str):
             return redirect('/login?error=' + quote(msg, safe=''))
@@ -19258,7 +19258,7 @@ def api_sso_callback(config_id):
         if not success:
             uat_logger.error(f"SSO 登录失败: {message}")
             try:
-                from auth_audit import ACTION_SSO_LOGIN_FAILURE, record_auth_audit
+                from modules.auth.auth_audit import ACTION_SSO_LOGIN_FAILURE, record_auth_audit
 
                 record_auth_audit(
                     action=ACTION_SSO_LOGIN_FAILURE,
@@ -19292,7 +19292,7 @@ def api_sso_callback(config_id):
             _db.update_user_last_login(user_id)
             uat_logger.info(f"SSO 用户 {user_info.get('username')} 登录成功")
             try:
-                from auth_audit import ACTION_SSO_LOGIN_SUCCESS, record_auth_audit
+                from modules.auth.auth_audit import ACTION_SSO_LOGIN_SUCCESS, record_auth_audit
 
                 record_auth_audit(
                     action=ACTION_SSO_LOGIN_SUCCESS,
@@ -19320,7 +19320,7 @@ def api_sso_callback(config_id):
 def api_sso_ldap_login():
     """处理 LDAP 登录"""
     try:
-        from sso_manager import sso_manager
+        from modules.auth.sso_manager import sso_manager
         data = request.get_json(silent=True) or {}
         config_id = data.get('config_id')
         username = data.get('username', '').strip()
@@ -19337,7 +19337,7 @@ def api_sso_ldap_login():
         
         if not success:
             try:
-                from auth_audit import ACTION_LDAP_LOGIN_FAILURE, record_auth_audit
+                from modules.auth.auth_audit import ACTION_LDAP_LOGIN_FAILURE, record_auth_audit
 
                 record_auth_audit(
                     action=ACTION_LDAP_LOGIN_FAILURE,
@@ -19371,7 +19371,7 @@ def api_sso_ldap_login():
             _db.update_user_last_login(user_id)
             uat_logger.info(f"LDAP 用户 {username} 登录成功")
             try:
-                from auth_audit import ACTION_LDAP_LOGIN_SUCCESS, record_auth_audit
+                from modules.auth.auth_audit import ACTION_LDAP_LOGIN_SUCCESS, record_auth_audit
 
                 record_auth_audit(
                     action=ACTION_LDAP_LOGIN_SUCCESS,
@@ -19405,7 +19405,7 @@ def pricing_page():
 def api_get_payment_plans():
     """获取套餐列表"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         plans = payment_manager.get_plan_list()
         return jsonify({'success': True, 'plans': plans})
     except Exception as e:
@@ -19418,7 +19418,7 @@ def api_get_payment_plans():
 def api_create_order():
     """创建订单"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         data = request.get_json(silent=True) or {}
         
         plan_type = data.get('plan_type')
@@ -19447,7 +19447,7 @@ def api_create_order():
 def api_get_user_orders():
     """获取用户订单列表"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         page = request.args.get('page', 1, type=int)
         page_size = request.args.get('page_size', 20, type=int)
         
@@ -19469,7 +19469,7 @@ def api_get_user_orders():
 def api_get_order_detail(order_no):
     """获取订单详情"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         order = payment_manager.get_order(order_no=order_no)
         
         if not order:
@@ -19492,7 +19492,7 @@ def api_get_order_detail(order_no):
 def api_cancel_order(order_no):
     """取消订单"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         ok, err = payment_manager.cancel_order(order_no, current_user.id)
         if not ok:
             return jsonify({'success': False, 'error': err}), 400
@@ -19506,7 +19506,7 @@ def api_cancel_order(order_no):
 def api_create_payment(order_no):
     """创建支付"""
     try:
-        from payment_manager import payment_manager, PaymentMethod
+        from modules.auth.payment_manager import payment_manager, PaymentMethod
         data = request.get_json(silent=True) or {}
         payment_method = data.get('payment_method', 'alipay')
         
@@ -19535,7 +19535,7 @@ def api_create_payment(order_no):
 def api_alipay_callback():
     """支付宝支付回调"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         params = request.form.to_dict()
         
         success, order_no = payment_manager.verify_alipay_callback(params)
@@ -19555,7 +19555,7 @@ def api_alipay_callback():
 def api_wechat_callback():
     """微信支付回调"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         xml_data = request.data.decode('utf-8')
         
         success, order_no = payment_manager.verify_wechat_callback(xml_data)
@@ -19576,7 +19576,7 @@ def api_wechat_callback():
 def api_get_subscription():
     """获取当前用户订阅信息"""
     try:
-        from payment_manager import payment_manager
+        from modules.auth.payment_manager import payment_manager
         subscription = payment_manager.get_user_subscription(current_user.id)
         return jsonify({'success': True, 'subscription': subscription})
     except Exception as e:
@@ -19588,7 +19588,7 @@ def api_get_subscription():
 def api_mock_complete_payment(order_no):
     """模拟支付成功（开发/演示使用）"""
     try:
-        from payment_manager import payment_manager, PaymentStatus, PaymentMethod
+        from modules.auth.payment_manager import payment_manager, PaymentStatus, PaymentMethod
         order = payment_manager.get_order(order_no=order_no)
         if not order:
             return jsonify({'success': False, 'error': '订单不存在'}), 404
@@ -19940,7 +19940,7 @@ def api_get_defect_statistics():
 def api_export_cases_excel():
     """导出用例到Excel"""
     try:
-        from case_importer import case_importer
+        from modules.execution.case_importer import case_importer
         
         data = request.get_json(silent=True) or {}
         project_id = data.get('project_id')
@@ -19971,7 +19971,7 @@ def api_export_cases_excel():
 def api_export_cases_json():
     """导出用例到JSON"""
     try:
-        from case_importer import case_importer
+        from modules.execution.case_importer import case_importer
         
         data = request.get_json(silent=True) or {}
         project_id = data.get('project_id')
@@ -20000,7 +20000,7 @@ def api_export_cases_json():
 @log_api_request
 def api_export_case_yaml_preview(case_id: int):
     """Phase 5：用例 YAML 预览（人工审阅，非执行格式）。"""
-    from case_yaml_export import build_case_yaml_preview
+    from modules.execution.case_yaml_export import build_case_yaml_preview
 
     _db = Database()
     case = _db.get_test_case_v2(case_id)
@@ -20021,7 +20021,7 @@ def api_export_case_yaml_preview(case_id: int):
 @log_api_request
 def api_export_project_yaml_preview(project_id: int):
     """Phase 5：按项目/单元批量 YAML 预览。"""
-    from case_yaml_export import build_project_yaml_preview
+    from modules.execution.case_yaml_export import build_project_yaml_preview
 
     unit_id = request.args.get('unit_id')
     yaml_text = build_project_yaml_preview(Database(), project_id, unit_id=unit_id)
@@ -20039,7 +20039,7 @@ def api_export_project_yaml_preview(project_id: int):
 def api_import_cases_excel():
     """从Excel导入用例"""
     try:
-        from case_importer import case_importer
+        from modules.execution.case_importer import case_importer
         
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': '请上传文件'}), 400
@@ -20085,7 +20085,7 @@ def api_import_cases_excel():
 def api_import_cases_json():
     """从JSON导入用例"""
     try:
-        from case_importer import case_importer
+        from modules.execution.case_importer import case_importer
         
         data = request.get_json(silent=True) or {}
         project_id = data.get('project_id')
@@ -20115,7 +20115,7 @@ def api_import_cases_json():
 def api_get_excel_template():
     """获取Excel导入模板"""
     try:
-        from case_importer import case_importer
+        from modules.execution.case_importer import case_importer
         filepath = case_importer.generate_excel_template()
         return jsonify({
             'success': True,
@@ -20131,7 +20131,7 @@ def api_get_excel_template():
 def api_get_json_template():
     """获取JSON导入模板"""
     try:
-        from case_importer import case_importer
+        from modules.execution.case_importer import case_importer
         template = case_importer.generate_json_template()
         return jsonify({
             'success': True,
@@ -20201,7 +20201,7 @@ _comp_install_status = {}
 def api_components_list():
     """列出所有可选组件及其安装状态。"""
     try:
-        from components_manager import list_components
+        from modules.core.components_manager import list_components
         components = list_components()
         return jsonify({"success": True, "components": components})
     except Exception as e:
@@ -20212,7 +20212,7 @@ def api_components_list():
 def api_component_install(component_id: str):
     """安装指定组件（异步，后台执行）。"""
     try:
-        from components_manager import is_installed, COMPONENT_DEFS, install
+        from modules.core.components_manager import is_installed, COMPONENT_DEFS, install
 
         if component_id not in COMPONENT_DEFS:
             return jsonify({"success": False, "error": f"未知组件: {component_id}"}), 400
@@ -20272,7 +20272,7 @@ def api_component_install(component_id: str):
 def api_component_status(component_id: str):
     """查询组件安装进度状态。"""
     try:
-        from components_manager import is_installed, COMPONENT_DEFS
+        from modules.core.components_manager import is_installed, COMPONENT_DEFS
 
         if component_id not in COMPONENT_DEFS:
             return jsonify({"success": False, "error": f"未知组件: {component_id}"}), 400
@@ -20290,15 +20290,15 @@ def api_component_status(component_id: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-from deployment_hooks import start_background_workers, wire_internal_runner  # noqa: E402
+from modules.core.deployment_hooks import start_background_workers, wire_internal_runner  # noqa: E402
 
 wire_internal_runner(app, _run_case_worker_sync)
 start_background_workers()
 
 try:
-    from desktop_startup import mark_app_ready, schedule_deferred_gateway_boot
+    from modules.desktop.desktop_startup import mark_app_ready, schedule_deferred_gateway_boot
 
-    if __import__("desktop_startup", fromlist=["desktop_lazy_gateway_boot"]).desktop_lazy_gateway_boot():
+    if __import__("modules.desktop.desktop_startup", fromlist=["desktop_lazy_gateway_boot"]).desktop_lazy_gateway_boot():
         schedule_deferred_gateway_boot()
     else:
         mark_app_ready()

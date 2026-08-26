@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from desktop_intelligent_api import DesktopAgent, get_agent, run
+from modules.desktop.desktop_intelligent_api import DesktopAgent, get_agent, run
 
 
 def example_1_basic_usage():

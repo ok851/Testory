@@ -12,7 +12,7 @@ from ai_modules.agent_teams.sdk_bridge import (
     assert_five_roles_in_spec,
 )
 from ai_modules.agent_teams.team_runner import run_with_injected_execute
-from desktop_env_config import (
+from modules.desktop.desktop_env_config import (
     load_app_alias_specs,
     probe_app_alias,
     save_user_alias,

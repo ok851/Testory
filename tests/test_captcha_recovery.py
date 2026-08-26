@@ -3,8 +3,8 @@
 
 import pytest
 
-from captcha_engine import captcha_auto_refresh_enabled, captcha_solve_attempts, captcha_total_solve_slots
-from captcha_recovery import CaptchaManualRequiredError, run_captcha_with_recovery, save_captcha_failure_screenshot
+from modules.web.captcha_engine import captcha_auto_refresh_enabled, captcha_solve_attempts, captcha_total_solve_slots
+from modules.web.captcha_recovery import CaptchaManualRequiredError, run_captcha_with_recovery, save_captcha_failure_screenshot
 
 
 def test_captcha_manual_required_error():

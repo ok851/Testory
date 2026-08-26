@@ -6,7 +6,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
-from logger import uat_logger
+from modules.core.logger import uat_logger
 
 from ai_modules.code_intel.task_store import (
     create_queued_task,
@@ -325,7 +325,7 @@ def process_code_change(
 
     if ci_run_id and at_risk:
         try:
-            from ci_adapter import get_run, is_terminal_status
+            from modules.integration.ci_adapter import get_run, is_terminal_status
 
             run_rec = get_run(str(ci_run_id))
             if run_rec and is_terminal_status(run_rec.get("status")):
@@ -368,7 +368,7 @@ def attach_heal_proposals_for_run(
 ) -> Dict[str, Any]:
     """在 CI run 终态后补建 heal 提案（供轮询或自动钩子）。"""
     from ai_modules.code_intel.heal_bridge import build_heal_proposals_from_run_audited
-    from ci_adapter import get_run, is_terminal_status
+    from modules.integration.ci_adapter import get_run, is_terminal_status
 
     rec = get_task(task_id)
     if not rec:

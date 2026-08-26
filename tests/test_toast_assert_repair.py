@@ -1,6 +1,6 @@
 """toast/message 泛化断言修复与 pipe 预期匹配。"""
 
-from ai_page_probe import (
+from modules.ai.ai_page_probe import (
     page_text_matches_assert_expected,
     repair_message_toast_assert_step_inplace,
     split_assert_expected_alternatives,

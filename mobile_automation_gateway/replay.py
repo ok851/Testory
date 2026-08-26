@@ -14,9 +14,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from mobile_automation import prepare_mobile_step
+from modules.mobile.mobile_automation import prepare_mobile_step
 from mobile_automation_gateway import plugin_rpc
-from mobile_replay_context import (
+from modules.mobile.mobile_replay_context import (
     extract_context_package,
     infer_prepare_context,
     is_skippable_package,
@@ -45,7 +45,7 @@ def _save_screenshot(data: bytes, udid: str, step_index: int) -> str:
 
 
 def _wait_after_action_ms() -> int:
-    from mobile_env_config import mobile_wait_after_action_ms
+    from modules.mobile.mobile_env_config import mobile_wait_after_action_ms
 
     return mobile_wait_after_action_ms()
 
@@ -132,7 +132,7 @@ def _execute_vision_step(udid: str, step: Dict[str, Any], *, step_index: int) ->
             png, err, w, h = _capture_device_png(udid)
             if not png:
                 return {"status": "error", "error": f"截图失败: {err}", "action": action}
-            from ai_vision_insight import vision_assert
+            from modules.ai.ai_vision_insight import vision_assert
 
             if action == "assert_vision":
                 ok, detail = vision_assert(png, locate)
@@ -163,7 +163,7 @@ def _execute_vision_step(udid: str, step: Dict[str, Any], *, step_index: int) ->
                     "error": f"视觉等待超时: {locate[:60]}",
                 }
             if action == "extract_vision":
-                from ai_vision_insight import vision_extract
+                from modules.ai.ai_vision_insight import vision_extract
 
                 text = vision_extract(png, locate)
                 return {
@@ -213,7 +213,7 @@ def replay_mobile_steps(
         return {"success": False, "error": msg}
 
     try:
-        from mobile_adb_control import adb_press_home
+        from modules.mobile.mobile_adb_control import adb_press_home
 
         # 回放前退回桌面，避免助手 Activity 遮挡目标应用（设备端 RunSession 也会执行）。
         adb_press_home(udid)
@@ -224,7 +224,7 @@ def replay_mobile_steps(
     ctx_pkg, ctx_required = infer_prepare_context(steps)
     if ctx_pkg and not is_skippable_package(ctx_pkg):
         try:
-            from mobile_adb_control import adb_get_foreground_package, adb_launch_app
+            from modules.mobile.mobile_adb_control import adb_get_foreground_package, adb_launch_app
 
             if adb_get_foreground_package(udid) != ctx_pkg:
                 adb_launch_app(udid, ctx_pkg, wait_foreground=True, timeout_sec=10.0)

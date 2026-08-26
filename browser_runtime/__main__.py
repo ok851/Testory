@@ -13,7 +13,7 @@ try:
     from dotenv import load_dotenv
 
     try:
-        from install_paths import resolve_install_root
+        from modules.core.install_paths import resolve_install_root
 
         _root = resolve_install_root()
     except ImportError:

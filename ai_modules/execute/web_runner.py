@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from logger import uat_logger
+from modules.core.logger import uat_logger
 
 
 # ---------------------------------------------------------------------------
@@ -584,7 +584,7 @@ def execute_single_web_step(
     默认失败：缺 URL/选择器不得软跳过当绿；显式 allow_skip 仅允许空导航，
     不得用于空 selector（Y3）。
     """
-    from auth_batch_helpers import step_allows_skip
+    from modules.auth.auth_batch_helpers import step_allows_skip
 
     action = (step.get("action") or "").strip().lower()
     sel = (step.get("selector") or step.get("selector_value", "") or "").strip()

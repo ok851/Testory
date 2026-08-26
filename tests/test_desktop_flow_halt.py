@@ -8,20 +8,20 @@ import unittest
 
 class TestParseKeyCombo(unittest.TestCase):
     def test_ctrl_f_splits(self):
-        from windows_desktop_tools import _parse_key_combo
+        from modules.desktop.windows_desktop_tools import _parse_key_combo
 
         self.assertEqual(_parse_key_combo("Ctrl+F"), ["ctrl", "f"])
         self.assertEqual(_parse_key_combo("ctrl+shift+esc"), ["ctrl", "shift", "esc"])
 
     def test_pywinauto_caret_f(self):
-        from windows_desktop_tools import _parse_key_combo
+        from modules.desktop.windows_desktop_tools import _parse_key_combo
 
         self.assertEqual(_parse_key_combo("^f"), ["^f"])
 
 
 class TestPickSearchCandidate(unittest.TestCase):
     def test_prefers_exact_search(self):
-        from windows_desktop_tools import _pick_search_uia_candidate
+        from modules.desktop.windows_desktop_tools import _pick_search_uia_candidate
 
         cands = [
             {"name": "标签页搜索", "score": 0.98, "x": 1, "y": 1},
@@ -32,7 +32,7 @@ class TestPickSearchCandidate(unittest.TestCase):
         self.assertEqual(picked.get("name"), "搜索")
 
     def test_falls_back_to_user_search(self):
-        from windows_desktop_tools import _pick_search_uia_candidate
+        from modules.desktop.windows_desktop_tools import _pick_search_uia_candidate
 
         cands = [
             {"name": "标签页搜索", "score": 0.99},
@@ -44,7 +44,7 @@ class TestPickSearchCandidate(unittest.TestCase):
 
 class TestDesktopToolFailed(unittest.TestCase):
     def test_success_false(self):
-        from ai_chat_tool_loop import _desktop_tool_failed
+        from modules.ai.ai_chat_tool_loop import _desktop_tool_failed
 
         self.assertTrue(_desktop_tool_failed(json.dumps({"success": False, "error": "x"})))
         self.assertFalse(_desktop_tool_failed(json.dumps({"success": True})))
@@ -53,14 +53,14 @@ class TestDesktopToolFailed(unittest.TestCase):
 
 class TestDesktopFlowHardStop(unittest.TestCase):
     def test_should_stop_reads_halt_flag(self):
-        from ai_chat_tool_loop import _desktop_flow_should_stop
+        from modules.ai.ai_chat_tool_loop import _desktop_flow_should_stop
 
         self.assertFalse(_desktop_flow_should_stop({}))
         self.assertFalse(_desktop_flow_should_stop({"failed": True}))
         self.assertTrue(_desktop_flow_should_stop({"desktop_flow_halted": True}))
 
     def test_fail_stop_message_forbids_continue(self):
-        from ai_chat_tool_loop import _desktop_fail_stop_message
+        from modules.ai.ai_chat_tool_loop import _desktop_fail_stop_message
 
         meta: dict = {}
         msg = _desktop_fail_stop_message(
@@ -73,7 +73,7 @@ class TestDesktopFlowHardStop(unittest.TestCase):
         self.assertNotIn("做一次新动作", msg)
 
     def test_halt_user_facing(self):
-        from ai_chat_tool_loop import _desktop_halt_user_facing
+        from modules.ai.ai_chat_tool_loop import _desktop_halt_user_facing
 
         text = _desktop_halt_user_facing(
             "windows_type_text",
@@ -85,14 +85,14 @@ class TestDesktopFlowHardStop(unittest.TestCase):
 
 class TestPreferOuterDesktopTools(unittest.TestCase):
     def test_export(self):
-        from ai_chat_tool_loop import prefer_outer_desktop_tools
+        from modules.ai.ai_chat_tool_loop import prefer_outer_desktop_tools
 
         self.assertTrue(prefer_outer_desktop_tools(platform_type="desktop"))
 
 
 class TestSearchArmFocus(unittest.TestCase):
     def test_arm_and_reclick_coords(self):
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             arm_search_input_focus,
             clear_search_input_focus,
             get_desktop_target,
@@ -115,7 +115,7 @@ class TestSearchArmFocus(unittest.TestCase):
 
 class TestOcrFuzzySearch(unittest.TestCase):
     def test_matches_garbled_search(self):
-        from windows_desktop_tools import _ocr_text_matches_term
+        from modules.desktop.windows_desktop_tools import _ocr_text_matches_term
 
         self.assertTrue(_ocr_text_matches_term("搜索", "搜索"))
         self.assertTrue(_ocr_text_matches_term("搜素", "搜索"))
@@ -125,7 +125,7 @@ class TestOcrFuzzySearch(unittest.TestCase):
 
 class TestGeometryWechatSearch(unittest.TestCase):
     def test_geometry_requires_wechat_title(self):
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             _geometry_wechat_search_target,
             clear_desktop_target,
             set_desktop_target,
@@ -138,7 +138,7 @@ class TestGeometryWechatSearch(unittest.TestCase):
     def test_geometry_point_inside_window(self):
         from unittest.mock import patch
         import ctypes
-        from windows_desktop_tools import (
+        from modules.desktop.windows_desktop_tools import (
             _geometry_wechat_search_target,
             clear_desktop_target,
             set_desktop_target,
@@ -168,7 +168,7 @@ class TestGeometryWechatSearch(unittest.TestCase):
 
 class TestPendingContactParse(unittest.TestCase):
     def test_parse_wechat_send_message(self):
-        from ai_chat_tool_loop import _pending_contact_from_user_message
+        from modules.ai.ai_chat_tool_loop import _pending_contact_from_user_message
 
         c = _pending_contact_from_user_message(
             '帮我打开电脑中已经在运行的微信，并给“舒琪宝宝大王”发送消息“你好，我是AI”'

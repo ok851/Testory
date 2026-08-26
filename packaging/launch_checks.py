@@ -120,7 +120,9 @@ def check_layout(root: Path) -> List[str]:
 
     browsers = root / "playwright-browsers"
     if not browsers.is_dir():
-        has_comp_manager = (root / "components_manager.py").is_file()
+        has_comp_manager = (root / "modules" / "core" / "components_manager.py").is_file() or (
+            root / "components_manager.py"
+        ).is_file()
         if has_comp_manager:
             pass
         else:

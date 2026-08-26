@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from step_executor import case_steps_include_desktop, case_steps_include_web
+from modules.execution.step_executor import case_steps_include_desktop, case_steps_include_web
 
 
 class TestCaseStepsLayer(unittest.TestCase):

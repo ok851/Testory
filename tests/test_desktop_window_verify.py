@@ -1,9 +1,9 @@
 """桌面窗口级 verify/attach 不应触发 visual 废弃逻辑。"""
 import pytest
 
-from desktop_automation import DesktopAutomation
-from desktop_env_config import prepare_desktop_step
-from desktop_visual_engine import is_legacy_desktop_step
+from modules.desktop.desktop_automation import DesktopAutomation
+from modules.desktop.desktop_env_config import prepare_desktop_step
+from modules.desktop.desktop_visual_engine import is_legacy_desktop_step
 
 
 def test_window_verify_not_legacy():
@@ -48,7 +48,7 @@ def test_prepare_desktop_spec_title_contains_to_regex():
     reason="Windows only",
 )
 def test_verify_window_exists_smoke():
-    from desktop_runtime import desktop_runtime_available
+    from modules.desktop.desktop_runtime import desktop_runtime_available
 
     if not desktop_runtime_available():
         pytest.skip("desktop runtime not available")
@@ -62,7 +62,7 @@ def test_verify_window_exists_smoke():
     })
     spec = step.get("desktop_spec") if isinstance(step.get("desktop_spec"), dict) else {}
     if not spec:
-        from desktop_runtime import parse_desktop_spec
+        from modules.desktop.desktop_runtime import parse_desktop_spec
         spec = parse_desktop_spec(step.get("desktop_spec"))
     result = auto._verify_window_exists(step, spec, action="verify")
     assert result.get("verified") is True

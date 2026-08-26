@@ -1,6 +1,6 @@
 """License 双层绑定字段测试。"""
-from instance_identity import get_machine_id
-from license_manager import LicenseManager, LicenseType
+from modules.core.instance_identity import get_machine_id
+from modules.auth.license_manager import LicenseManager, LicenseType
 
 def test_generate_with_binding_fields():
     lm = LicenseManager()

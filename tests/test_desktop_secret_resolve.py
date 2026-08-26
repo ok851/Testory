@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 class TestDesktopSecretResolve(unittest.TestCase):
     def test_adopts_secret_that_passes_probe(self):
-        from desktop_service_bootstrap import resolve_desktop_gateway_secret
+        from modules.desktop.desktop_service_bootstrap import resolve_desktop_gateway_secret
 
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)

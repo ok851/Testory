@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from desktop_shell_application import (
+from modules.desktop.desktop_shell_application import (
     ShellComTarget,
     _match_shell_item_name,
     execute_shell_application_action,

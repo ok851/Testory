@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from mobile_replay_context import (
+from modules.mobile.mobile_replay_context import (
     infer_prepare_context,
     is_coordinate_step,
     is_skippable_package,

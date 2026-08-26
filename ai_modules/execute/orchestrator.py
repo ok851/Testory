@@ -415,7 +415,7 @@ def _execute_ui_stage(
             return result, extracted
 
         if layer == "web":
-            from browser_manager import get_page
+            from modules.web.browser_manager import get_page
             from .web_runner import execute_single_web_step
 
             page = get_page()
@@ -478,7 +478,7 @@ def _execute_ui_stage(
                         result["ok_assert"] = True
 
         elif layer in ("mobile", "android", "ios"):
-            from mobile_automation import validate_mobile_step_result  # iOS: validate_mobile_step_result also handles iOS results
+            from modules.mobile.mobile_automation import validate_mobile_step_result  # iOS: validate_mobile_step_result also handles iOS results
 
             skill = str(
                 resolved_stage.get("skill")
@@ -494,7 +494,7 @@ def _execute_ui_stage(
                         break
             # 专用技能：手机本机提取验证码 → 写入 sms_otp
             if skill in ("extract_otp", "mobile_extract_otp", "otp"):
-                from mobile_cross_end_tools import mobile_extract_otp
+                from modules.mobile.mobile_cross_end_tools import mobile_extract_otp
 
                 timeout_sec = float(
                     resolved_stage.get("await_timeout_sec")
@@ -569,7 +569,7 @@ def _execute_ui_stage(
                     use_device_await = bool(await_flag)
 
                 if use_device_await:
-                    from mobile_sync_store import (
+                    from modules.mobile.mobile_sync_store import (
                         enqueue_run_job,
                         wait_for_run_job,
                     )
@@ -654,7 +654,7 @@ def _execute_ui_stage(
                             or "MOBILE_DEVICE_RUN_FAILED"
                         )
                 else:
-                    from mobile_executor import get_mobile_executor
+                    from modules.mobile.mobile_executor import get_mobile_executor
 
                     executor = get_mobile_executor()
                     step_results = executor.execute_steps(steps)
@@ -698,7 +698,7 @@ def _execute_ui_stage(
                                     result["ok_assert"] = True
 
         elif layer == "desktop":
-            from step_executor import validate_desktop_step_result
+            from modules.execution.step_executor import validate_desktop_step_result
             from ai_modules.execute.desktop_preflight import check_desktop_preflight
             from ai_modules.optimize.desktop_runtime_heal import (
                 run_desktop_step_with_optional_heal,
@@ -872,7 +872,7 @@ def _execute_hitl_stage(
     as_dedicated_layer: bool = True,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """执行 HITL 阻塞门禁。超时/取消 → ok_assert=False。事件写入 hitl_events 供 Trace。"""
-    from agent_hitl import get_hitl_events, hitl_outcome_from_events
+    from modules.ai.agent_hitl import get_hitl_events, hitl_outcome_from_events
 
     prompt, timeout_s, hint = _parse_hitl_stage_config(stage)
     stage_id = stage.get("id") or "hitl"
@@ -996,7 +996,7 @@ def execute_cross_end_plan(
         return _audit(out)
 
     try:
-        from execution_lock import ExecutionLockError, execution_guard
+        from modules.execution.execution_lock import ExecutionLockError, execution_guard
     except ImportError:
         return _audit({
             "success": False,

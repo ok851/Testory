@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from logger import uat_logger
+from modules.core.logger import uat_logger
 
 from ai_modules.code_intel.frontend_parser import (
     inventory_to_prompt_block,
@@ -260,9 +260,9 @@ def generate_reliable_cases_from_frontend(
 
     if use_llm and (inventory.get("interactive_nodes") or diff):
         try:
-            from ai_selector_recovery import _extract_json_obj
-            from ai_local_inference import local_ai_service
-            from ai_multi_provider import dispatch_chat
+            from modules.ai.ai_selector_recovery import _extract_json_obj
+            from modules.ai.ai_local_inference import local_ai_service
+            from modules.ai.ai_multi_provider import dispatch_chat
             from ai_modules.generate.design_from_requirements import _normalize_draft
             from ai_modules.code_intel.policy import llm_timeout_s
             import concurrent.futures

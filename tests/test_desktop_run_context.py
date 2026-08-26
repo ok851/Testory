@@ -1,8 +1,8 @@
 """桌面跨步骤执行上下文贯通测试。"""
 import json
 
-from desktop_env_config import prepare_desktop_step
-from desktop_run_context import (
+from modules.desktop.desktop_env_config import prepare_desktop_step
+from modules.desktop.desktop_run_context import (
     DesktopRunContext,
     enrich_desktop_step_with_run_context,
     reset_desktop_run_context,
@@ -47,7 +47,7 @@ def test_prepare_attach_from_description_only():
 
 def test_context_updates_after_launch():
     reset_desktop_run_context()
-    from desktop_run_context import get_desktop_run_context
+    from modules.desktop.desktop_run_context import get_desktop_run_context
 
     step = {"action": "launch_app", "input_value": "control"}
     result = {"hwnd": 999, "window_title": "控制面板"}

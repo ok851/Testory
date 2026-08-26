@@ -8,7 +8,7 @@ import os
 import tempfile
 
 from database import Database
-from test_report import TestReportGenerator
+from modules.integration.test_report import TestReportGenerator
 from ai_modules.execute.cross_end_run_audit import build_audit_record, persist_to_database
 
 

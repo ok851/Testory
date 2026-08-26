@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from ai_page_probe import (
+from modules.ai.ai_page_probe import (
     apply_ai_assert_grounding_to_plan,
     extract_assert_expected_fragments,
     _ground_single_assert_step,
@@ -47,7 +47,7 @@ def test_ground_assert_to_page_text_contains():
 
 
 def test_normalize_contains_alias():
-    from auth_batch_helpers import normalize_assert_compare_type
+    from modules.auth.auth_batch_helpers import normalize_assert_compare_type
 
     assert normalize_assert_compare_type("contains", selector_value="#x", input_value="err") == "text_contains"
     assert (

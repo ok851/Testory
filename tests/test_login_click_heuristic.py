@@ -2,8 +2,8 @@
 
 import os
 
-from ai_page_probe import heuristic_repair_plan_selectors_from_registry
-from playwright_automation import PlaywrightAutomation
+from modules.ai.ai_page_probe import heuristic_repair_plan_selectors_from_registry
+from modules.web.playwright_automation import PlaywrightAutomation
 
 
 def test_is_generic_login_submit_selector() -> None:

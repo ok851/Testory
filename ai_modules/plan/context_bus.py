@@ -177,7 +177,7 @@ class CrossEndContext:
     ) -> Dict[str, Any]:
         extracted: Dict[str, Any] = {}
         try:
-            from desktop_ocr import extract_text
+            from modules.desktop.desktop_ocr import extract_text
             raw = extract_text(screenshot_path)
         except Exception:
             return extracted
@@ -198,7 +198,7 @@ class CrossEndContext:
         keyword: str,
     ) -> Optional[str]:
         try:
-            from desktop_ocr import find_text_location, engine_name
+            from modules.desktop.desktop_ocr import find_text_location, engine_name
             loc = find_text_location(screenshot_path, keyword)
             return f"found@{loc}" if loc else None
         except Exception:

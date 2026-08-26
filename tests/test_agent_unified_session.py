@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def test_session_vars_shared_across_logical_entries():
-    from agent_unified_session import (
+    from modules.ai.agent_unified_session import (
         get_or_create_session,
         merge_cross_end_vars,
         reset_sessions_for_tests,
@@ -20,7 +20,7 @@ def test_session_vars_shared_across_logical_entries():
 
 
 def test_chat_schemas_respect_connected_hands():
-    from ai_chat_tool_loop import chat_tool_schemas
+    from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
     only_phone = chat_tool_schemas(
         allow_hermes=False,
@@ -46,7 +46,7 @@ def test_chat_schemas_respect_connected_hands():
 
 
 def test_list_paired_devices_helper():
-    import mobile_sync_store as mss
+    from modules.mobile import mobile_sync_store as mss
 
     with mss._LOCK:
         mss._DEVICE_TOKENS.clear()

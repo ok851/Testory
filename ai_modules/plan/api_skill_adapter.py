@@ -5,7 +5,7 @@ import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from api_http_helper import execute_api_spec_sync, get_json_path_value
+from modules.integration.api_http_helper import execute_api_spec_sync, get_json_path_value
 
 
 _VAR_PATTERN = re.compile(r"\{\{(.+?)\}\}")

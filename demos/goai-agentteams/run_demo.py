@@ -147,7 +147,7 @@ def simulate_execute(variant: str = "consistent") -> Any:
 
 def _run_hitl_stage(variant: str, stage: Dict[str, Any]) -> Dict[str, Any]:
     """真实调用 HitlGate（非假常量）。"""
-    from agent_hitl import (
+    from modules.ai.agent_hitl import (
         get_hitl_events,
         hitl_outcome_from_events,
         open_hitl_gate,
@@ -215,7 +215,7 @@ def _run_hitl_stage(variant: str, stage: Dict[str, Any]) -> Dict[str, Any]:
 
 def _run_desktop_stage(variant: str, stage: Dict[str, Any]) -> Dict[str, Any]:
     """用生产闸门 validate_desktop_step_result 校验模拟步骤（不启真机）。"""
-    from step_executor import validate_desktop_step_result
+    from modules.execution.step_executor import validate_desktop_step_result
 
     t0 = time.perf_counter()
     action = "get_text"
@@ -307,7 +307,7 @@ def simulate_guards_execute(variant: str = "pass") -> Any:
     """门禁故事：HITL / Desktop 闸门 / RiskGuard 真实接线。"""
 
     def _execute(plan: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
-        from agent_hitl import reset_hitl_state_for_tests
+        from modules.ai.agent_hitl import reset_hitl_state_for_tests
         from ai_modules.security.risk_guard import reset_risk_guard_for_tests
 
         reset_hitl_state_for_tests()

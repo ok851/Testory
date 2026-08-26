@@ -7,7 +7,7 @@ import unittest
 
 class TestUnifiedHermesSession(unittest.TestCase):
     def test_context_bus_vars(self):
-        from agent_task_context import new_task_context, get_task_context
+        from modules.ai.agent_task_context import new_task_context, get_task_context
 
         ctx = new_task_context(active_surface="auto")
         ctx.set_var("order_id", "42")
@@ -16,7 +16,7 @@ class TestUnifiedHermesSession(unittest.TestCase):
         self.assertIn("task_id=", ctx.instruction_prefix())
 
     def test_capability_registry(self):
-        from agent_capability_registry import snapshot_capabilities, preflight_for_task
+        from modules.ai.agent_capability_registry import snapshot_capabilities, preflight_for_task
 
         snap = snapshot_capabilities()
         self.assertIn("capabilities", snap)
@@ -26,7 +26,7 @@ class TestUnifiedHermesSession(unittest.TestCase):
         self.assertTrue(ok)
 
     def test_skill_hints_auto(self):
-        from hermes_skill_hints import build_explore_instruction, skills_from_registry
+        from modules.hermes.hermes_skill_hints import build_explore_instruction, skills_from_registry
 
         skills = skills_from_registry("auto")
         self.assertTrue(any(s.startswith("testory-") for s in skills))
@@ -34,14 +34,14 @@ class TestUnifiedHermesSession(unittest.TestCase):
         self.assertIn("skill_view", text)
 
     def test_hermes_allowed_android_not_crash(self):
-        from ai_chat_tool_loop import hermes_execute_allowed
+        from modules.ai.ai_chat_tool_loop import hermes_execute_allowed
 
         # 无设备时应为 False，但不抛异常
         self.assertIsInstance(hermes_execute_allowed(platform_type="android"), bool)
         self.assertTrue(hermes_execute_allowed(platform_type="auto") or True)
 
     def test_hitl_detect(self):
-        from agent_hitl import looks_like_hitl_needed
+        from modules.ai.agent_hitl import looks_like_hitl_needed
 
         self.assertTrue(looks_like_hitl_needed("NEED_USER_ACTION:验证码"))
         self.assertTrue(looks_like_hitl_needed("请输入验证码"))
@@ -59,7 +59,7 @@ class TestUnifiedHermesSession(unittest.TestCase):
         )
 
     def test_screen_observer_sync_api(self):
-        from screen_tools import get_screen_description, get_screen_text
+        from modules.ai.screen_tools import get_screen_description, get_screen_text
 
         self.assertTrue(callable(get_screen_text))
         self.assertTrue(callable(get_screen_description))
@@ -71,8 +71,8 @@ class TestUnifiedHermesSession(unittest.TestCase):
         self.assertTrue(p.is_file())
 
     def test_auth_fatal_detect(self):
-        from ai_chat_tool_loop import _auth_fatal_user_message, _result_is_auth_fatal
-        from hermes_gateway_client import HermesGatewayClient, _is_corrupt_session_error
+        from modules.ai.ai_chat_tool_loop import _auth_fatal_user_message, _result_is_auth_fatal
+        from modules.hermes.hermes_gateway_client import HermesGatewayClient, _is_corrupt_session_error
 
         self.assertTrue(
             _result_is_auth_fatal("Error code: 401 - Missing Authentication header")
@@ -93,7 +93,7 @@ class TestUnifiedHermesSession(unittest.TestCase):
         self.assertIn("instruction 为空", out)
 
     def test_desktop_auth_hint_no_secret_leak(self):
-        from hermes_skill_hints import build_explore_instruction, desktop_gateway_auth_hint
+        from modules.hermes.hermes_skill_hints import build_explore_instruction, desktop_gateway_auth_hint
 
         hint = desktop_gateway_auth_hint()
         self.assertIn("MCP", hint)

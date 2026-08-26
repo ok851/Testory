@@ -9,7 +9,7 @@ import pytest
 
 
 def test_parse_otp_from_chinese_sms():
-    from mobile_cross_end_tools import parse_otp_from_text
+    from modules.mobile.mobile_cross_end_tools import parse_otp_from_text
 
     assert parse_otp_from_text("【测试】您的验证码是 384921，5分钟内有效") == "384921"
     assert parse_otp_from_text("code: 112233") == "112233"
@@ -17,7 +17,7 @@ def test_parse_otp_from_chinese_sms():
 
 
 def test_mobile_extract_otp_uses_mock_env(monkeypatch):
-    from mobile_cross_end_tools import mobile_extract_otp
+    from modules.mobile.mobile_cross_end_tools import mobile_extract_otp
 
     monkeypatch.setenv("MOBILE_OTP_MOCK", "654321")
     out = mobile_extract_otp(timeout_sec=5)
@@ -28,7 +28,7 @@ def test_mobile_extract_otp_uses_mock_env(monkeypatch):
 
 
 def test_mobile_extract_otp_awaits_device_job(monkeypatch):
-    from mobile_cross_end_tools import mobile_extract_otp
+    from modules.mobile.mobile_cross_end_tools import mobile_extract_otp
 
     monkeypatch.delenv("MOBILE_OTP_MOCK", raising=False)
 
@@ -63,7 +63,7 @@ def test_mobile_extract_otp_awaits_device_job(monkeypatch):
 
 
 def test_ensure_mobile_hand_ready_fails_without_pair():
-    from mobile_cross_end_tools import ensure_mobile_hand_ready, mobile_run_steps
+    from modules.mobile.mobile_cross_end_tools import ensure_mobile_hand_ready, mobile_run_steps
 
     with patch(
         "mobile_sync_store.list_paired_devices_for_user",
@@ -81,7 +81,7 @@ def test_ensure_mobile_hand_ready_fails_without_pair():
 
 
 def test_ensure_mobile_hand_ready_fails_when_poller_stale(monkeypatch):
-    from mobile_cross_end_tools import ensure_mobile_hand_ready
+    from modules.mobile.mobile_cross_end_tools import ensure_mobile_hand_ready
 
     monkeypatch.delenv("MOBILE_OTP_MOCK", raising=False)
     monkeypatch.delenv("MOBILE_HAND_SKIP_POLLER", raising=False)
@@ -98,7 +98,7 @@ def test_ensure_mobile_hand_ready_fails_when_poller_stale(monkeypatch):
 
 
 def test_ensure_mobile_hand_ready_ok_when_poller_alive(monkeypatch):
-    from mobile_cross_end_tools import ensure_mobile_hand_ready
+    from modules.mobile.mobile_cross_end_tools import ensure_mobile_hand_ready
 
     monkeypatch.delenv("MOBILE_OTP_MOCK", raising=False)
     with patch(
@@ -114,7 +114,7 @@ def test_ensure_mobile_hand_ready_ok_when_poller_alive(monkeypatch):
 
 def test_touch_device_poll_marks_alive(tmp_path, monkeypatch):
     import time
-    import mobile_sync_store as store
+    from modules.mobile import mobile_sync_store as store
 
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     store._STORE_PATH = None
@@ -133,7 +133,7 @@ def test_touch_device_poll_marks_alive(tmp_path, monkeypatch):
 
 def test_run_job_persists_across_memory_clear(tmp_path, monkeypatch):
     """模拟双进程：enqueue 落盘后清空内存，pop 仍能领到。"""
-    import mobile_sync_store as store
+    from modules.mobile import mobile_sync_store as store
 
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     store._STORE_PATH = None
@@ -167,7 +167,7 @@ def test_run_job_persists_across_memory_clear(tmp_path, monkeypatch):
 
 def test_pop_fallback_ignores_stale_device_binding(tmp_path, monkeypatch):
     """历史 device_id 绑错时，同用户 agent 任务仍可被当前手机领取。"""
-    import mobile_sync_store as store
+    from modules.mobile import mobile_sync_store as store
 
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     store._STORE_PATH = None
@@ -193,8 +193,8 @@ def test_pop_fallback_ignores_stale_device_binding(tmp_path, monkeypatch):
 def test_enqueue_mobile_job_strips_device_id(tmp_path, monkeypatch):
     import time
 
-    from mobile_cross_end_tools import enqueue_mobile_job
-    import mobile_sync_store as store
+    from modules.mobile.mobile_cross_end_tools import enqueue_mobile_job
+    from modules.mobile import mobile_sync_store as store
 
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     store._STORE_PATH = None
@@ -219,7 +219,7 @@ def test_enqueue_mobile_job_strips_device_id(tmp_path, monkeypatch):
 
 
 def test_dispatch_cross_end_tool_desktop_alias():
-    from mobile_cross_end_tools import DESKTOP_ALIAS_TOOL_NAMES, MOBILE_TOOL_NAMES, dispatch_cross_end_tool
+    from modules.mobile.mobile_cross_end_tools import DESKTOP_ALIAS_TOOL_NAMES, MOBILE_TOOL_NAMES, dispatch_cross_end_tool
 
     assert "desktop_click" in DESKTOP_ALIAS_TOOL_NAMES
     assert "mobile_extract_otp" in MOBILE_TOOL_NAMES
@@ -229,7 +229,7 @@ def test_dispatch_cross_end_tool_desktop_alias():
 
 
 def test_cross_end_tool_schemas_include_mobile_and_desktop():
-    from mobile_cross_end_tools import cross_end_tool_schemas
+    from modules.mobile.mobile_cross_end_tools import cross_end_tool_schemas
 
     names = {s["function"]["name"] for s in cross_end_tool_schemas()}
     assert "mobile_extract_otp" in names
@@ -238,7 +238,7 @@ def test_cross_end_tool_schemas_include_mobile_and_desktop():
 
 
 def test_chat_tool_schemas_includes_cross_end():
-    from ai_chat_tool_loop import chat_tool_schemas
+    from modules.ai.ai_chat_tool_loop import chat_tool_schemas
 
     schemas = chat_tool_schemas(
         allow_hermes=False,
@@ -252,7 +252,7 @@ def test_chat_tool_schemas_includes_cross_end():
 
 
 def test_enqueue_run_job_stores_kind():
-    from mobile_sync_store import enqueue_run_job, get_run_job
+    from modules.mobile.mobile_sync_store import enqueue_run_job, get_run_job
 
     jid = enqueue_run_job(
         case_id=0,
@@ -268,8 +268,8 @@ def test_enqueue_run_job_stores_kind():
 
 def test_pop_pending_job_kind_filter_does_not_swallow_run_steps(tmp_path, monkeypatch):
     """冒烟缺陷回归：取码轮询不得把 run_steps 标成 running 后丢弃。"""
-    import mobile_sync_store as mss
-    from mobile_sync_store import (
+    from modules.mobile import mobile_sync_store as mss
+    from modules.mobile.mobile_sync_store import (
         enqueue_run_job,
         get_run_job,
         pop_pending_run_for_device,
@@ -321,7 +321,7 @@ def test_demo_otp_plan_json_loads():
 
 
 def test_normalize_device_step_expands_mobile_spec_string():
-    from mobile_sync_store import normalize_device_step
+    from modules.mobile.mobile_sync_store import normalize_device_step
 
     step = {
         "action": "assert",
@@ -335,7 +335,7 @@ def test_normalize_device_step_expands_mobile_spec_string():
 
 
 def test_normalize_device_step_coerces_launch_app_to_open_app():
-    from mobile_sync_store import normalize_device_step
+    from modules.mobile.mobile_sync_store import normalize_device_step
 
     out = normalize_device_step(
         {"action": "start_app", "description": "打开QQ应用"}
@@ -353,7 +353,7 @@ def test_normalize_device_step_coerces_launch_app_to_open_app():
 
 
 def test_normalize_device_step_find_and_tap_to_tap():
-    from mobile_sync_store import normalize_device_step
+    from modules.mobile.mobile_sync_store import normalize_device_step
 
     out = normalize_device_step(
         {"action": "find_and_tap", "description": "点击登录", "text": "登录"}
@@ -364,7 +364,7 @@ def test_normalize_device_step_find_and_tap_to_tap():
 
 
 def test_normalize_tap_from_description_only():
-    from mobile_sync_store import normalize_device_step
+    from modules.mobile.mobile_sync_store import normalize_device_step
 
     out = normalize_device_step({"action": "tap", "description": "登录"})
     assert out["action"] == "tap"
@@ -380,7 +380,7 @@ def test_normalize_tap_from_description_only():
 
 
 def test_normalize_input_moves_phone_to_input_value():
-    from mobile_sync_store import normalize_device_step
+    from modules.mobile.mobile_sync_store import normalize_device_step
 
     out = normalize_device_step(
         {
@@ -397,7 +397,7 @@ def test_normalize_input_moves_phone_to_input_value():
 
 
 def test_normalize_wait_timeout_field():
-    from mobile_sync_store import normalize_device_step
+    from modules.mobile.mobile_sync_store import normalize_device_step
 
     out = normalize_device_step(
         {"action": "wait", "description": "等待QQ加载", "timeout": 5000}
@@ -407,7 +407,7 @@ def test_normalize_wait_timeout_field():
 
 
 def test_normalize_check_intent_sets_prefer_checkable():
-    from mobile_sync_store import normalize_device_step
+    from modules.mobile.mobile_sync_store import normalize_device_step
 
     out = normalize_device_step(
         {"action": "tap", "description": "勾选同意协议", "selector_value": "已阅读并同意"}
@@ -419,7 +419,7 @@ def test_normalize_check_intent_sets_prefer_checkable():
 
 
 def test_record_mobile_tool_outcome_halts_after_two_failures():
-    from ai_chat_tool_loop import _record_mobile_tool_outcome
+    from modules.ai.ai_chat_tool_loop import _record_mobile_tool_outcome
 
     meta: dict = {}
     fail = '{"success": false, "ok": false, "error": "TAP_NO_TARGET"}'
@@ -438,8 +438,8 @@ def test_record_mobile_tool_outcome_halts_after_two_failures():
 
 
 def test_busy_event_requeues_pending():
-    import mobile_sync_store as mss
-    from mobile_sync_store import append_run_events, enqueue_run_job, get_run_job, pop_pending_run_for_device
+    from modules.mobile import mobile_sync_store as mss
+    from modules.mobile.mobile_sync_store import append_run_events, enqueue_run_job, get_run_job, pop_pending_run_for_device
 
     with mss._LOCK:
         mss._RUN_JOBS.clear()
@@ -466,7 +466,7 @@ def test_busy_event_requeues_pending():
 
 
 def test_resolve_cross_end_vars_substitutes_sms_otp():
-    from ai_chat_tool_loop import _resolve_cross_end_vars
+    from modules.ai.ai_chat_tool_loop import _resolve_cross_end_vars
 
     out = _resolve_cross_end_vars(
         {"text": "验证码 {{sms_otp}}", "nested": {"v": "{{sms_otp}}"}},

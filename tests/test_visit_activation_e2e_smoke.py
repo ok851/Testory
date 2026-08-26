@@ -151,7 +151,7 @@ def test_visit_and_activation_via_flask_clients(monkeypatch, tmp_path):
 
     # 4) report_license_activation HTTP path candidates against admin_client via urlopen mock
     sys.path.insert(0, str(ROOT))
-    import platform_sync
+    from modules.core import platform_sync
 
     importlib.reload(platform_sync)
 

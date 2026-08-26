@@ -11,7 +11,7 @@ from database import Database
 
 class TestStripInventedCaseJson(unittest.TestCase):
     def test_strips_fenced_json(self):
-        from ai_chat_tool_loop import _strip_invented_case_json
+        from modules.ai.ai_chat_tool_loop import _strip_invented_case_json
 
         text = (
             "Hermes 代理未返回有效轨迹。\n\n"
@@ -38,7 +38,7 @@ class TestCreateTestCaseV2Signature(unittest.TestCase):
 
 class TestStreamEmptyMarksFailed(unittest.TestCase):
     def test_empty_no_tools_sets_failed_flags(self):
-        from ai_chat_tool_loop import _result_is_stream_empty
+        from modules.ai.ai_chat_tool_loop import _result_is_stream_empty
 
         text = json.dumps(
             {

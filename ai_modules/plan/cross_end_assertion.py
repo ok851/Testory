@@ -71,7 +71,7 @@ def _read_web_selector(spec: Dict[str, Any]) -> Tuple[Any, Optional[str]]:
     if not selector:
         return None, "UI 源缺少 selector"
     try:
-        from browser_manager import get_page
+        from modules.web.browser_manager import get_page
 
         page = get_page()
     except Exception:

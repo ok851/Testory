@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from ai_modules.execute.orchestrator import execute_cross_end_plan
-from execution_lock import ExecutionLockError
+from modules.execution.execution_lock import ExecutionLockError
 
 
 def _tiny_plan(plan_id="lock-plan"):

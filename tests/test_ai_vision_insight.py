@@ -2,10 +2,10 @@
 import os
 from pathlib import Path
 
-from ai_vision_insight import insight_enabled, parse_yes_no_first_line, wait_vision_enabled
-from ai_vision_grounding import locator_tier_vlm_enabled
-from ai_vision_local import vision_enabled
-from vision_step_report import VisionReplaySession, _friendly_step_label, vision_replay_enabled
+from modules.ai.ai_vision_insight import insight_enabled, parse_yes_no_first_line, wait_vision_enabled
+from modules.ai.ai_vision_grounding import locator_tier_vlm_enabled
+from modules.ai.ai_vision_local import vision_enabled
+from modules.ai.vision_step_report import VisionReplaySession, _friendly_step_label, vision_replay_enabled
 
 
 def test_parse_yes_no():

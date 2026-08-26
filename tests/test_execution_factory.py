@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from execution_factory import ExecutorFactory, get_executor_factory
+from modules.execution.execution_factory import ExecutorFactory, get_executor_factory
 
 
 class TestExecutionFactory(unittest.TestCase):

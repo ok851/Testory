@@ -21,10 +21,10 @@ class TestFullPipelineIntegration:
     
     def test_execution_event_flow(self):
         """Test complete execution event flow."""
-        from execution_events import ExecutionEventCollector
-        from timeline_formatter import format_timeline_event
-        from self_heal_audit import emit_heal_attempt, build_heal_audit_summary
-        from devops_review_gate import create_review_gate, approve_review_gate, apply_review_gate
+        from modules.execution.execution_events import ExecutionEventCollector
+        from modules.integration.timeline_formatter import format_timeline_event
+        from modules.integration.self_heal_audit import emit_heal_attempt, build_heal_audit_summary
+        from modules.integration.devops_review_gate import create_review_gate, approve_review_gate, apply_review_gate
         
         # 1. Create collector
         collector = ExecutionEventCollector()
@@ -99,7 +99,7 @@ class TestFullPipelineIntegration:
     
     def test_visual_baseline_integration(self):
         """Test visual baseline integration with execution."""
-        from visual_baseline_integration import (
+        from modules.ai.visual_baseline_integration import (
             evaluate_visual_capability,
             get_desktop_heal_recommendation,
         )
@@ -125,8 +125,8 @@ class TestFullPipelineIntegration:
     
     def test_db_assertion_with_audit(self):
         """Test DB assertion with audit trail."""
-        from execution_events import ExecutionEventCollector
-        from assertion_service import AssertionRequest, run_assertion
+        from modules.execution.execution_events import ExecutionEventCollector
+        from modules.execution.assertion_service import AssertionRequest, run_assertion
         import tempfile
         import sqlite3
         
@@ -185,7 +185,7 @@ class TestFullPipelineIntegration:
     
     def test_timeline_sse_format(self):
         """Test timeline SSE format for frontend."""
-        from timeline_formatter import format_timeline_event
+        from modules.integration.timeline_formatter import format_timeline_event
         
         # Test all event types
         event_types = [
@@ -216,7 +216,7 @@ class TestFullPipelineIntegration:
     
     def test_devops_review_gate_flow(self):
         """Test complete DevOps review gate flow."""
-        from devops_review_gate import (
+        from modules.integration.devops_review_gate import (
             create_review_gate,
             approve_review_gate,
             reject_review_gate,
@@ -224,7 +224,7 @@ class TestFullPipelineIntegration:
             ignore_review_gate,
             get_review_gate_summary,
         )
-        from execution_events import ExecutionEventCollector
+        from modules.execution.execution_events import ExecutionEventCollector
         
         collector = ExecutionEventCollector()
         

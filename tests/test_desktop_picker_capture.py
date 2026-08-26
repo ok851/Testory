@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """desktop_visual_picker 与 visual 步骤产物。"""
 
-from desktop_visual_picker import VISUAL_SELECTOR_TYPE, build_visual_recorded_step
+from modules.desktop.desktop_visual_picker import VISUAL_SELECTOR_TYPE, build_visual_recorded_step
 
 
 def test_build_visual_recorded_step_fields():
@@ -19,7 +19,7 @@ def test_build_visual_recorded_step_fields():
 
 
 def test_desktop_picker_available_uses_runtime(monkeypatch):
-    import desktop_picker as dp
+    from modules.desktop import desktop_picker as dp
 
     monkeypatch.setattr(dp, "_PICKER_AVAILABLE", True)
     monkeypatch.setattr(

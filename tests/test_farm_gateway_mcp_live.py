@@ -24,7 +24,7 @@ def test_farm_gateway_opt_in_resolve(tmp_path, monkeypatch):
     monkeypatch.setenv("DESKTOP_FARM_GATEWAY", "0")
     from ai_modules.enterprise.execution_farm import register_node
     from ai_modules.enterprise.gateway_resolve import resolve_desktop_gateway
-    from desktop_agent_client import desktop_agent_config, desktop_agent_enabled
+    from modules.desktop.desktop_agent_client import desktop_agent_config, desktop_agent_enabled
 
     node = register_node(name="gw", base_url="http://10.1.2.3:8766")
     _mark_online(tmp_path, node["node_id"])

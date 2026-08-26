@@ -18,12 +18,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from mobile_assistant_bundles import (
+from modules.mobile.mobile_assistant_bundles import (
     assistant_installed_on_device,
     install_testory_assistant,
     resolve_assistant_apk_path,
 )
-from mobile_device_manager import (
+from modules.mobile.mobile_device_manager import (
     adb_disconnect_device,
     capture_screenshot_png,
     check_mobile_health,
@@ -147,7 +147,7 @@ async def devices_connect(request: Request) -> Dict[str, Any]:
     info = get_device_info(udid)
     assistant_status: Dict[str, Any] = {}
     try:
-        from mobile_assistant_bundles import get_assistant_device_status
+        from modules.mobile.mobile_assistant_bundles import get_assistant_device_status
 
         assistant_status = get_assistant_device_status(udid)
     except Exception:

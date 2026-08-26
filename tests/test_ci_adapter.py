@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Phase 0c：CI 门禁映射与 JUnit 导出。"""
 
-from ci_adapter import (
+from modules.integration.ci_adapter import (
     aggregate_run_status,
     build_junit_xml,
     build_run_record_from_batch,
@@ -95,7 +95,7 @@ def test_all_success_run_green(tmp_path, monkeypatch):
 
 def test_queued_finalize_and_terminal(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
-    from ci_adapter import (
+    from modules.integration.ci_adapter import (
         create_queued_run,
         finalize_run_from_batch,
         is_terminal_status,
@@ -123,7 +123,7 @@ def test_queued_finalize_and_terminal(tmp_path, monkeypatch):
 
 def test_webhook_payload_and_delivery(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
-    from ci_adapter import (
+    from modules.integration.ci_adapter import (
         build_callback_payload,
         build_run_record_from_batch,
         deliver_run_callback,
@@ -155,20 +155,20 @@ def test_webhook_payload_and_delivery(tmp_path, monkeypatch):
         return _Resp()
 
     monkeypatch.setattr("requests.post", _fake_post)
-    from ci_adapter import update_run_fields
+    from modules.integration.ci_adapter import update_run_fields
 
     update_run_fields(rec["run_id"], callback_url="https://hooks.example/ci")
     deliver_run_callback(rec["run_id"])
     assert calls["url"] == "https://hooks.example/ci"
     assert calls["json"]["run_id"] == rec["run_id"]
-    from ci_adapter import get_run
+    from modules.integration.ci_adapter import get_run
 
     assert get_run(rec["run_id"])["callback_status"] == "ok"
 
 
 def test_webhook_http_error_marks_failed(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
-    from ci_adapter import build_run_record_from_batch, deliver_run_callback, update_run_fields
+    from modules.integration.ci_adapter import build_run_record_from_batch, deliver_run_callback, update_run_fields
 
     rec = build_run_record_from_batch(
         {"case_results": [{"case_id": 1, "case_name": "a", "status": "success"}]},
@@ -180,6 +180,6 @@ def test_webhook_http_error_marks_failed(tmp_path, monkeypatch):
 
     monkeypatch.setattr("requests.post", lambda *a, **k: _Resp())
     deliver_run_callback(rec["run_id"])
-    from ci_adapter import get_run
+    from modules.integration.ci_adapter import get_run
 
     assert get_run(rec["run_id"])["callback_status"] == "failed"

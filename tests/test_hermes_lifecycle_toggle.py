@@ -9,7 +9,7 @@ from unittest import mock
 
 class TestHermesLifecycleFlags(unittest.TestCase):
     def setUp(self):
-        import hermes_service_bootstrap as hb
+        from modules.hermes import hermes_service_bootstrap as hb
 
         self.hb = hb
         with hb._LIFECYCLE_LOCK:

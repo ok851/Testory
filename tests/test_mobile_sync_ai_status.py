@@ -2,7 +2,7 @@
 """移动端 sync AI 使用 PC 已绑定 LLM profile。"""
 from __future__ import annotations
 
-from mobile_sync_store import _safe_llm_status_payload
+from modules.mobile.mobile_sync_store import _safe_llm_status_payload
 
 
 def test_safe_llm_status_empty():
@@ -23,7 +23,7 @@ def test_safe_llm_status_ready():
 
 
 def test_mobile_ai_chitchat_skips_llm():
-    from mobile_sync_store import _mobile_ai_chitchat_reply, _normalize_phone_ai_action
+    from modules.mobile.mobile_sync_store import _mobile_ai_chitchat_reply, _normalize_phone_ai_action
 
     r = _mobile_ai_chitchat_reply("你是谁？")
     assert r is not None
@@ -38,7 +38,7 @@ def test_mobile_ai_mode_defaults_chat_not_force_json_path():
     """对话模式应走 free chat，而不是 generate_case_and_steps。"""
     from unittest.mock import MagicMock, patch
 
-    from mobile_sync_store import _mobile_ai_free_chat
+    from modules.mobile.mobile_sync_store import _mobile_ai_free_chat
 
     profile = {"provider": "custom_openai", "model_id": "x", "api_key": "k", "base_url": "http://x"}
     status = {"ready": True, "provider": "custom_openai", "model": "x"}

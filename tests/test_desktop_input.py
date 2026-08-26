@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 
-from desktop_input import (
+from modules.desktop.desktop_input import (
     infer_effect_keyword,
     screen_coords_in_virtual_bounds,
     should_verify_desktop_effect,

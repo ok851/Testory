@@ -244,7 +244,7 @@ class SyncPointManager:
         poll_interval_s: float = 0.25,
     ) -> bool:
         """阻塞等待人工确认。仅 resume 返回 True；超时/取消返回 False（禁止恒 True）。"""
-        from agent_hitl import wait_hitl_gate
+        from modules.ai.agent_hitl import wait_hitl_gate
 
         plan_id = getattr(self.context, "plan_id", "") or "plan"
         gid = (gate_id or "").strip() or f"cross_end:{plan_id}:{uuid.uuid4().hex[:10]}"
@@ -358,7 +358,7 @@ class SyncPointManager:
             detail["error_code"] = "SYNC_API_NO_REQUEST"
             return detail
 
-        from api_http_helper import execute_api_spec_sync, get_json_path_value
+        from modules.integration.api_http_helper import execute_api_spec_sync, get_json_path_value
 
         def _poll() -> Any:
             try:
@@ -448,7 +448,7 @@ class SyncPointManager:
             return detail
 
         try:
-            from browser_manager import get_page
+            from modules.web.browser_manager import get_page
 
             page = get_page()
         except Exception:

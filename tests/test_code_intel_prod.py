@@ -143,7 +143,7 @@ def test_metrics_and_heal_hook(tmp_path, monkeypatch):
     from ai_modules.code_intel.pipeline import enqueue_code_change, on_ci_run_finished
     from ai_modules.code_intel.metrics import collect_metrics
     from ai_modules.code_intel.task_store import update_task, get_task
-    from ci_adapter import save_run
+    from modules.integration.ci_adapter import save_run
 
     view = enqueue_code_change(
         {

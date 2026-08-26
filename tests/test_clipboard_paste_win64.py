@@ -9,7 +9,7 @@ from unittest.mock import patch
 class TestClipboardPasteWin64(unittest.TestCase):
     def test_paste_does_not_av_on_chinese(self):
         """写剪贴板 + 假 SendInput，确认 64 位不再 access violation。"""
-        from desktop_input import _paste_unicode_via_clipboard
+        from modules.desktop.desktop_input import _paste_unicode_via_clipboard
 
         with patch("ctypes.windll.user32.SendInput", return_value=1):
             try:

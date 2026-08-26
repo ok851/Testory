@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from case_yaml_export import case_to_yaml_preview
+from modules.execution.case_yaml_export import case_to_yaml_preview
 from database import Database
 
 
@@ -59,7 +59,7 @@ def test_project_yaml_preview(db):
     d, pid = db
     uid = d.create_test_unit(pid, "订单")
     d.create_test_case_v2(pid, "下单", unit_id=uid)
-    from case_yaml_export import build_project_yaml_preview
+    from modules.execution.case_yaml_export import build_project_yaml_preview
 
     yaml = build_project_yaml_preview(d, pid, unit_id=uid)
     assert yaml and "下单" in yaml and "订单" in yaml
@@ -84,7 +84,7 @@ def test_project_cases_pagination(db):
 
 def test_resolve_unit_id_on_import(db):
     d, pid = db
-    from case_importer import CaseImportExporter
+    from modules.execution.case_importer import CaseImportExporter
 
     exp = CaseImportExporter(d)
     uid = exp._resolve_unit_id(pid, "支付模块")
@@ -95,11 +95,11 @@ def test_resolve_unit_id_on_import(db):
 
 def test_mcp_kit_for_web_port():
     from testory_mcp.kit import mcp_kit_for_port
-    from vision_action_port import WebVisionActionPort
+    from modules.ai.vision_action_port import WebVisionActionPort
 
     class _P(WebVisionActionPort):
         def capture(self):
-            from vision_action_port import CaptureFrame
+            from modules.ai.vision_action_port import CaptureFrame
 
             return CaptureFrame(b"x", 100, 100)
 
@@ -107,12 +107,12 @@ def test_mcp_kit_for_web_port():
             return None
 
         def tap(self, description):
-            from vision_action_port import ActResult
+            from modules.ai.vision_action_port import ActResult
 
             return ActResult(ok=True)
 
         def input_text(self, description, text):
-            from vision_action_port import ActResult
+            from modules.ai.vision_action_port import ActResult
 
             return ActResult(ok=True)
 

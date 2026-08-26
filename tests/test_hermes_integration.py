@@ -2,8 +2,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from hermes_config import build_hermes_env_lines, ensure_hermes_home, hermes_skills_dir
-from hermes_gateway_client import HermesGatewayClient, _clip_tool_result
+from modules.hermes.hermes_config import build_hermes_env_lines, ensure_hermes_home, hermes_skills_dir
+from modules.hermes.hermes_gateway_client import HermesGatewayClient, _clip_tool_result
 
 
 def test_build_hermes_env_contains_api_server(monkeypatch):
@@ -23,7 +23,7 @@ def test_build_hermes_env_excludes_skills_terminal(monkeypatch):
 
 def test_ensure_api_server_toolsets_drops_skills(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
-    from hermes_config import ensure_hermes_api_server_toolsets, hermes_home_dir
+    from modules.hermes.hermes_config import ensure_hermes_api_server_toolsets, hermes_home_dir
 
     home = hermes_home_dir()
     home.mkdir(parents=True, exist_ok=True)

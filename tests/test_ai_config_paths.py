@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 
-from ai_config_paths import (
+from modules.ai.ai_config_paths import (
     _iter_data_file_candidates,
     ai_provider_catalog_path,
     load_ai_provider_catalog_dict,
