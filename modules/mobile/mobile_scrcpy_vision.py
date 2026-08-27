@@ -360,8 +360,17 @@ def get_device_serial_for_user(user_id: int = 0) -> str:
     except Exception:
         pass
     try:
-        from modules.mobile.mobile_device_manager import get_connected_udid
-        return get_connected_udid() or ""
+        from modules.mobile.mobile_device_manager import (
+            get_connected_udid,
+            pick_best_authorized_device,
+        )
+
+        udid = get_connected_udid()
+        if udid:
+            return udid
+        dev = pick_best_authorized_device()
+        if dev:
+            return (dev.get("udid") or "").strip()
     except Exception:
         return ""
 

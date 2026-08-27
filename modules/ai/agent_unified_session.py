@@ -121,15 +121,26 @@ def snapshot_connected_hands(user_id: int = 0) -> Dict[str, Any]:
         except Exception:
             pass
     if not adb_serial:
+        # sync 配对 / connect 流程 udid 都没有时，尝试取已配对或已连接 serial
         try:
             from modules.mobile.mobile_scrcpy_vision import get_device_serial_for_user
 
             adb_serial = (get_device_serial_for_user(int(user_id or 0)) or "").strip()
-            if adb_serial and not phone_ok:
-                phone_ok = True
-                phone_devices = [{"device_id": adb_serial, "serial": adb_serial, "source": "adb"}]
         except Exception:
-            pass
+            adb_serial = ""
+    if not adb_serial:
+        # 最后兜底：手机只要 USB 调试已授权、即使没点过「连接」按钮也应被识别
+        try:
+            from modules.mobile.mobile_device_manager import pick_best_authorized_device
+
+            _dev = pick_best_authorized_device()
+            if _dev:
+                adb_serial = str(_dev.get("udid") or "").strip()
+        except Exception:
+            adb_serial = ""
+    if adb_serial and not phone_ok:
+        phone_ok = True
+        phone_devices = [{"device_id": adb_serial, "serial": adb_serial, "source": "adb"}]
 
     desktop_ok = False
     desktop_detail = ""
