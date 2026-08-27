@@ -30,7 +30,7 @@ class TestHermesLlmConfigSync(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
-            with patch("hermes_config.hermes_home_dir", return_value=home):
+            with patch("modules.hermes.hermes_config.hermes_home_dir", return_value=home):
                 info = sync_platform_llm_to_hermes_config_yaml(
                     base_url="https://api.deepseek.com",
                     model_id="deepseek-v4-pro",
@@ -91,9 +91,9 @@ class TestHermesLlmConfigSync(unittest.TestCase):
                 }
 
             with (
-                patch("hermes_config.hermes_home_dir", return_value=home),
-                patch("hermes_config.hermes_upstream_llm_status", _fake_status),
-                patch("hermes_config._read_active_llm_profile", return_value=registry["profiles"][0]),
+                patch("modules.hermes.hermes_config.hermes_home_dir", return_value=home),
+                patch("modules.hermes.hermes_config.hermes_upstream_llm_status", _fake_status),
+                patch("modules.hermes.hermes_config._read_active_llm_profile", return_value=registry["profiles"][0]),
             ):
                 out = sync_platform_llm_credentials_to_hermes_env()
                 self.assertTrue(out.get("synced"))
@@ -140,9 +140,9 @@ class TestHermesLlmConfigSync(unittest.TestCase):
             reg_path.write_text(json.dumps(registry), encoding="utf-8")
 
             with (
-                patch("hermes_config.hermes_home_dir", return_value=home),
-                patch("hermes_config._read_active_llm_profile", return_value=mimo),
-                patch("ai_config_paths.ai_model_registry_path", return_value=reg_path),
+                patch("modules.hermes.hermes_config.hermes_home_dir", return_value=home),
+                patch("modules.hermes.hermes_config._read_active_llm_profile", return_value=mimo),
+                patch("modules.ai.ai_config_paths.ai_model_registry_path", return_value=reg_path),
             ):
                 st = hermes_upstream_llm_status()
                 self.assertTrue(st.get("ok"))

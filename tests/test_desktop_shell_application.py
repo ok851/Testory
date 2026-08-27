@@ -26,7 +26,7 @@ class TestDesktopShellApplication(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=False):
             self.assertTrue(shell_com_enabled())
 
-    @patch("desktop_shell_application._get_desktop_namespace")
+    @patch("modules.desktop.desktop_shell_application._get_desktop_namespace")
     def test_find_desktop_item(self, mock_ns):
         item = MagicMock()
         item.Name = "控制面板"
@@ -37,21 +37,21 @@ class TestDesktopShellApplication(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found[0], "控制面板")
 
-    @patch("desktop_shell_application.find_desktop_item_by_name")
+    @patch("modules.desktop.desktop_shell_application.find_desktop_item_by_name")
     def test_resolve_icon(self, mock_find):
         mock_find.return_value = ("控制面板", MagicMock())
         target = resolve_shell_application_icon("控制面板")
         self.assertIsInstance(target, ShellComTarget)
         self.assertEqual(target.matched_name, "控制面板")
 
-    @patch("desktop_shell_application.invoke_desktop_item")
-    @patch("desktop_shell_application.find_desktop_item_by_name")
+    @patch("modules.desktop.desktop_shell_application.invoke_desktop_item")
+    @patch("modules.desktop.desktop_shell_application.find_desktop_item_by_name")
     def test_execute_action(self, mock_find, mock_invoke):
         mock_item = MagicMock()
         mock_find.return_value = ("控制面板", mock_item)
         step = {"description": "双击「控制面板」"}
         with patch(
-            "desktop_shell_listview.icon_name_from_step",
+            "modules.desktop.desktop_shell_listview.icon_name_from_step",
             return_value="控制面板",
         ):
             out = execute_shell_application_action(step, "double_click")

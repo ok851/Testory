@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """移动端工作室 API 与助手事件测试。"""
 
 from __future__ import annotations
@@ -24,13 +24,13 @@ class TestEmulatorRecognition(unittest.TestCase):
         from modules.mobile.mobile_device_manager import list_emulators
 
         with patch(
-            "mobile_device_manager.list_usb_devices",
+            "modules.mobile.mobile_device_manager.list_usb_devices",
             return_value=[
                 {"udid": "127.0.0.1:5555", "state": "device", "display_name": "LDPlayer"},
                 {"udid": "ABC", "state": "device", "display_name": "Phone"},
             ],
         ):
-            with patch("mobile_device_manager.get_device_info", return_value={"width": 1080, "height": 1920}):
+            with patch("modules.mobile.mobile_device_manager.get_device_info", return_value={"width": 1080, "height": 1920}):
                 emus = list_emulators()
         self.assertEqual(len(emus), 1)
         self.assertEqual(emus[0]["udid"], "127.0.0.1:5555")

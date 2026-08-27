@@ -50,7 +50,7 @@ class TestSyncDesktopExecuteStep(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self._env)
 
-    @patch("desktop_automation._sync_desktop_execute_inprocess")
+    @patch("modules.desktop.desktop_automation._sync_desktop_execute_inprocess")
     def test_inprocess_mode(self, mock_inproc):
         os.environ["DESKTOP_EXECUTION_MODE"] = "inprocess"
         mock_inproc.return_value = {"status": "success"}
@@ -60,7 +60,7 @@ class TestSyncDesktopExecuteStep(unittest.TestCase):
         self.assertEqual(out["status"], "success")
         mock_inproc.assert_called_once()
 
-    @patch("desktop_automation._sync_desktop_execute_via_gateway")
+    @patch("modules.desktop.desktop_automation._sync_desktop_execute_via_gateway")
     def test_gateway_mode(self, mock_gw):
         os.environ["DESKTOP_EXECUTION_MODE"] = "gateway"
         mock_gw.return_value = {"status": "success"}

@@ -19,8 +19,8 @@ class TestDesktopShellListview(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=False):
             self.assertTrue(shell_message_enabled())
 
-    @patch("desktop_shell_listview._get_listview_item_text")
-    @patch("desktop_shell_listview._user32")
+    @patch("modules.desktop.desktop_shell_listview._get_listview_item_text")
+    @patch("modules.desktop.desktop_shell_listview._user32")
     def test_find_icon_index(self, mock_u32, mock_text):
         mock_u32.return_value.SendMessageW.return_value = 2
         mock_text.side_effect = ["回收站", "控制面板"]
@@ -28,19 +28,19 @@ class TestDesktopShellListview(unittest.TestCase):
         self.assertEqual(idx, 1)
 
 
-    @patch("desktop_shell_listview.get_desktop_listview_hwnd", return_value=999)
+    @patch("modules.desktop.desktop_shell_listview.get_desktop_listview_hwnd", return_value=999)
     def test_resolve_at_screen(self, _lv):
         target = resolve_shell_listview_at_screen(38, 941, icon_name="控制面板")
         self.assertIsNotNone(target)
         self.assertEqual(target.listview_hwnd, 999)
         self.assertEqual(target.icon_name, "控制面板")
 
-    @patch("desktop_shell_listview._get_listview_item_text", return_value="test_report")
-    @patch("desktop_shell_listview._client_rect_to_screen", return_value=(100, 200, 180, 300))
-    @patch("desktop_shell_listview._get_listview_item_rect", return_value=(10, 20, 90, 120))
-    @patch("desktop_shell_listview._screen_to_client", return_value=(40, 50))
-    @patch("desktop_shell_listview.get_desktop_listview_hwnd", return_value=42)
-    @patch("desktop_win32_snapshot.get_window_rect", return_value=(0, 0, 1920, 1080))
+    @patch("modules.desktop.desktop_shell_listview._get_listview_item_text", return_value="test_report")
+    @patch("modules.desktop.desktop_shell_listview._client_rect_to_screen", return_value=(100, 200, 180, 300))
+    @patch("modules.desktop.desktop_shell_listview._get_listview_item_rect", return_value=(10, 20, 90, 120))
+    @patch("modules.desktop.desktop_shell_listview._screen_to_client", return_value=(40, 50))
+    @patch("modules.desktop.desktop_shell_listview.get_desktop_listview_hwnd", return_value=42)
+    @patch("modules.desktop.desktop_win32_snapshot.get_window_rect", return_value=(0, 0, 1920, 1080))
     def test_peek_desktop_icon_at_point(self, *_mocks):
         from modules.desktop.desktop_shell_listview import peek_desktop_icon_at_point
         import ctypes
@@ -55,7 +55,7 @@ class TestDesktopShellListview(unittest.TestCase):
 
         # Patch SendMessageW to fill LVHITTESTINFO via byref — simpler: patch hit_test
         with patch(
-            "desktop_shell_listview.hit_test_listview_item",
+            "modules.desktop.desktop_shell_listview.hit_test_listview_item",
             return_value=(3, (100, 200, 180, 300), "test_report"),
         ):
             t = peek_desktop_icon_at_point(120, 250)
@@ -74,9 +74,9 @@ class TestLayeredLocatePrefersShell(unittest.TestCase):
         self.assertTrue(_is_shell_noise_label("SysListView32"))
         self.assertFalse(_is_shell_noise_label("test_report.xlsx"))
 
-    @patch("desktop_visual_picker._locate_via_uia", return_value={})
-    @patch("desktop_visual_picker._locate_via_win32")
-    @patch("desktop_shell_listview.peek_desktop_icon_at_point")
+    @patch("modules.desktop.desktop_visual_picker._locate_via_uia", return_value={})
+    @patch("modules.desktop.desktop_visual_picker._locate_via_win32")
+    @patch("modules.desktop.desktop_shell_listview.peek_desktop_icon_at_point")
     def test_layered_prefers_shell_icon(self, mock_icon, mock_win32, _uia):
         from modules.desktop.desktop_visual_picker import _layered_locate
         from modules.desktop.desktop_shell_listview import ShellIconTarget

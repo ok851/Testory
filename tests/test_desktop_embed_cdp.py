@@ -57,25 +57,25 @@ class TestDesktopEmbedCdp(unittest.TestCase):
         )
         self.assertEqual(ws, "ws://p")
 
-    @patch("desktop_embed_cdp.probe_cdp_port", return_value=None)
-    @patch("desktop_embed_cdp.discover_listening_ports_for_pid", return_value=[])
-    @patch("desktop_embed_cdp._get_pid_from_hwnd", return_value=1234)
+    @patch("modules.desktop.desktop_embed_cdp.probe_cdp_port", return_value=None)
+    @patch("modules.desktop.desktop_embed_cdp.discover_listening_ports_for_pid", return_value=[])
+    @patch("modules.desktop.desktop_embed_cdp._get_pid_from_hwnd", return_value=1234)
     def test_capture_returns_none_without_cdp(self, *_mocks):
         from modules.desktop.desktop_embed_cdp import capture_embed_element_at_point
 
         with patch(
-            "desktop_win32_snapshot.window_from_point", return_value=1
+            "modules.desktop.desktop_win32_snapshot.window_from_point", return_value=1
         ), patch(
-            "desktop_win32_snapshot.get_window_class_name",
+            "modules.desktop.desktop_win32_snapshot.get_window_class_name",
             return_value="Chrome_RenderWidgetHostHWND",
         ), patch(
-            "desktop_win32_snapshot.get_window_rect",
+            "modules.desktop.desktop_win32_snapshot.get_window_rect",
             return_value=(0, 0, 800, 600),
         ), patch(
-            "desktop_win32_snapshot.get_process_name_from_hwnd",
+            "modules.desktop.desktop_win32_snapshot.get_process_name_from_hwnd",
             return_value="myapp.exe",
         ), patch(
-            "desktop_win32_snapshot.get_top_level_window",
+            "modules.desktop.desktop_win32_snapshot.get_top_level_window",
             return_value=1,
         ):
             self.assertIsNone(capture_embed_element_at_point(100, 100))

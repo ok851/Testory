@@ -14,8 +14,8 @@ class TestHermesDesktopMcpConfig(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
-            with patch("hermes_config.hermes_home_dir", return_value=home), patch(
-                "hermes_desktop_enable.hermes_config_yaml_path",
+            with patch("modules.hermes.hermes_config.hermes_home_dir", return_value=home), patch(
+                "modules.hermes.hermes_desktop_enable.hermes_config_yaml_path",
                 return_value=home / "config.yaml",
             ):
                 r1 = ensure_hermes_config_desktop_control()

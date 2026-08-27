@@ -91,10 +91,10 @@ def test_preflight_remote_farm_gate_blocks(monkeypatch, tmp_path):
 
     from ai_modules.execute.desktop_preflight import check_desktop_preflight
 
-    with patch("desktop_env_config.desktop_execution_mode", return_value="remote"):
-        with patch("desktop_agent_client.desktop_agent_enabled", return_value=True):
+    with patch("modules.desktop.desktop_env_config.desktop_execution_mode", return_value="remote"):
+        with patch("modules.desktop.desktop_agent_client.desktop_agent_enabled", return_value=True):
             with patch(
-                "desktop_agent_client.desktop_agent_json",
+                "modules.desktop.desktop_agent_client.desktop_agent_json",
                 return_value=({"ok": True}, None),
             ):
                 pre = check_desktop_preflight()

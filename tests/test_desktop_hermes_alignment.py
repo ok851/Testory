@@ -80,7 +80,7 @@ class TestCaptureAfterSemantics(unittest.TestCase):
         set_desktop_target(hwnd=12345, label="记事本", title="无标题 - 记事本")
         try:
             with patch(
-                "windows_desktop_tools.begin_desktop_action_frame",
+                "modules.desktop.windows_desktop_tools.begin_desktop_action_frame",
                 return_value={
                     "ok": True,
                     "hwnd": 12345,
@@ -88,10 +88,10 @@ class TestCaptureAfterSemantics(unittest.TestCase):
                     "before_hash": "samehash",
                 },
             ), patch(
-                "windows_desktop_tools._reclick_armed_search_if_needed",
+                "modules.desktop.windows_desktop_tools._reclick_armed_search_if_needed",
                 return_value={"ok": False, "skipped": True},
             ), patch(
-                "windows_desktop_tools._type_observe_act_verify",
+                "modules.desktop.windows_desktop_tools._type_observe_act_verify",
                 return_value={
                     "ok": False,
                     "verified": False,
@@ -121,7 +121,7 @@ class TestCaptureAfterSemantics(unittest.TestCase):
         set_desktop_target(hwnd=99, label="app")
         try:
             with patch(
-                "windows_desktop_tools.begin_desktop_action_frame",
+                "modules.desktop.windows_desktop_tools.begin_desktop_action_frame",
                 return_value={
                     "ok": True,
                     "hwnd": 99,
@@ -129,9 +129,9 @@ class TestCaptureAfterSemantics(unittest.TestCase):
                     "before_hash": "h1",
                 },
             ), patch(
-                "windows_desktop_tools._capture_target_hash", side_effect=["h1", "h2"]
+                "modules.desktop.windows_desktop_tools._capture_target_hash", side_effect=["h1", "h2"]
             ), patch(
-                "desktop_input.deliver_keys_to_hwnd",
+                "modules.desktop.desktop_input.deliver_keys_to_hwnd",
                 return_value={"ok": True, "via": "postmessage", "keys": ["enter"]},
             ):
                 r = windows_press_key("Enter", require_change=False)
@@ -160,13 +160,13 @@ class TestExecuteDesktopNlNoAutoWechat(unittest.TestCase):
         from modules.desktop.agent_desktop_fastpath import execute_desktop_nl
 
         with patch(
-            "agent_desktop_fastpath._try_wechat_send_message",
+            "modules.desktop.agent_desktop_fastpath._try_wechat_send_message",
             return_value={"ok": True, "reply": "should not run"},
         ) as wx, patch(
-            "agent_desktop_fastpath.resolve_desktop_launch_target",
+            "modules.desktop.agent_desktop_fastpath.resolve_desktop_launch_target",
             return_value=None,
         ), patch(
-            "agent_desktop_fastpath._find_running_window",
+            "modules.desktop.agent_desktop_fastpath._find_running_window",
             return_value=None,
         ):
             # may fall through to DesktopAgent or fail — but must not call wechat macro
@@ -208,7 +208,7 @@ class TestHermesStreamNoRerun(unittest.TestCase):
             calls["n"] += 1
             raise AssertionError("must not re-run non-stream execute")
 
-        with patch("hermes_gateway_client.requests.post", return_value=_Resp()), patch.object(
+        with patch("modules.hermes.hermes_gateway_client.requests.post", return_value=_Resp()), patch.object(
             client, "execute_user_instruction", side_effect=boom
         ):
             events = list(client.execute_user_instruction_stream("打开记事本"))
@@ -235,7 +235,7 @@ class TestHermesStreamNoRerun(unittest.TestCase):
                 yield 'data: {"choices":[{"delta":{"content":"done"}}]}'
                 yield "data: [DONE]"
 
-        with patch("hermes_gateway_client.requests.post", return_value=_Resp()):
+        with patch("modules.hermes.hermes_gateway_client.requests.post", return_value=_Resp()):
             events = list(client.execute_user_instruction_stream("打开记事本输入hello"))
         kinds = [k for k, _ in events]
         self.assertIn("tool", kinds)
@@ -334,7 +334,7 @@ class TestOcrNeedleShortMatch(unittest.TestCase):
         from modules.desktop.windows_desktop_tools import verify_screen_contains
 
         with patch(
-            "windows_desktop_tools.observe_screen_texts",
+            "modules.desktop.windows_desktop_tools.observe_screen_texts",
             return_value={"ok": True, "texts": ["行为", "设置"]},
         ):
             r = verify_screen_contains(["为"], min_hits=1)

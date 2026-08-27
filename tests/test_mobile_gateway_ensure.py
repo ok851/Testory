@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 def test_ensure_mobile_gateway_ready_when_healthy():
     from modules.mobile.mobile_service_bootstrap import ensure_mobile_gateway_ready
 
-    with patch("mobile_service_bootstrap._ensure_mobile_env_defaults"):
-        with patch("mobile_service_bootstrap._verify_gateway_health", return_value=True):
+    with patch("modules.mobile.mobile_service_bootstrap._ensure_mobile_env_defaults"):
+        with patch("modules.mobile.mobile_service_bootstrap._verify_gateway_health", return_value=True):
             out = ensure_mobile_gateway_ready()
     assert out["ok"] is True
     assert out["started"] is False
@@ -18,13 +18,13 @@ def test_ensure_mobile_gateway_ready_when_healthy():
 def test_ensure_mobile_gateway_ready_starts_when_down():
     from modules.mobile.mobile_service_bootstrap import ensure_mobile_gateway_ready
 
-    with patch("mobile_service_bootstrap._ensure_mobile_env_defaults"):
+    with patch("modules.mobile.mobile_service_bootstrap._ensure_mobile_env_defaults"):
         with patch(
-            "mobile_service_bootstrap._verify_gateway_health",
+            "modules.mobile.mobile_service_bootstrap._verify_gateway_health",
             side_effect=[False, True],
         ):
             with patch(
-                "mobile_service_bootstrap.bootstrap_mobile_services",
+                "modules.mobile.mobile_service_bootstrap.bootstrap_mobile_services",
                 return_value={"gateway_started": True},
             ) as boot:
                 out = ensure_mobile_gateway_ready()
@@ -37,17 +37,17 @@ def test_adb_local_connect_fallback():
     from modules.mobile.mobile_routes import _adb_local_connect_fallback
 
     with patch(
-        "mobile_routes.list_usb_devices",
+        "modules.mobile.mobile_routes.list_usb_devices",
         return_value=[{"udid": "2512BPNDAC", "state": "device"}],
     ):
-        with patch("mobile_routes.list_emulators", return_value=[]):
-            with patch("mobile_routes.set_connected_udid") as set_u:
+        with patch("modules.mobile.mobile_routes.list_emulators", return_value=[]):
+            with patch("modules.mobile.mobile_routes.set_connected_udid") as set_u:
                 with patch(
-                    "mobile_routes.get_device_info",
+                    "modules.mobile.mobile_routes.get_device_info",
                     return_value={"width": 1080, "height": 2400},
                 ):
                     with patch(
-                        "mobile_assistant_bundles.assistant_installed_on_device",
+                        "modules.mobile.mobile_assistant_bundles.assistant_installed_on_device",
                         return_value=True,
                     ):
                         out = _adb_local_connect_fallback(
@@ -74,14 +74,14 @@ def test_connect_succeeds_without_gateway():
 
     # 轻量：直接测 fallback 成功即可代表主路径
     with patch(
-        "mobile_routes.list_usb_devices",
+        "modules.mobile.mobile_routes.list_usb_devices",
         return_value=[{"udid": "2512BPNDAC", "state": "device"}],
     ):
-        with patch("mobile_routes.list_emulators", return_value=[]):
-            with patch("mobile_routes.set_connected_udid"):
-                with patch("mobile_routes.get_device_info", return_value={}):
+        with patch("modules.mobile.mobile_routes.list_emulators", return_value=[]):
+            with patch("modules.mobile.mobile_routes.set_connected_udid"):
+                with patch("modules.mobile.mobile_routes.get_device_info", return_value={}):
                     with patch(
-                        "mobile_assistant_bundles.assistant_installed_on_device",
+                        "modules.mobile.mobile_assistant_bundles.assistant_installed_on_device",
                         return_value=False,
                     ):
                         from modules.mobile.mobile_routes import _adb_local_connect_fallback

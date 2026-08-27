@@ -34,8 +34,8 @@ def test_pick_default_real_device_skips_pq_prefix():
         {"udid": "PQFAKE001", "state": "device", "display_name": "Ghost"},
         {"udid": "REAL123456", "state": "device", "display_name": "MyPhone"},
     ]
-    with patch("mobile_device_manager.list_real_usb_devices", return_value=devices):
-        with patch("mobile_device_manager.get_device_info", return_value={"width": 1080, "height": 2400}):
+    with patch("modules.mobile.mobile_device_manager.list_real_usb_devices", return_value=devices):
+        with patch("modules.mobile.mobile_device_manager.get_device_info", return_value={"width": 1080, "height": 2400}):
             dev = pick_default_real_device()
     assert dev is not None
     assert dev.get("udid") == "REAL123456"
@@ -53,7 +53,7 @@ def test_list_devices_for_ui_real_excludes_emulator():
     from modules.mobile.mobile_device_manager import list_devices_for_ui
 
     with patch(
-        "mobile_device_manager.list_usb_devices",
+        "modules.mobile.mobile_device_manager.list_usb_devices",
         return_value=[
             {"udid": "emulator-5554", "state": "device", "display_name": "Emu"},
             {"udid": "REAL001", "state": "device", "display_name": "Phone"},
@@ -76,7 +76,7 @@ def test_prune_stale_adb_devices_disconnects():
     from modules.mobile.mobile_device_manager import prune_stale_adb_devices
 
     with patch(
-        "mobile_device_manager.list_usb_devices",
+        "modules.mobile.mobile_device_manager.list_usb_devices",
         side_effect=[
             [{"udid": "PQGHOST", "state": "device"}, {"udid": "REAL001", "state": "device"}],
             [{"udid": "REAL001", "state": "device"}],
@@ -84,8 +84,8 @@ def test_prune_stale_adb_devices_disconnects():
             [{"udid": "REAL001", "state": "device"}],
         ],
     ):
-        with patch("mobile_device_manager.list_emulators", return_value=[]):
-            with patch("mobile_device_manager.adb_disconnect_device", return_value=(True, "ok")) as disc:
+        with patch("modules.mobile.mobile_device_manager.list_emulators", return_value=[]):
+            with patch("modules.mobile.mobile_device_manager.adb_disconnect_device", return_value=(True, "ok")) as disc:
                 out = prune_stale_adb_devices()
     disc.assert_called_once_with("PQGHOST")
     assert len(out["pruned"]) == 1

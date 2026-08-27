@@ -26,11 +26,11 @@ class TestComposePhaseNoSearchReclick(unittest.TestCase):
         _desktop_target["last_search_query"] = "早安宝宝大王"
         with (
             patch(
-                "windows_desktop_tools.begin_desktop_action_frame",
+                "modules.desktop.windows_desktop_tools.begin_desktop_action_frame",
                 return_value={"ok": True, "hwnd": 42, "frame_id": "f1", "before_hash": "h0"},
             ),
             patch(
-                "windows_desktop_tools._type_observe_act_verify",
+                "modules.desktop.windows_desktop_tools._type_observe_act_verify",
             ) as verify,
         ):
             r = windows_type_text("早安宝宝大王")

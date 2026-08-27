@@ -12,7 +12,7 @@ from modules.execution.execution_lock import LocalExecutionLock, acquire, lock_f
 class TestExecutionLock(unittest.TestCase):
     def test_acquire_and_release(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("execution_lock.lock_file_path") as mock_path:
+            with patch("modules.execution.execution_lock.lock_file_path") as mock_path:
                 p = Path(tmp) / ".uat_execution.lock"
                 mock_path.return_value = p
                 lock = LocalExecutionLock()
@@ -24,7 +24,7 @@ class TestExecutionLock(unittest.TestCase):
 
     def test_second_acquire_blocks_then_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("execution_lock.lock_file_path") as mock_path:
+            with patch("modules.execution.execution_lock.lock_file_path") as mock_path:
                 p = Path(tmp) / ".uat_execution.lock"
                 mock_path.return_value = p
                 a = LocalExecutionLock()
@@ -37,7 +37,7 @@ class TestExecutionLock(unittest.TestCase):
 
     def test_singleton_second_thread_nonblocking_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("execution_lock.lock_file_path") as mock_path:
+            with patch("modules.execution.execution_lock.lock_file_path") as mock_path:
                 p = Path(tmp) / ".uat_execution.lock"
                 mock_path.return_value = p
                 self.assertTrue(acquire(owner="main", timeout_sec=5))

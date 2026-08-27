@@ -100,7 +100,7 @@ def test_classic_path_untouched_by_default():
         "layer": "web",
         "steps": [{"action": "click", "selector": "#a"}],
     }
-    with patch("browser_manager.get_page", return_value=object()):
+    with patch("modules.web.browser_manager.get_page", return_value=object()):
         with patch(
             "ai_modules.execute.web_runner.execute_single_web_step",
             return_value={"ok": True, "skipped": False, "action": "click"},

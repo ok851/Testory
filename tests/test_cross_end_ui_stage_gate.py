@@ -18,7 +18,7 @@ def test_web_no_page_fails_not_green():
         "layer": "web",
         "steps": [{"action": "click", "selector": "#a"}],
     }
-    with patch("browser_manager.get_page", return_value=None):
+    with patch("modules.web.browser_manager.get_page", return_value=None):
         result, _ = _execute_ui_stage(stage, _ctx())
     assert result["ok_assert"] is False
     assert "浏览器" in (result.get("error") or "") or "NO_BROWSER" in (
@@ -49,7 +49,7 @@ def test_web_step_failure_propagates():
         "layer": "web",
         "steps": [{"action": "click", "selector": "#missing"}],
     }
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         with patch(
             "ai_modules.execute.web_runner.execute_single_web_step",
             return_value={"ok": False, "error": "timeout", "action": "click"},
@@ -69,7 +69,7 @@ def test_web_all_steps_ok():
             {"action": "click", "selector": "#ok"},
         ],
     }
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         with patch(
             "ai_modules.execute.web_runner.execute_single_web_step",
             side_effect=[
@@ -91,7 +91,7 @@ def test_web_allow_skip_navigate_counts_ok():
         "allow_skip": True,
         "steps": [{"action": "navigate", "url": "", "allow_skip": True}],
     }
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         result, _ = _execute_ui_stage(stage, _ctx())
     assert result["ok_assert"] is True
 
@@ -103,7 +103,7 @@ def test_web_all_skipped_without_stage_allow_skip_fails():
         "layer": "web",
         "steps": [{"action": "navigate", "url": "", "allow_skip": True}],
     }
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         result, _ = _execute_ui_stage(stage, _ctx())
     assert result["ok_assert"] is False
     assert result.get("error_code") == "ALL_STEPS_SKIPPED"
@@ -121,7 +121,7 @@ def test_mobile_checks_return_values():
     mock_ex.execute_steps.return_value = [
         {"status": "error", "error": "device offline", "action": "tap"}
     ]
-    with patch("mobile_executor.get_mobile_executor", return_value=mock_ex):
+    with patch("modules.mobile.mobile_executor.get_mobile_executor", return_value=mock_ex):
         result, _ = _execute_ui_stage(stage, _ctx())
     assert result["ok_assert"] is False
     assert "offline" in (result.get("error") or "") or "失败" in (
@@ -139,7 +139,7 @@ def test_mobile_partial_steps_fail():
     }
     mock_ex = MagicMock()
     mock_ex.execute_steps.return_value = [{"status": "success", "action": "tap"}]
-    with patch("mobile_executor.get_mobile_executor", return_value=mock_ex):
+    with patch("modules.mobile.mobile_executor.get_mobile_executor", return_value=mock_ex):
         result, _ = _execute_ui_stage(stage, _ctx())
     assert result["ok_assert"] is False
 
@@ -151,11 +151,11 @@ def test_desktop_checks_return_and_rejects_warning():
         "steps": [{"action": "wait", "input_value": "0.01"}],
     }
     with patch(
-        "desktop_automation.sync_desktop_execute_step",
+        "modules.desktop.desktop_automation.sync_desktop_execute_step",
         return_value={"status": "warning", "warning": "soft miss"},
     ):
         with patch(
-            "step_executor.validate_desktop_step_result",
+            "modules.execution.step_executor.validate_desktop_step_result",
             side_effect=lambda r, a: r,
         ):
             result, _ = _execute_ui_stage(stage, _ctx())
@@ -172,11 +172,11 @@ def test_desktop_validate_raise_fails_stage():
         "steps": [{"action": "click", "selector": "btn"}],
     }
     with patch(
-        "desktop_automation.sync_desktop_execute_step",
+        "modules.desktop.desktop_automation.sync_desktop_execute_step",
         return_value={"status": "error", "error": "not found"},
     ):
         with patch(
-            "step_executor.validate_desktop_step_result",
+            "modules.execution.step_executor.validate_desktop_step_result",
             side_effect=RuntimeError("not found"),
         ):
             result, _ = _execute_ui_stage(stage, _ctx())
@@ -243,7 +243,7 @@ def test_web_stage_propagates_empty_selector_code_and_hint():
         "layer": "web",
         "steps": [{"action": "input", "selector": "", "value": "x"}],
     }
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         result, _ = _execute_ui_stage(stage, _ctx())
     assert result["ok_assert"] is False
     assert result.get("error_code") == "EMPTY_SELECTOR"

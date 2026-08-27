@@ -49,10 +49,10 @@ def test_mobile_extract_otp_awaits_device_job(monkeypatch):
             },
         }
 
-    with patch("mobile_cross_end_tools.enqueue_mobile_job", side_effect=fake_enqueue):
-        with patch("mobile_cross_end_tools.wait_mobile_job", side_effect=fake_wait):
+    with patch("modules.mobile.mobile_cross_end_tools.enqueue_mobile_job", side_effect=fake_enqueue):
+        with patch("modules.mobile.mobile_cross_end_tools.wait_mobile_job", side_effect=fake_wait):
             with patch(
-                "mobile_cross_end_tools.ensure_mobile_hand_ready",
+                "modules.mobile.mobile_cross_end_tools.ensure_mobile_hand_ready",
                 return_value=None,
             ):
                 out = mobile_extract_otp(timeout_sec=30, mock_allowed=True)
@@ -66,7 +66,7 @@ def test_ensure_mobile_hand_ready_fails_without_pair():
     from modules.mobile.mobile_cross_end_tools import ensure_mobile_hand_ready, mobile_run_steps
 
     with patch(
-        "mobile_sync_store.list_paired_devices_for_user",
+        "modules.mobile.mobile_sync_store.list_paired_devices_for_user",
         return_value=[],
     ):
         err = ensure_mobile_hand_ready(user_id=1)
@@ -86,11 +86,11 @@ def test_ensure_mobile_hand_ready_fails_when_poller_stale(monkeypatch):
     monkeypatch.delenv("MOBILE_OTP_MOCK", raising=False)
     monkeypatch.delenv("MOBILE_HAND_SKIP_POLLER", raising=False)
     with patch(
-        "mobile_sync_store.list_paired_devices_for_user",
+        "modules.mobile.mobile_sync_store.list_paired_devices_for_user",
         return_value=[{"device_id": "dev-a", "paired_at": 1.0, "poller_alive": False}],
     ):
         with patch(
-            "mobile_sync_store.device_poller_status_for_user",
+            "modules.mobile.mobile_sync_store.device_poller_status_for_user",
             return_value={"alive_count": 0, "stale_sec": 45, "best": None},
         ):
             err = ensure_mobile_hand_ready(user_id=1)
@@ -102,11 +102,11 @@ def test_ensure_mobile_hand_ready_ok_when_poller_alive(monkeypatch):
 
     monkeypatch.delenv("MOBILE_OTP_MOCK", raising=False)
     with patch(
-        "mobile_sync_store.list_paired_devices_for_user",
+        "modules.mobile.mobile_sync_store.list_paired_devices_for_user",
         return_value=[{"device_id": "dev-a", "paired_at": 1.0, "poller_alive": True}],
     ):
         with patch(
-            "mobile_sync_store.device_poller_status_for_user",
+            "modules.mobile.mobile_sync_store.device_poller_status_for_user",
             return_value={"alive_count": 1, "stale_sec": 45, "best": {"device_id": "dev-a"}},
         ):
             assert ensure_mobile_hand_ready(user_id=1) is None
@@ -223,7 +223,7 @@ def test_dispatch_cross_end_tool_desktop_alias():
 
     assert "desktop_click" in DESKTOP_ALIAS_TOOL_NAMES
     assert "mobile_extract_otp" in MOBILE_TOOL_NAMES
-    with patch("mobile_cross_end_tools.desktop_click", return_value={"success": True}):
+    with patch("modules.mobile.mobile_cross_end_tools.desktop_click", return_value={"success": True}):
         out = dispatch_cross_end_tool("desktop_click", {"description": "确定"})
     assert out.get("success") is True
 

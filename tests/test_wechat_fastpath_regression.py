@@ -31,7 +31,7 @@ class TestWeChatResolveArgs(unittest.TestCase):
             return {"role": "assistant", "content": '{"contact":"张三","text":"今晚聚餐别迟到"}'}
 
         with patch(
-            "ai_multi_provider.dispatch_chat_completion_messages", side_effect=fake_dispatch
+            "modules.ai.ai_multi_provider.dispatch_chat_completion_messages", side_effect=fake_dispatch
         ):
             args, via = resolve_wechat_send_args(
                 s, local_ai_service=_Svc(), profile={"model_id": "x", "provider": "openai"}
@@ -91,9 +91,9 @@ class TestWeChatDirectComposite(unittest.TestCase):
             {"action": "input", "input_value": "x", "description": "输入"},
             {"action": "hotkey", "input_value": "{ENTER}", "description": "发送"},
         ]
-        with patch("agent_desktop_fastpath.desktop_agent_enabled", create=True), patch(
-            "desktop_agent_client.desktop_agent_enabled", return_value=False
-        ), patch("desktop_automation.DesktopAutomation") as DA:
+        with patch("modules.desktop.agent_desktop_fastpath.desktop_agent_enabled", create=True), patch(
+            "modules.desktop.desktop_agent_client.desktop_agent_enabled", return_value=False
+        ), patch("modules.desktop.desktop_automation.DesktopAutomation") as DA:
             DA.return_value.execute_step.side_effect = boom
             ok, results, err = _run_desktop_steps(steps)
         self.assertFalse(ok)
@@ -106,16 +106,16 @@ class TestWeChatDirectComposite(unittest.TestCase):
         from modules.desktop.agent_desktop_fastpath import _try_wechat_send_message_inner
 
         with patch(
-            "agent_desktop_fastpath._find_running_window",
+            "modules.desktop.agent_desktop_fastpath._find_running_window",
             return_value={"hwnd": 1, "title": "微信"},
         ), patch(
-            "agent_desktop_fastpath._attach_step",
+            "modules.desktop.agent_desktop_fastpath._attach_step",
             return_value={
                 "ok": True,
                 "step": {"action": "attach_window", "target": "微信", "description": "附着微信"},
             },
         ), patch(
-            "agent_desktop_fastpath._run_desktop_steps",
+            "modules.desktop.agent_desktop_fastpath._run_desktop_steps",
             return_value=(
                 False,
                 [

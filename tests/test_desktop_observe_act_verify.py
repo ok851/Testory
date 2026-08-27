@@ -20,7 +20,7 @@ class TestTypeObserveActVerify(unittest.TestCase):
         try:
             with (
                 patch(
-                    "windows_desktop_tools.begin_desktop_action_frame",
+                    "modules.desktop.windows_desktop_tools.begin_desktop_action_frame",
                     return_value={
                         "ok": True,
                         "hwnd": 42,
@@ -29,15 +29,15 @@ class TestTypeObserveActVerify(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "windows_desktop_tools._reclick_armed_search_if_needed",
+                    "modules.desktop.windows_desktop_tools._reclick_armed_search_if_needed",
                     return_value={"ok": True, "x": 100, "y": 84},
                 ),
                 patch(
-                    "windows_desktop_tools._run_one_type_strategy",
+                    "modules.desktop.windows_desktop_tools._run_one_type_strategy",
                     return_value={"ok": True, "via": "clipboard_ctrl_v", "hwnd": 42},
                 ),
                 patch(
-                    "windows_desktop_tools._verify_typed_text",
+                    "modules.desktop.windows_desktop_tools._verify_typed_text",
                     return_value={
                         "ok": False,
                         "error": "已通过 clipboard_ctrl_v 投递，但 UIA/OCR 均未确认",
@@ -45,10 +45,10 @@ class TestTypeObserveActVerify(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "windows_desktop_tools.capture_after_action",
+                    "modules.desktop.windows_desktop_tools.capture_after_action",
                     return_value={"ok": True, "changed": True, "texts_preview": ["搜索网络结果"]},
                 ),
-                patch("windows_desktop_tools.time.sleep", return_value=None),
+                patch("modules.desktop.windows_desktop_tools.time.sleep", return_value=None),
             ):
                 r = windows_type_text("舒琪宝宝大王")
             self.assertFalse(r.get("success"), r)
@@ -75,7 +75,7 @@ class TestTypeObserveActVerify(unittest.TestCase):
         try:
             with (
                 patch(
-                    "windows_desktop_tools.begin_desktop_action_frame",
+                    "modules.desktop.windows_desktop_tools.begin_desktop_action_frame",
                     return_value={
                         "ok": True,
                         "hwnd": 42,
@@ -84,15 +84,15 @@ class TestTypeObserveActVerify(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "windows_desktop_tools._reclick_armed_search_if_needed",
+                    "modules.desktop.windows_desktop_tools._reclick_armed_search_if_needed",
                     return_value={"ok": True, "x": 100, "y": 84},
                 ),
                 patch(
-                    "windows_desktop_tools._run_one_type_strategy",
+                    "modules.desktop.windows_desktop_tools._run_one_type_strategy",
                     return_value={"ok": True, "via": "clipboard_ctrl_v", "hwnd": 42},
                 ),
                 patch(
-                    "windows_desktop_tools._verify_typed_text",
+                    "modules.desktop.windows_desktop_tools._verify_typed_text",
                     return_value={
                         "ok": True,
                         "via": "uia_value",
@@ -101,10 +101,10 @@ class TestTypeObserveActVerify(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "windows_desktop_tools.capture_after_action",
+                    "modules.desktop.windows_desktop_tools.capture_after_action",
                     return_value={"ok": True, "changed": True},
                 ),
-                patch("windows_desktop_tools.time.sleep", return_value=None),
+                patch("modules.desktop.windows_desktop_tools.time.sleep", return_value=None),
             ):
                 r = windows_type_text("舒琪宝宝大王")
             self.assertTrue(r.get("success"), r)
@@ -118,11 +118,11 @@ class TestTypeObserveActVerify(unittest.TestCase):
 
         with (
             patch(
-                "desktop_input.uia_get_focused_edit_text",
+                "modules.desktop.desktop_input.uia_get_focused_edit_text",
                 return_value="舒琪宝宝大王",
             ),
             patch(
-                "windows_desktop_tools._verify_typed_text_on_screen",
+                "modules.desktop.windows_desktop_tools._verify_typed_text_on_screen",
                 return_value={"ok": False, "error": "OCR miss"},
             ) as ocr,
         ):
@@ -142,7 +142,7 @@ class TestTypeObserveActVerify(unittest.TestCase):
         try:
             with (
                 patch(
-                    "windows_desktop_tools.begin_desktop_action_frame",
+                    "modules.desktop.windows_desktop_tools.begin_desktop_action_frame",
                     return_value={
                         "ok": True,
                         "hwnd": 7,
@@ -151,11 +151,11 @@ class TestTypeObserveActVerify(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "windows_desktop_tools._reclick_armed_search_if_needed",
+                    "modules.desktop.windows_desktop_tools._reclick_armed_search_if_needed",
                     return_value={"skipped": True},
                 ),
                 patch(
-                    "windows_desktop_tools._type_observe_act_verify",
+                    "modules.desktop.windows_desktop_tools._type_observe_act_verify",
                     return_value={
                         "ok": True,
                         "verified": True,

@@ -31,7 +31,7 @@ def test_cross_end_lock_busy_returns_failure():
         raise ExecutionLockError("本机已有自动化任务在执行（Playwright/桌面），请稍后再试。")
         yield False  # pragma: no cover
 
-    with patch("execution_lock.execution_guard", _busy):
+    with patch("modules.execution.execution_lock.execution_guard", _busy):
         out = execute_cross_end_plan(_tiny_plan("busy-1"), lock_timeout_sec=1)
     assert out.get("success") is False
     assert out.get("lock") == "busy"
@@ -71,7 +71,7 @@ def test_cross_end_lock_held_then_released_allows_second():
         calls["n"] += 1
         yield True
 
-    with patch("execution_lock.execution_guard", _ok):
+    with patch("modules.execution.execution_lock.execution_guard", _ok):
         out1 = execute_cross_end_plan(_tiny_plan("held-1"), lock_timeout_sec=1)
         out2 = execute_cross_end_plan(_tiny_plan("held-2"), lock_timeout_sec=1)
     assert calls["n"] == 2

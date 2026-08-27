@@ -17,9 +17,9 @@ class LocalAuthHelpersTests(unittest.TestCase):
     def test_allow_local_auth_desktop(self):
         from app import _allow_local_auth
 
-        with patch("deployment_config.is_client_mode", return_value=True), patch(
-            "deployment_config.is_standalone_mode", return_value=False
-        ), patch("deployment_config.is_local_standalone_desktop", return_value=False):
+        with patch("modules.core.deployment_config.is_client_mode", return_value=True), patch(
+            "modules.core.deployment_config.is_standalone_mode", return_value=False
+        ), patch("modules.core.deployment_config.is_local_standalone_desktop", return_value=False):
             self.assertTrue(_allow_local_auth())
 
     def test_begin_resize_edges_map(self):

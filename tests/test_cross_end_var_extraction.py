@@ -101,7 +101,7 @@ def test_ui_stage_extracts_and_stores_in_context():
         "vars_to_store": {"ticket_id": {"selector": "#tid"}},
     }
     ctx = CrossEndContext(plan_id="p", scenario="s")
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         with patch(
             "ai_modules.execute.web_runner.execute_single_web_step",
             return_value={"ok": True, "skipped": False, "action": "wait"},
@@ -125,7 +125,7 @@ def test_ui_stage_missing_required_var_fails():
         "steps": [{"action": "wait", "value": "0"}],
         "vars_to_store": {"must": "#must"},
     }
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         with patch(
             "ai_modules.execute.web_runner.execute_single_web_step",
             return_value={"ok": True, "skipped": False, "action": "wait"},

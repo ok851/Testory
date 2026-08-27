@@ -17,7 +17,7 @@ from modules.desktop.desktop_discovery import (
 
 
 class TestDesktopDiscovery(unittest.TestCase):
-    @patch("desktop_discovery.shutil.which", return_value=r"C:\Windows\System32\notepad.exe")
+    @patch("modules.desktop.desktop_discovery.shutil.which", return_value=r"C:\Windows\System32\notepad.exe")
     def test_resolve_via_path(self, _which):
         self.assertEqual(
             resolve_executable("notepad.exe"),
@@ -35,14 +35,14 @@ class TestDesktopDiscovery(unittest.TestCase):
         self.assertTrue(meta.found, meta.tried)
         self.assertEqual(os.path.normcase(meta.path), os.path.normcase(app["path"]))
 
-    @patch("desktop_discovery.shutil.which", return_value=None)
-    @patch("desktop_discovery._resolve_via_app_catalog", return_value="")
-    @patch("desktop_discovery._resolve_via_deep_search", return_value="")
-    @patch("desktop_discovery._resolve_via_start_menu", return_value="")
-    @patch("desktop_discovery._resolve_via_uninstall", return_value="")
-    @patch("desktop_discovery._resolve_via_system32", return_value="")
-    @patch("desktop_discovery._resolve_via_where", return_value="")
-    @patch("desktop_discovery._resolve_via_app_paths")
+    @patch("modules.desktop.desktop_discovery.shutil.which", return_value=None)
+    @patch("modules.desktop.desktop_discovery._resolve_via_app_catalog", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_deep_search", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_start_menu", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_uninstall", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_system32", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_where", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_app_paths")
     def test_resolve_falls_through_to_app_paths(
         self, mock_app_paths, _wh, _s32, _un, _sm, _deep, _cat, _which
     ):
@@ -53,14 +53,14 @@ class TestDesktopDiscovery(unittest.TestCase):
         self.assertEqual(meta.path, exe)
         self.assertIn(meta.method, ("registry_app_paths", "path_env"))
 
-    @patch("desktop_discovery.shutil.which", return_value=None)
-    @patch("desktop_discovery._resolve_via_app_catalog", return_value="")
-    @patch("desktop_discovery._resolve_via_where", return_value="")
-    @patch("desktop_discovery._resolve_via_app_paths", return_value="")
-    @patch("desktop_discovery._resolve_via_uninstall", return_value="")
-    @patch("desktop_discovery._resolve_via_start_menu", return_value="")
-    @patch("desktop_discovery._resolve_via_deep_search", return_value="")
-    @patch("desktop_discovery._resolve_via_system32", return_value=r"C:\Windows\System32\calc.exe")
+    @patch("modules.desktop.desktop_discovery.shutil.which", return_value=None)
+    @patch("modules.desktop.desktop_discovery._resolve_via_app_catalog", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_where", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_app_paths", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_uninstall", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_start_menu", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_deep_search", return_value="")
+    @patch("modules.desktop.desktop_discovery._resolve_via_system32", return_value=r"C:\Windows\System32\calc.exe")
     def test_resolve_system32(self, _s32, _deep, _sm, _un, _ap, _wh, _cat, _which):
         meta = resolve_executable_with_meta("calc")
         self.assertEqual(meta.path, r"C:\Windows\System32\calc.exe")

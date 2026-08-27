@@ -11,14 +11,14 @@ class TestDesktopAppCatalog(unittest.TestCase):
     def test_build_and_load_catalog(self):
         from modules.desktop.desktop_app_catalog import build_catalog_from_start_menu, _catalog_path
 
-        with patch("desktop_discovery._refresh_start_menu_index") as mock_idx:
+        with patch("modules.desktop.desktop_discovery._refresh_start_menu_index") as mock_idx:
             mock_idx.return_value = {
                 "notepad": r"C:\Windows\System32\notepad.exe",
                 "calc.exe": r"C:\Windows\System32\calc.exe",
             }
             with tempfile.TemporaryDirectory() as td:
                 cat_file = os.path.join(td, "desktop_app_catalog.json")
-                with patch("desktop_app_catalog._catalog_path", return_value=__import__("pathlib").Path(cat_file)):
+                with patch("modules.desktop.desktop_app_catalog._catalog_path", return_value=__import__("pathlib").Path(cat_file)):
                     data = build_catalog_from_start_menu()
                     self.assertGreaterEqual(len(data.get("apps") or []), 1)
 
@@ -34,7 +34,7 @@ class TestDesktopAppCatalog(unittest.TestCase):
                 "aliases": ["awesun", "awesun.exe"],
             }
         ]
-        with patch("desktop_app_catalog.list_catalog_apps", return_value=apps):
+        with patch("modules.desktop.desktop_app_catalog.list_catalog_apps", return_value=apps):
             app = find_catalog_app("AweSun_16.2.0.27059_x64.exe")
             self.assertIsNotNone(app)
             self.assertEqual(app["path"], r"D:\AweSun\AweSun.exe")

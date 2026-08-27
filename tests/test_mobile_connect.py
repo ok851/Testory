@@ -16,17 +16,17 @@ class TestMobileEnvConfig(unittest.TestCase):
         from modules.mobile.mobile_env_config import adb_path_source
 
         with patch.dict(os.environ, {"ADB_PATH": __file__}, clear=False):
-            with patch("mobile_plugin_bundles.get_installed_adb_path", return_value="C:/plugin/adb.exe"):
+            with patch("modules.mobile.mobile_plugin_bundles.get_installed_adb_path", return_value="C:/plugin/adb.exe"):
                 self.assertEqual(adb_path_source(), "env")
 
     def test_pick_default_device_includes_emulator(self):
         from modules.mobile.mobile_device_manager import pick_default_device
 
         with patch(
-            "mobile_device_manager.list_usb_devices",
+            "modules.mobile.mobile_device_manager.list_usb_devices",
             return_value=[{"udid": "emulator-5554", "state": "device", "display_name": "LDPlayer"}],
         ):
-            with patch("mobile_device_manager.get_device_info", return_value={"width": 1080, "height": 1920}):
+            with patch("modules.mobile.mobile_device_manager.get_device_info", return_value={"width": 1080, "height": 1920}):
                 dev = pick_default_device()
         self.assertIsNotNone(dev)
         self.assertEqual(dev.get("udid"), "emulator-5554")
@@ -51,9 +51,9 @@ class TestMobileConnect(unittest.TestCase):
     def test_finish_studio_connect_sets_udid(self):
         from modules.mobile.mobile_connect import finish_studio_connect
 
-        with patch("mobile_connect.set_connected_udid") as mock_set:
-            with patch("mobile_connect.get_device_info", return_value={"width": 1080, "height": 2400, "model": "Pixel"}):
-                with patch("mobile_connect.list_user_apps", return_value=[]):
+        with patch("modules.mobile.mobile_connect.set_connected_udid") as mock_set:
+            with patch("modules.mobile.mobile_connect.get_device_info", return_value={"width": 1080, "height": 2400, "model": "Pixel"}):
+                with patch("modules.mobile.mobile_connect.list_user_apps", return_value=[]):
                     payload = finish_studio_connect("127.0.0.1:5555", try_appium=False)
         mock_set.assert_called_once_with("127.0.0.1:5555")
         self.assertEqual(payload["udid"], "127.0.0.1:5555")

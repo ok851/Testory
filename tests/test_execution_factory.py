@@ -14,7 +14,7 @@ class TestExecutionFactory(unittest.TestCase):
         steps = [{"automation_layer": "web"}, {"automation_layer": "desktop"}]
         self.assertTrue(f.case_includes_desktop(steps))
 
-    @patch("execution_factory.sync_desktop_execute_step")
+    @patch("modules.execution.execution_factory.sync_desktop_execute_step")
     def test_execute_desktop_step(self, mock_sync):
         mock_sync.return_value = {
             "status": "success",

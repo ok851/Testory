@@ -100,10 +100,10 @@ class TestVisualEngine(unittest.TestCase):
             template_height=24,
         )
         with unittest.mock.patch(
-            "desktop_visual_engine.capture_virtual_desktop_png",
+            "modules.desktop.desktop_visual_engine.capture_virtual_desktop_png",
             return_value=encode_png_bgr(np.zeros((600, 800, 3), dtype=np.uint8)),
         ), unittest.mock.patch(
-            "desktop_visual_engine.capture_region_png",
+            "modules.desktop.desktop_visual_engine.capture_region_png",
             return_value=encode_png_bgr(np.zeros((200, 300, 3), dtype=np.uint8)),
         ):
             png = build_visual_failure_artifact_png(payload)

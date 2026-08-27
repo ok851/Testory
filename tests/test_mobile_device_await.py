@@ -33,8 +33,8 @@ def test_mobile_await_device_run_success():
             },
         }
 
-    with patch("mobile_sync_store.enqueue_run_job", return_value="job-abc") as enq:
-        with patch("mobile_sync_store.wait_for_run_job", side_effect=fake_wait):
+    with patch("modules.mobile.mobile_sync_store.enqueue_run_job", return_value="job-abc") as enq:
+        with patch("modules.mobile.mobile_sync_store.wait_for_run_job", side_effect=fake_wait):
             result, _ = _execute_ui_stage(stage, _ctx())
     assert enq.called
     assert result.get("executor") == "await_device_run"
@@ -59,8 +59,8 @@ def test_mobile_await_device_run_timeout_fails_honestly():
             "error_code": "MOBILE_DEVICE_AWAIT_TIMEOUT",
         }
 
-    with patch("mobile_sync_store.enqueue_run_job", return_value="job-t"):
-        with patch("mobile_sync_store.wait_for_run_job", side_effect=fake_wait):
+    with patch("modules.mobile.mobile_sync_store.enqueue_run_job", return_value="job-t"):
+        with patch("modules.mobile.mobile_sync_store.wait_for_run_job", side_effect=fake_wait):
             result, _ = _execute_ui_stage(stage, _ctx())
     assert result.get("ok_assert") is False
     assert result.get("error_code") == "MOBILE_DEVICE_AWAIT_TIMEOUT"

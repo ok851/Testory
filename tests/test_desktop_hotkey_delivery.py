@@ -10,7 +10,7 @@ class TestDesktopHotkeyDelivery(unittest.TestCase):
     def test_press_key_rejects_bare_ctrl(self):
         from modules.desktop.windows_desktop_tools import windows_press_key
 
-        with patch("windows_desktop_tools.get_desktop_target", return_value={"hwnd": 0}):
+        with patch("modules.desktop.windows_desktop_tools.get_desktop_target", return_value={"hwnd": 0}):
             r = windows_press_key("ctrl")
         self.assertFalse(r.get("success"))
         self.assertIn("修饰键", r.get("error") or "")
@@ -39,11 +39,11 @@ class TestDesktopHotkeyDelivery(unittest.TestCase):
                 return 1
 
         with (
-            patch("desktop_input.postmessage_key_to_hwnd", side_effect=fake_pm),
-            patch("desktop_input.reclaim_foreground_hwnd", side_effect=fake_reclaim),
-            patch("desktop_input.get_foreground_hwnd", return_value=12345),
-            patch("desktop_input._user32", return_value=FakeUser32()),
-            patch("desktop_input.time.sleep", return_value=None),
+            patch("modules.desktop.desktop_input.postmessage_key_to_hwnd", side_effect=fake_pm),
+            patch("modules.desktop.desktop_input.reclaim_foreground_hwnd", side_effect=fake_reclaim),
+            patch("modules.desktop.desktop_input.get_foreground_hwnd", return_value=12345),
+            patch("modules.desktop.desktop_input._user32", return_value=FakeUser32()),
+            patch("modules.desktop.desktop_input.time.sleep", return_value=None),
         ):
             out = deliver_keys_to_hwnd(12345, ["ctrl", "f"])
         self.assertTrue(out.get("ok"), out)
@@ -58,7 +58,7 @@ class TestDesktopHotkeyDelivery(unittest.TestCase):
 
         with (
             patch(
-                "desktop_input.reclaim_foreground_hwnd",
+                "modules.desktop.desktop_input.reclaim_foreground_hwnd",
                 return_value={
                     "ok": False,
                     "error": "未能把目标窗抢到前台",
@@ -66,7 +66,7 @@ class TestDesktopHotkeyDelivery(unittest.TestCase):
                     "fg_title": "Chrome",
                 },
             ),
-            patch("desktop_input.time.sleep", return_value=None),
+            patch("modules.desktop.desktop_input.time.sleep", return_value=None),
         ):
             out = deliver_keys_to_hwnd(12345, ["ctrl", "f"])
         self.assertFalse(out.get("ok"))
@@ -121,9 +121,9 @@ class TestDesktopFocusCapture(unittest.TestCase):
             "iconic": False,
         }
         with (
-            patch("desktop_input.is_valid_hwnd", return_value=False),
+            patch("modules.desktop.desktop_input.is_valid_hwnd", return_value=False),
             patch(
-                "windows_desktop_tools._enum_focus_candidate_windows",
+                "modules.desktop.windows_desktop_tools._enum_focus_candidate_windows",
                 return_value=[fake_win],
             ),
         ):

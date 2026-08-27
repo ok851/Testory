@@ -43,10 +43,10 @@ def test_mobile_ai_mode_defaults_chat_not_force_json_path():
     profile = {"provider": "custom_openai", "model_id": "x", "api_key": "k", "base_url": "http://x"}
     status = {"ready": True, "provider": "custom_openai", "model": "x"}
     with patch(
-        "ai_multi_provider.dispatch_chat_completion_messages",
+        "modules.ai.ai_multi_provider.dispatch_chat_completion_messages",
         return_value={"role": "assistant", "content": "可以，切换到生成用例模式再说一次。"},
     ):
-        with patch("ai_local_inference.local_ai_service", MagicMock()):
+        with patch("modules.ai.ai_local_inference.local_ai_service", MagicMock()):
             out = _mobile_ai_free_chat("帮我打开QQ", profile, status)
     assert out["success"] is True
     assert out["steps"] == []

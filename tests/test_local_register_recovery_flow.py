@@ -39,8 +39,8 @@ class LocalRegisterRecoveryFlowTests(unittest.TestCase):
 
     def test_register_then_recovery_reset(self):
         with patch("app._allow_local_auth", return_value=True), patch(
-            "team_server_proxy.should_proxy_path", return_value=False
-        ), patch("deployment_hooks.should_proxy_path", return_value=False):
+            "modules.core.team_server_proxy.should_proxy_path", return_value=False
+        ), patch("modules.core.deployment_hooks.should_proxy_path", return_value=False):
             username = "flow_user_01"
             password = "secret12"
             reg = self.client.post(

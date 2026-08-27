@@ -41,7 +41,7 @@ def test_preflight_non_windows_inprocess(monkeypatch):
     monkeypatch.setenv("DESKTOP_EXECUTION_MODE", "inprocess")
     with patch("ai_modules.execute.desktop_preflight.sys.platform", "linux"):
         with patch(
-            "desktop_env_config.desktop_execution_mode",
+            "modules.desktop.desktop_env_config.desktop_execution_mode",
             return_value="inprocess",
         ):
             pre = check_desktop_preflight()
@@ -58,9 +58,9 @@ def test_preflight_gateway_unreachable(monkeypatch):
     def _fail(*_a, **_k):
         return None, "connection refused"
 
-    with patch("desktop_env_config.desktop_execution_mode", return_value="gateway"):
-        with patch("desktop_agent_client.desktop_agent_enabled", return_value=True):
-            with patch("desktop_agent_client.desktop_agent_json", _fail):
+    with patch("modules.desktop.desktop_env_config.desktop_execution_mode", return_value="gateway"):
+        with patch("modules.desktop.desktop_agent_client.desktop_agent_enabled", return_value=True):
+            with patch("modules.desktop.desktop_agent_client.desktop_agent_json", _fail):
                 pre = check_desktop_preflight()
     assert pre["ok"] is False
     assert pre["error_code"] == "DESKTOP_NO_SESSION"
@@ -114,9 +114,9 @@ def test_orchestrator_desktop_runs_when_preflight_ok():
         "ai_modules.execute.desktop_preflight.check_desktop_preflight",
         _ok_pre,
     ):
-        with patch("desktop_automation.sync_desktop_execute_step", _step):
+        with patch("modules.desktop.desktop_automation.sync_desktop_execute_step", _step):
             with patch(
-                "step_executor.validate_desktop_step_result",
+                "modules.execution.step_executor.validate_desktop_step_result",
                 lambda *_a, **_k: None,
             ):
                 result, _ = _execute_ui_stage(stage, _ctx())

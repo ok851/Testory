@@ -41,7 +41,7 @@ def test_resolve_ui_selector():
     loc = MagicMock()
     loc.inner_text.return_value = "Alice"
     page.locator.return_value = loc
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         resolved, errs = resolve_assertion_sources(
             ctx,
             {
@@ -53,7 +53,7 @@ def test_resolve_ui_selector():
     assert any("name" in e or "变量" in e for e in errs)
 
     ctx.set_variable("name", "Alice")
-    with patch("browser_manager.get_page", return_value=page):
+    with patch("modules.web.browser_manager.get_page", return_value=page):
         resolved, errs = resolve_assertion_sources(
             ctx,
             {
@@ -69,7 +69,7 @@ def test_resolve_ui_selector():
 def test_ui_source_no_page_fails():
     ctx = CrossEndContext(plan_id="p", scenario="s")
     ctx.set_variable("api", "x")
-    with patch("browser_manager.get_page", return_value=None):
+    with patch("modules.web.browser_manager.get_page", return_value=None):
         _, errs = resolve_assertion_sources(
             ctx, {"api": "api", "web": {"selector": "h1"}}
         )

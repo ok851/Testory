@@ -72,8 +72,8 @@ class TestScreenToolsCache(unittest.TestCase):
 
         with patch.object(st, "capture_for_observation", return_value=(fake_png, {"surface": "test"})), patch.object(
             st, "_ocr_blocks_uncached", side_effect=fake_ocr
-        ), patch("desktop_ocr.ocr_available", return_value=True), patch(
-            "desktop_ocr.engine_name", return_value="mock"
+        ), patch("modules.desktop.desktop_ocr.ocr_available", return_value=True), patch(
+            "modules.desktop.desktop_ocr.engine_name", return_value="mock"
         ):
             r1 = st.get_screen_text()
             r2 = st.get_screen_text()
@@ -85,8 +85,8 @@ class TestScreenToolsCache(unittest.TestCase):
     def test_ocr_unavailable_returns_structured_error(self):
         from modules.ai import screen_tools as st
 
-        with patch("desktop_ocr.ocr_available", return_value=False), patch(
-            "desktop_ocr.engine_name", return_value="none"
+        with patch("modules.desktop.desktop_ocr.ocr_available", return_value=False), patch(
+            "modules.desktop.desktop_ocr.engine_name", return_value="none"
         ):
             r = st.get_screen_text()
         self.assertFalse(r.get("success"))
@@ -98,7 +98,7 @@ class TestScreenToolsCache(unittest.TestCase):
 
         long_text = "窗" * 500
         with patch.object(st, "capture_primary_monitor_png", return_value=b"\x89PNG" + b"\x00" * 100), patch(
-            "ai_vision_local.vision_describe", return_value=long_text
+            "modules.ai.ai_vision_local.vision_describe", return_value=long_text
         ):
             r = st.get_screen_description("测试")
         self.assertTrue(r.get("success"))
@@ -116,12 +116,12 @@ class TestWindowsClickElementErrors(unittest.TestCase):
     def test_no_match_returns_structured_error(self):
         from modules.desktop.windows_desktop_tools import windows_click_element
 
-        with patch("windows_desktop_tools._uia_find_candidates", return_value=[]), patch(
-            "screen_tools.capture_primary_monitor_png", return_value=b"\x89PNG" + b"\x00" * 100
-        ), patch("windows_desktop_tools._ocr_find_candidates", return_value=[]), patch(
-            "windows_desktop_tools._vlm_find_point", return_value=None
+        with patch("modules.desktop.windows_desktop_tools._uia_find_candidates", return_value=[]), patch(
+            "modules.ai.screen_tools.capture_primary_monitor_png", return_value=b"\x89PNG" + b"\x00" * 100
+        ), patch("modules.desktop.windows_desktop_tools._ocr_find_candidates", return_value=[]), patch(
+            "modules.desktop.windows_desktop_tools._vlm_find_point", return_value=None
         ), patch(
-            "windows_desktop_tools._screen_text_list", return_value=["通讯录", "发现", "搜索", "微信"]
+            "modules.desktop.windows_desktop_tools._screen_text_list", return_value=["通讯录", "发现", "搜索", "微信"]
         ):
             r = windows_click_element("不存在的按钮XYZ")
         self.assertFalse(r.get("success"))
@@ -138,26 +138,26 @@ class TestWindowsClickElementErrors(unittest.TestCase):
             {"name": "确定", "x": 20, "y": 200, "score": 0.9, "via": "uia"},
         ]
         with (
-            patch("windows_desktop_tools._try_search_hotkey_shortcut", return_value=None),
-            patch("windows_desktop_tools._uia_find_candidates", return_value=cands),
-            patch("windows_desktop_tools._ocr_find_candidates", return_value=[]),
+            patch("modules.desktop.windows_desktop_tools._try_search_hotkey_shortcut", return_value=None),
+            patch("modules.desktop.windows_desktop_tools._uia_find_candidates", return_value=cands),
+            patch("modules.desktop.windows_desktop_tools._ocr_find_candidates", return_value=[]),
             patch(
-                "screen_tools.capture_for_observation",
+                "modules.ai.screen_tools.capture_for_observation",
                 return_value=(b"", {"left": 0, "top": 0}),
             ),
-            patch("windows_desktop_tools._screen_text_list", return_value=["确定"]),
-            patch("windows_desktop_tools._capture_target_hash", return_value="h0"),
-            patch("windows_desktop_tools._wait_stable_quiet", return_value=None),
+            patch("modules.desktop.windows_desktop_tools._screen_text_list", return_value=["确定"]),
+            patch("modules.desktop.windows_desktop_tools._capture_target_hash", return_value="h0"),
+            patch("modules.desktop.windows_desktop_tools._wait_stable_quiet", return_value=None),
             patch(
-                "windows_desktop_tools.capture_after_action",
+                "modules.desktop.windows_desktop_tools.capture_after_action",
                 return_value={"ok": True, "changed": True},
             ),
-            patch("windows_desktop_tools._nearby_texts", return_value=["确定"]),
-            patch("desktop_input.force_focus_hwnd", return_value=True),
-            patch("desktop_input.message_click_at_screen", return_value=None),
-            patch("desktop_input.screen_click", return_value=None),
-            patch("windows_desktop_tools.get_desktop_target", return_value={"hwnd": 1, "label": "App"}),
-            patch("windows_desktop_tools.time.sleep", return_value=None),
+            patch("modules.desktop.windows_desktop_tools._nearby_texts", return_value=["确定"]),
+            patch("modules.desktop.desktop_input.force_focus_hwnd", return_value=True),
+            patch("modules.desktop.desktop_input.message_click_at_screen", return_value=None),
+            patch("modules.desktop.desktop_input.screen_click", return_value=None),
+            patch("modules.desktop.windows_desktop_tools.get_desktop_target", return_value={"hwnd": 1, "label": "App"}),
+            patch("modules.desktop.windows_desktop_tools.time.sleep", return_value=None),
         ):
             r = windows_click_element("确定")
         self.assertTrue(r.get("success"), r)

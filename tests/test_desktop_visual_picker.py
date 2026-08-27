@@ -12,8 +12,8 @@ from modules.desktop.desktop_visual_picker import (
 
 
 class TestDesktopVisualPicker(unittest.TestCase):
-    @patch("desktop_visual_engine.build_visual_step_payload")
-    @patch("desktop_uia_snapshot.capture_element_snapshot_at_point")
+    @patch("modules.desktop.desktop_visual_engine.build_visual_step_payload")
+    @patch("modules.desktop.desktop_uia_snapshot.capture_element_snapshot_at_point")
     def test_build_pick_from_smart_click_merges_snapshot(
         self, mock_snap, mock_build
     ):
@@ -46,9 +46,9 @@ class TestDesktopVisualPicker(unittest.TestCase):
         self.assertIn("element_snapshot", data)
         self.assertIn("控制面板", pick["label"])
 
-    @patch("desktop_precise_locator.capture_rect_preview_b64")
-    @patch("desktop_visual_engine.build_visual_step_payload")
-    @patch("desktop_uia_snapshot.capture_element_snapshot_at_point")
+    @patch("modules.desktop.desktop_precise_locator.capture_rect_preview_b64")
+    @patch("modules.desktop.desktop_visual_engine.build_visual_step_payload")
+    @patch("modules.desktop.desktop_uia_snapshot.capture_element_snapshot_at_point")
     def test_frozen_preview_not_replaced_after_ui_change(
         self, mock_snap, mock_build, mock_preview
     ):
@@ -126,7 +126,7 @@ class TestDesktopVisualPicker(unittest.TestCase):
         picker._hover_rect = (10, 20, 90, 50)
         picker._hover_label = "账密登录"
         with patch(
-            "desktop_precise_locator.capture_rect_preview_b64",
+            "modules.desktop.desktop_precise_locator.capture_rect_preview_b64",
             return_value="IMG",
         ):
             picker._freeze_capture_at_point(40, 30)

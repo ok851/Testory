@@ -104,9 +104,9 @@ class TestSearchArmFocus(unittest.TestCase):
         arm_search_input_focus(100, 200)
         tgt = get_desktop_target()
         self.assertEqual(tgt.get("search_xy"), (100, 200))
-        with patch("desktop_input.screen_click") as sc, patch(
-            "desktop_input.force_focus_hwnd", return_value=True
-        ), patch("windows_desktop_tools.time.sleep"):
+        with patch("modules.desktop.desktop_input.screen_click") as sc, patch(
+            "modules.desktop.desktop_input.force_focus_hwnd", return_value=True
+        ), patch("modules.desktop.windows_desktop_tools.time.sleep"):
             r = _reclick_armed_search_if_needed()
             self.assertTrue(r.get("ok"))
             sc.assert_called_once_with(100, 204)
@@ -155,7 +155,7 @@ class TestGeometryWechatSearch(unittest.TestCase):
             rect.bottom = 700
             return 1
 
-        with patch("windows_desktop_tools._hwnd_title", return_value="微信"), patch.object(
+        with patch("modules.desktop.windows_desktop_tools._hwnd_title", return_value="微信"), patch.object(
             ctypes.windll.user32, "GetWindowRect", side_effect=fake_get
         ):
             geo = _geometry_wechat_search_target(42)

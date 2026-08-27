@@ -110,7 +110,7 @@ def test_state_sync_variable_condition():
 def test_state_sync_no_page_selector_fails_honestly():
     ctx = CrossEndContext(plan_id="p", scenario="s")
     mgr = SyncPointManager(ctx)
-    with patch("browser_manager.get_page", return_value=None):
+    with patch("modules.web.browser_manager.get_page", return_value=None):
         detail = mgr._run_ui_state_sync(
             {"selector": "#ready", "timeout_s": 0.01},
             {"type": "state_sync", "ok": False},
@@ -129,7 +129,7 @@ def test_api_state_sync_success_and_timeout():
         status = "pending" if calls["n"] < 2 else "ready"
         return {"response_json": {"status": status}, "ok_assert": True}
 
-    with patch("api_http_helper.execute_api_spec_sync", side_effect=_fake_http):
+    with patch("modules.integration.api_http_helper.execute_api_spec_sync", side_effect=_fake_http):
         gate = mgr.run_pre_stage_syncs({
             "wait_for": {
                 "type": "api_state_sync",
@@ -148,7 +148,7 @@ def test_api_state_sync_success_and_timeout():
     def _always_pending(spec, resolve_text=None):
         return {"response_json": {"status": "pending"}, "ok_assert": True}
 
-    with patch("api_http_helper.execute_api_spec_sync", side_effect=_always_pending):
+    with patch("modules.integration.api_http_helper.execute_api_spec_sync", side_effect=_always_pending):
         gate2 = mgr.run_pre_stage_syncs({
             "api_state_sync": {
                 "request": {"method": "GET", "url": "http://example.test/status"},

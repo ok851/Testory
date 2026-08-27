@@ -33,8 +33,8 @@ class TestMobileAutomation(unittest.TestCase):
 
 class TestMobileExecutorMocked(unittest.TestCase):
     @patch.dict(os.environ, {"ENABLE_MOBILE": "1"}, clear=False)
-    @patch("mobile_executor.mobile_runtime_available", return_value=True)
-    @patch("mobile_executor.check_appium_server", return_value=(True, "ok"))
+    @patch("modules.mobile.mobile_executor.mobile_runtime_available", return_value=True)
+    @patch("modules.mobile.mobile_executor.check_appium_server", return_value=(True, "ok"))
     def test_execute_tap_step(self, _avail, _appium_ok):
         from modules.mobile.mobile_executor import MobileExecutor
 

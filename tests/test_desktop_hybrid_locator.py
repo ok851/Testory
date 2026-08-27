@@ -13,9 +13,9 @@ class TestDesktopHybridLocator(unittest.TestCase):
         self.assertEqual(x, 100 - 20 + 10)
         self.assertEqual(y, 200 - 20 + 5)
 
-    @patch("desktop_shell_application.try_resolve_shell_application_step", return_value=None)
-    @patch("desktop_hybrid_locator.resolve_visual_click_point")
-    @patch("desktop_uia_snapshot.resolve_uia_click_point")
+    @patch("modules.desktop.desktop_shell_application.try_resolve_shell_application_step", return_value=None)
+    @patch("modules.desktop.desktop_hybrid_locator.resolve_visual_click_point")
+    @patch("modules.desktop.desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_uia_first(self, mock_uia, mock_vis, _com):
         from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
 
@@ -43,9 +43,9 @@ class TestDesktopHybridLocator(unittest.TestCase):
         self.assertEqual(r.resolved_via, "uia")
         mock_vis.assert_not_called()
 
-    @patch("desktop_shell_application.try_resolve_shell_application_step", return_value=None)
-    @patch("desktop_hybrid_locator.resolve_visual_click_point")
-    @patch("desktop_uia_snapshot.resolve_uia_click_point")
+    @patch("modules.desktop.desktop_shell_application.try_resolve_shell_application_step", return_value=None)
+    @patch("modules.desktop.desktop_hybrid_locator.resolve_visual_click_point")
+    @patch("modules.desktop.desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_visual_fallback(self, mock_uia, mock_vis, _com):
         from modules.desktop.desktop_uia_snapshot import UiaResolveResult
         from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
@@ -73,10 +73,10 @@ class TestDesktopHybridLocator(unittest.TestCase):
         self.assertEqual(r.resolved_via, "visual_roi")
         self.assertEqual(r.x, 10)
 
-    @patch("desktop_shell_application.try_resolve_shell_application_step", return_value=None)
-    @patch("desktop_shell_listview.try_resolve_shell_listview_step", return_value=None)
-    @patch("desktop_hybrid_locator.resolve_visual_click_point")
-    @patch("desktop_uia_snapshot.resolve_uia_click_point")
+    @patch("modules.desktop.desktop_shell_application.try_resolve_shell_application_step", return_value=None)
+    @patch("modules.desktop.desktop_shell_listview.try_resolve_shell_listview_step", return_value=None)
+    @patch("modules.desktop.desktop_hybrid_locator.resolve_visual_click_point")
+    @patch("modules.desktop.desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_uia_from_locator_candidates(self, mock_uia, mock_vis, _shell, _com):
         from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
         from modules.desktop.desktop_shell_listview import ShellIconTarget
@@ -85,7 +85,7 @@ class TestDesktopHybridLocator(unittest.TestCase):
             ok=True, x=80, y=90, score=1.0, anchor=(80, 90)
         )
         with patch(
-            "desktop_hybrid_locator._try_shell_at_screen_for_listitem",
+            "modules.desktop.desktop_hybrid_locator._try_shell_at_screen_for_listitem",
             return_value=ShellIconTarget(
                 listview_hwnd=1,
                 index=-1,
@@ -133,16 +133,16 @@ class TestDesktopHybridLocator(unittest.TestCase):
             self.assertEqual(r.resolved_via, "shell_listview")
             mock_vis.assert_not_called()
 
-    @patch("desktop_shell_listview.try_resolve_shell_listview_step", return_value=None)
-    @patch("desktop_hybrid_locator.resolve_visual_click_point")
-    @patch("desktop_uia_snapshot.resolve_uia_click_point")
+    @patch("modules.desktop.desktop_shell_listview.try_resolve_shell_listview_step", return_value=None)
+    @patch("modules.desktop.desktop_hybrid_locator.resolve_visual_click_point")
+    @patch("modules.desktop.desktop_uia_snapshot.resolve_uia_click_point")
     def test_resolve_shell_com_first(self, mock_uia, mock_vis, _shell):
         from modules.desktop.desktop_hybrid_locator import resolve_desktop_click_point
         from modules.desktop.desktop_shell_application import ShellComTarget
 
         com = ShellComTarget(icon_name="控制面板", matched_name="控制面板")
         with patch(
-            "desktop_shell_application.try_resolve_shell_application_step",
+            "modules.desktop.desktop_shell_application.try_resolve_shell_application_step",
             return_value=com,
         ):
             uia_nodes = [

@@ -59,7 +59,7 @@ def test_execute_user_instruction_calls_chat_completions(monkeypatch):
         {"choices": [{"message": {"content": "explored login page"}}]}
     ).encode()
     mock_resp.json.return_value = json.loads(mock_resp.content.decode())
-    with patch("hermes_gateway_client.requests.post", return_value=mock_resp) as post:
+    with patch("modules.hermes.hermes_gateway_client.requests.post", return_value=mock_resp) as post:
         out = client.execute_user_instruction("explore login")
     assert "login" in out
     post.assert_called_once()

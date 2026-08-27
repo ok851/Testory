@@ -47,8 +47,8 @@ class TestDesktopInput(unittest.TestCase):
         self.assertGreater(h, 0)
         self.assertTrue(screen_coords_in_virtual_bounds(l + 1, t + 1))
 
-    @patch("desktop_input._enum_visible_windows")
-    @patch("desktop_input.get_foreground_hwnd", return_value=0)
+    @patch("modules.desktop.desktop_input._enum_visible_windows")
+    @patch("modules.desktop.desktop_input.get_foreground_hwnd", return_value=0)
     def test_wait_ignores_preexisting_title(self, _fg, mock_enum):
         mock_enum.return_value = [(100, "控制面板", "CabinetWClass")]
         self.assertFalse(
@@ -61,8 +61,8 @@ class TestDesktopInput(unittest.TestCase):
             )
         )
 
-    @patch("desktop_input._enum_visible_windows")
-    @patch("desktop_input.get_foreground_hwnd", return_value=0)
+    @patch("modules.desktop.desktop_input._enum_visible_windows")
+    @patch("modules.desktop.desktop_input.get_foreground_hwnd", return_value=0)
     def test_wait_detects_new_title(self, _fg, mock_enum):
         mock_enum.return_value = [
             (100, "控制面板", "CabinetWClass"),

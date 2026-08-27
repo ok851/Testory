@@ -6,10 +6,10 @@ from unittest.mock import MagicMock, patch
 
 
 class TestDesktopAutomationVisual(unittest.TestCase):
-    @patch("desktop_automation.wait_for_desktop_effect", return_value=True)
-    @patch("desktop_automation.sendinput_pointer_at_screen")
-    @patch("desktop_hybrid_locator.resolve_desktop_click_point")
-    @patch("desktop_automation.desktop_runtime_available", return_value=True)
+    @patch("modules.desktop.desktop_automation.wait_for_desktop_effect", return_value=True)
+    @patch("modules.desktop.desktop_automation.sendinput_pointer_at_screen")
+    @patch("modules.desktop.desktop_hybrid_locator.resolve_desktop_click_point")
+    @patch("modules.desktop.desktop_automation.desktop_runtime_available", return_value=True)
     def test_perform_visual_click(self, _rt, mock_resolve, sendinput, _effect):
         from modules.desktop.desktop_automation import DesktopAutomation
         from modules.desktop.desktop_hybrid_locator import DesktopResolveResult
@@ -29,18 +29,18 @@ class TestDesktopAutomationVisual(unittest.TestCase):
         self.assertTrue(out.get("pointer_executed"))
         sendinput.assert_called_once()
 
-    @patch("desktop_automation.sendinput_pointer_at_screen")
+    @patch("modules.desktop.desktop_automation.sendinput_pointer_at_screen")
     @patch(
-        "desktop_hybrid_locator.resolve_desktop_click_point",
+        "modules.desktop.desktop_hybrid_locator.resolve_desktop_click_point",
         side_effect=__import__(
-            "desktop_visual_engine", fromlist=["VisualMatchFailed"]
+            "modules.desktop.desktop_visual_engine", fromlist=["VisualMatchFailed"]
         ).VisualMatchFailed("score too low"),
     )
     @patch(
-        "desktop_automation.build_visual_failure_artifact_png",
+        "modules.desktop.desktop_automation.build_visual_failure_artifact_png",
         return_value=b"fake-png",
     )
-    @patch("desktop_automation.desktop_runtime_available", return_value=True)
+    @patch("modules.desktop.desktop_automation.desktop_runtime_available", return_value=True)
     def test_visual_match_failure_saves_roi_artifact(
         self, _rt, _artifact, _resolve, _sendinput
     ):
@@ -59,7 +59,7 @@ class TestDesktopAutomationVisual(unittest.TestCase):
         self.assertTrue(ctx.exception.failure_screenshot)
         self.assertIn("/static/desktop_screenshots/", ctx.exception.failure_screenshot)
 
-    @patch("desktop_automation.desktop_runtime_available", return_value=True)
+    @patch("modules.desktop.desktop_automation.desktop_runtime_available", return_value=True)
     def test_legacy_step_blocked(self, _rt):
         from modules.desktop.desktop_automation import DesktopAutomation
 
