@@ -1,0 +1,19 @@
+{
+  "run_id": "tl-23517e056d12",
+  "plan_id": "imp-2",
+  "scenario": "lock test",
+  "started_at": "2026-08-27T04:21:46.914854+00:00",
+  "finished_at": "2026-08-27T04:21:47.120127+00:00",
+  "total_ms": 204.7,
+  "success": false,
+  "stage_metrics": [],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 204.7,
+  "bottleneck": {
+    "type": "none"
+  },
+  "summary": {}
+}

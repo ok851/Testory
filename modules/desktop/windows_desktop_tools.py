@@ -2608,6 +2608,57 @@ def _pick_wechat_search_result_candidate(
     return picked
 
 
+def _build_desktop_uia_anchor(x: int, y: int) -> Dict[str, Any]:
+    """点击坐标 → UIA 快照 → 稳定锚点候选（录制期补录，回放定位 + 树级校验用）。
+
+    候选优先级：AutomationId → uia-name → control_type。全部静默：
+    快照失败/无稳定键返回 {}，绝不阻塞点击流程（与移动端 _build_mobile_uia_anchor 对齐）。
+    """
+    try:
+        from modules.desktop.desktop_uia_snapshot import capture_element_snapshot_at_point
+
+        snap = capture_element_snapshot_at_point(int(x), int(y), timeout_sec=1.5)
+        if not snap.ok:
+            return {}
+        es = snap.element_snapshot or {}
+        sel = es.get("selector") or {}
+        cands: List[Dict[str, Any]] = []
+        for kc in sel.get("key_candidates") or []:
+            prop = (kc.get("property") or "").strip()
+            val = (kc.get("value") or "").strip()
+            if not val:
+                continue
+            if prop == "automation_id":
+                cands.append({"type": "automation_id", "value": val, "score": 0.95})
+            elif prop == "uia-name":
+                cands.append({"type": "name", "value": val, "score": 0.85})
+        if not cands and (snap.element_label or "").strip():
+            cands.append({"type": "name", "value": snap.element_label.strip(), "score": 0.8})
+        ct = (snap.control_type or "").strip()
+        if ct and cands:
+            cands.append({"type": "control_type", "value": ct, "score": 0.7})
+        if not cands:
+            return {}
+        br = snap.bounding_rect
+        node: Dict[str, Any] = {
+            "name": snap.element_label or "",
+            "control_type": ct,
+            "class_name": es.get("class_name") or "",
+            "rect": [int(v) for v in br] if isinstance(br, (list, tuple)) else [],
+            "window_title": snap.window_title or "",
+            "process_name": snap.process_name or "",
+            "parent_chain": sel.get("parent_chain") or [],
+        }
+        return {
+            "layer": "desktop",
+            "candidates": cands,
+            "node": node,
+            "tree_fingerprint": "",
+        }
+    except Exception:
+        return {}
+
+
 def windows_click_element(
     description: str,
     _ocr_hints: Optional[List[str]] = None,
@@ -2941,6 +2992,21 @@ def windows_click_element(
                 mark_compose_input_phase()
             else:
                 clear_search_input_focus()
+        # 点击成功后按坐标补录 UIA 锚点（回放定位/校验用；失败静默为空）
+        anchor = _build_desktop_uia_anchor(x, y)
+        # 树级结果校验：点击后 UIA 快照存在性即"命中后状态"（视觉 capture_after 之外的第二道真实性证据）
+        tree_verify: Dict[str, Any] = {}
+        if anchor:
+            an = anchor.get("node") or {}
+            tree_verify = {
+                "found": bool(an),
+                "matched_via": (anchor.get("candidates") or [{}])[0].get("type", ""),
+                "node_state": {
+                    "name": an.get("name") or "",
+                    "control_type": an.get("control_type") or "",
+                    "class_name": an.get("class_name") or "",
+                },
+            }
         return {
             "success": True,
             "verified": verified,
@@ -2952,6 +3018,8 @@ def windows_click_element(
             "click_via": click_via,
             "nearby_text": nearby,
             "capture_after": cap,
+            "uia_anchor": anchor,
+            "verification": tree_verify,
             "search_armed": bool(search_like),
             "steps_done": ["click_attempted", "click"] if verified else ["click_attempted"],
             "flow_halt": False,

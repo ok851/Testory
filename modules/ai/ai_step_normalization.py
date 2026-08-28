@@ -368,6 +368,22 @@ def normalize_ai_step(step: dict) -> dict:
                 out["cross_end_spec"] = json.dumps(ces, ensure_ascii=False)
             except Exception:
                 out["cross_end_spec"] = ""
+    # 阶段1/3 补录字段：UIA 锚点 / 树级校验快照 / 录制 serial —— 白名单透传，防 normalize 裁剪
+    for _extra_key, _extra_src in (
+        ("uia_anchor", step.get("uia_anchor")),
+        ("verification", step.get("verification")),
+        ("stage_info", step.get("stage_info")),
+    ):
+        if _extra_src is not None:
+            if isinstance(_extra_src, str):
+                out[_extra_key] = _extra_src
+            else:
+                try:
+                    out[_extra_key] = json.dumps(_extra_src, ensure_ascii=False)
+                except Exception:
+                    pass
+    if step.get("device_id"):
+        out["device_id"] = _str(step.get("device_id"))[:80]
     return out
 
 
@@ -692,6 +708,23 @@ def dedupe_and_validate_ai_steps(steps: list, *, platform: str = "web") -> Tuple
     return clean_steps, warnings
 
 
+def _steps_mixed_multi_end(steps: Any) -> bool:
+    """步骤集合是否多端混合（PC 侧 + 手机侧并存）。
+
+    多端联动用例（per-step layer 已按工具前缀归因）绝不能走单平台 repair：
+    repair_desktop_ai_steps_inplace 会强制全部步骤 automation_layer='desktop'，
+    把 android 步骤污染成桌面步骤（阶段1 修过录制侧，此处在 normalize 管线兜底）。
+    """
+    layers = {
+        _str(s.get("automation_layer")).lower()
+        for s in steps
+        if isinstance(s, dict) and _str(s.get("automation_layer"))
+    }
+    pc_side = bool(layers & {"web", "desktop"})
+    mob_side = bool(layers & {"android", "mobile"})
+    return pc_side and mob_side
+
+
 def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """
     就地更新 plan['steps']，并将 warnings 写入 plan['meta']['normalization_warnings']（合并已有 meta）。
@@ -703,7 +736,7 @@ def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Op
     if not isinstance(steps, list):
         return plan, []
     platform = infer_plan_platform_type(plan, steps)
-    if platform == "desktop":
+    if platform == "desktop" and not _steps_mixed_multi_end(steps):
         repair_warns = repair_desktop_ai_steps_inplace(steps)
     elif platform == "android":
         repair_warns = []

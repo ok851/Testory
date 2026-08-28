@@ -93,7 +93,10 @@ def apply_local_env(root: Path, port: int) -> Path:
     os.environ.setdefault("PLAYWRIGHT_HEADLESS", "0")
     os.environ.setdefault("DESKTOP_AUTO_START_GATEWAY", "0")
     os.environ.setdefault("FLASK_RUN_PORT", str(port))
-    os.environ.setdefault("FLASK_RUN_HOST", "127.0.0.1")
+    # 绑定 0.0.0.0：移动端同步（手机 APK / scrcpy bridge）需要局域网可达，
+    # 与 Tauri 模式（src-tauri flask_process.rs）及 scrcpy bridge 8767 的绑定策略保持一致。
+    # 曾设 127.0.0.1 导致手机「信息都正确却无法连接」。
+    os.environ.setdefault("FLASK_RUN_HOST", "0.0.0.0")
     os.environ.setdefault("UAT_DESKTOP_MODE", "1")
     os.environ.setdefault("DEPLOYMENT_MODE", "client")
     os.environ.setdefault("DESKTOP_LAZY_GATEWAY_BOOT", "1")
@@ -142,7 +145,7 @@ def _patch_user_env_missing_keys(env_path: Path) -> None:
         "DEPLOYMENT_PROFILE": "local",
         "PLAYWRIGHT_HEADLESS": "0",
         "LOCAL_LLM_BASE_URL": "http://127.0.0.1:11434",
-        "FLASK_RUN_HOST": "127.0.0.1",
+        "FLASK_RUN_HOST": "0.0.0.0",
         "DESKTOP_LAZY_GATEWAY_BOOT": "1",
         "ENABLE_MOBILE": "1",
         "MOBILE_EMULATOR_MODE": "1",
@@ -166,6 +169,20 @@ def _patch_user_env_missing_keys(env_path: Path) -> None:
             env_path.write_text(text, encoding="utf-8")
         except OSError:
             pass
+    # 存量 .env 里的 127.0.0.1 回环绑定会阻断手机局域网连接（移动端同步核心功能），
+    # 主动改写为 0.0.0.0（与 Tauri 模式 / scrcpy bridge 绑定策略一致）
+    try:
+        import re
+
+        if re.search(r"(?m)^FLASK_RUN_HOST\s*=\s*['\"]?127\.0\.0\.1['\"]?\s*$", text):
+            text = re.sub(
+                r"(?m)^FLASK_RUN_HOST\s*=\s*.*$",
+                "FLASK_RUN_HOST=0.0.0.0",
+                text,
+            )
+            env_path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
     lines: list[str] = []
     for key, val in defaults.items():
         if f"{key}=" in text or f"{key} =" in text:
@@ -200,7 +217,7 @@ def ensure_dotenv(root: Path, user_data: Path) -> Path:
         "PLAYWRIGHT_HEADLESS=0\n"
         "DEPLOYMENT_MODE=client\n"
         "UAT_DESKTOP_MODE=1\n"
-        "FLASK_RUN_HOST=127.0.0.1\n"
+        "FLASK_RUN_HOST=0.0.0.0\n"
         "DESKTOP_LAZY_GATEWAY_BOOT=1\n"
         "ENABLE_MOBILE=1\n"
         "MOBILE_EMULATOR_MODE=1\n"
@@ -526,9 +543,54 @@ def _terminate_backend(proc: Optional[subprocess.Popen]) -> None:
         proc.kill()
 
 
+def _kill_process_tree(pid: int) -> None:
+    """递归终止进程及其所有子进程。
+
+    后端 app.py 会在自身进程内 spawn Hermes / 桌面 / 移动网关（孙进程）。
+    仅 terminate 后端父进程会让这些网关变成孤儿残留、继续占用端口。
+    这里用进程树方式一并清除，避免“关闭后进程卡死/端口被占用”。
+    """
+    if pid is None or pid <= 0:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=_no_window_flags(),
+            )
+        else:
+            import os
+            import signal
+
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+    except Exception:
+        pass
+
+
 def _shutdown_all(proc: Optional[subprocess.Popen], *, port: int = DEFAULT_PORT) -> None:
     del port
-    _terminate_backend(proc)
+    # 先递归杀后端进程树（含其 spawn 的 Hermes/桌面/移动网关孙进程），
+    # 再兜底调用各网关的 stop（父进程内的 stop 拿不到孙进程引用，仅作端口回收）。
+    if proc is not None and proc.poll() is None:
+        _kill_process_tree(proc.pid)
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=6)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
     try:
         from modules.desktop.desktop_startup import shutdown_all_services
 

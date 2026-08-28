@@ -27,6 +27,26 @@ class ActionRecord:
     screenshot: str = ""
     vision_info: Optional[Dict[str, Any]] = None
     raw_text: str = ""
+    # 录制期补录：双端 UIA 树稳定锚点（回放定位/自愈用）
+    uia_anchor: Optional[Dict[str, Any]] = None
+    # 录制期补录：动作后树级结果校验快照（回放逐步复核用）
+    verification: Optional[Dict[str, Any]] = None
+    # per-record 工具前缀层：browser_→web / windows_|desktop_→desktop / mobile_→android
+    platform_layer: str = ""
+    # 录制 serial：移动端工具 args.serial 带入，Stage 分组时写 mobile branch.device_id
+    device_serial: str = ""
+
+
+def _layer_for_tool_name(name: str) -> str:
+    """按工具前缀判定步骤所属自动化层（多端联动录制时覆盖单一 self.platform）。"""
+    nm = (name or "").strip().lower()
+    if nm.startswith("mobile_"):
+        return "android"
+    if nm.startswith("windows_") or nm.startswith("desktop_"):
+        return "desktop"
+    if nm.startswith("browser_"):
+        return "web"
+    return ""
 
 
 _URL_RE = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
@@ -507,6 +527,10 @@ class ActionRecorder:
             result=summary or f"{name}",
             status=st,
             raw_text=json.dumps({"name": name, "args": args}, ensure_ascii=False)[:2000],
+            uia_anchor=result.get("uia_anchor") if isinstance(result, dict) else None,
+            verification=result.get("verification") if isinstance(result, dict) else None,
+            platform_layer=_layer_for_tool_name(name),
+            device_serial=str(args.get("serial") or args.get("device_id") or "")[:80],
         )
         self.records.append(rec)
         return [rec]
@@ -544,6 +568,11 @@ class ActionRecorder:
             if ok is None and (item.get("status") or "").lower() in ("failed", "fail", "error"):
                 ok = False
             verified = item.get("verified")
+            _args_ser = ""
+            if isinstance(item.get("args"), dict):
+                _args_ser = str(item["args"].get("serial") or item["args"].get("device_id") or "")
+            elif isinstance(step.get("args"), dict):
+                _args_ser = str(step["args"].get("serial") or step["args"].get("device_id") or "")
             out.append(
                 ActionRecord(
                     action_id=f"act_{len(self.records) + len(out)}",
@@ -556,6 +585,8 @@ class ActionRecorder:
                         verified=bool(verified) if verified is not None else None,
                     ),
                     raw_text=json.dumps(item, ensure_ascii=False)[:300],
+                    platform_layer=_layer_for_tool_name(str(act)),
+                    device_serial=_args_ser[:80],
                 )
             )
         return out
@@ -676,10 +707,14 @@ class ActionRecorder:
                 "target": rec.target,
                 "input_value": rec.input_data,
                 "description": rec.result[:100] if rec.result else "",
-                "automation_layer": self.platform
-                if self.platform in ("web", "desktop", "android")
-                else "web",
+                # 多端联动录制：优先 per-record 工具前缀层，其次平台单值
+                "automation_layer": rec.platform_layer
+                if rec.platform_layer in ("web", "desktop", "android")
+                else (self.platform if self.platform in ("web", "desktop", "android") else "web"),
             }
+            # 移动端步骤携带录制 serial（Stage 分组时写 mobile branch.device_id）
+            if step.get("automation_layer") == "android" and rec.device_serial:
+                step["device_id"] = rec.device_serial
             # ── 跨端/api 步骤：仅当 raw_name 明确匹配时才做特殊参数恢复 ──
             _raw_name = ""
             _raw_args: Dict[str, Any] = {}
@@ -728,22 +763,36 @@ class ActionRecorder:
                 step["description"] = step.get("description") or f"{api_spec.get('method','GET')} {api_spec.get('url','')}"
             if rec.locator:
                 step["locator"] = rec.locator
+            # UIA 树锚点补录：候选链 → selector_type/selector_value + locator_candidates
+            # （此前 locator 恒空导致不产出任何选择器，DB 回放无法定位）
+            elif rec.uia_anchor and isinstance(rec.uia_anchor, dict):
+                cands = rec.uia_anchor.get("candidates") or []
+                if cands:
+                    c0 = cands[0]
+                    step["selector_type"] = c0.get("type") or ""
+                    step["selector_value"] = c0.get("value") or ""
+                step["locator_candidates"] = cands
+                step["uia_anchor"] = rec.uia_anchor
             hit = probe_by_text.get((rec.target or "").strip())
             if hit:
                 if hit.get("i") is not None:
                     step["probe_index"] = hit.get("i")
                 css = (hit.get("css") or hit.get("selector") or "").strip()
-                if css and not step.get("locator"):
+                if css and not step.get("locator") and not step.get("selector_value"):
                     step["locator"] = css
                     step["target"] = css
-            if self.platform == "desktop":
-                step["selector_type"] = "window"
+            if step.get("automation_layer") == "desktop":
+                # 已有 UIA 锚点（automation_id/name）时保留，否则回退窗口级选择器
+                if not step.get("selector_type"):
+                    step["selector_type"] = "window"
                 if rec.action_type == "launch_app":
                     step["input_value"] = rec.target
                 elif rec.action_type == "hotkey":
                     step["input_value"] = rec.target
             if rec.vision_info:
                 step["vision_info"] = rec.vision_info
+            if rec.verification and isinstance(rec.verification, dict):
+                step["verification"] = rec.verification
             steps.append(step)
         return steps
 
@@ -793,9 +842,32 @@ class ActionRecorder:
 
             registry = get_probe_registry()
             if registry and plan.get("steps"):
-                plan = resolve_plan_steps_locators_with_snapshot(plan, registry)
+                # 注意：第一参数必须是 steps 列表（曾误传整个 plan dict 导致返回值被包成 tuple）
+                _resolved, _loc_warns = resolve_plan_steps_locators_with_snapshot(
+                    plan.get("steps"), registry
+                )
+                if isinstance(_resolved, list):
+                    plan["steps"] = _resolved
         except Exception:
             pass
+        # 阶段3：Stage 级并行产出（录制期分组，供回放 Stage 级并行）
+        # 仅当 PC 步骤 ≥1 且手机步骤 ≥1 且端切换 ≥1 才产出；单端用例 stages 为空（兼容红线）
+        _final_steps = plan.get("steps") or []
+        stages = _group_steps_into_stages(_final_steps)
+        plan["stages"] = stages
+        # 展开写回每步 stage_info（随 plan 序列化，落库/回放自动携带，无需前端参与）
+        for _st in stages:
+            for _b in _st.get("branches") or []:
+                for _s in _b.get("steps") or []:
+                    if isinstance(_s, dict):
+                        _s["stage_info"] = {
+                            "stage_id": _st.get("id"),
+                            "branch": _b.get("name"),
+                            "layer": _b.get("layer"),
+                            "device_id": _b.get("device_id", ""),
+                            "allow_partial": _st.get("allow_partial", False),
+                            "timeout_sec": _st.get("timeout_sec", 600),
+                        }
         warnings = list(warnings1) + list(warnings2 or []) + list(warnings3 or [])
         return plan, warnings
 
@@ -813,3 +885,104 @@ class ActionRecorder:
         if m:
             return m.group()
         return (text or "")[:60]
+
+
+def _side_for_layer(layer: str) -> str:
+    """步骤自动化层 → 并行端（pc / mobile / ""=不参与分组）。"""
+    layer = (layer or "").strip().lower()
+    if layer in ("web", "desktop", "pc"):
+        return "pc"
+    if layer in ("android", "mobile"):
+        return "mobile"
+    return ""  # cross_end（extract_otp/api_call）等：留在线性步骤，不进任何分支
+
+
+def _group_steps_into_stages(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """将归一化步骤列表按端分组为并行 stage（录制期产出，供回放 Stage 级并行）。
+
+    规则（对齐 multi_device_scheduler 的 stage schema）：
+    1. 按 per-step automation_layer 分类：web|desktop → pc 侧；android|mobile → mobile 侧；
+       cross_end（extract_otp/api_call）不参与分组（留在线性步骤序列）。
+    2. 相邻同侧步骤合并为 run（段），两侧严格交替。
+    3. 全局门槛：pc 步骤 ≥1 且 mobile 步骤 ≥1 且端切换 ≥1 次，否则返回 []（单端兼容红线，
+       旧单端用例不产出 stages，回放零影响）。
+    4. 两两配对 runs → 每个 stage 一个 pc 分支 + 一个 mobile 分支（缺失侧留空列表，
+       schema 严格对齐 scheduler）；奇数尾段单独成 stage（单分支，回放端按串行处理）。
+    5. mobile 分支 device_id 取该分支首个 android 步骤的 device_id（录制 serial 透传）。
+    """
+    if not isinstance(steps, list) or not steps:
+        return []
+    sides: List[str] = []
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        sides.append(_side_for_layer(str(s.get("automation_layer") or "")))
+    # 全局门槛：仅当双端都存在且出现端切换才产出（单端兼容红线）
+    has_pc = any(sd == "pc" for sd in sides)
+    has_mob = any(sd == "mobile" for sd in sides)
+    switches = sum(
+        1 for i in range(1, len(sides)) if sides[i] and sides[i - 1] and sides[i] != sides[i - 1]
+    )
+    if not (has_pc and has_mob and switches >= 1):
+        return []
+
+    # 相邻同侧步骤合并为 run（cross_end 步骤作为缝隙跳过，不阻断两侧）
+    runs: List[Dict[str, Any]] = []
+    cur_side = ""
+    cur_steps: List[Dict[str, Any]] = []
+    for s, sd in zip(steps, sides):
+        if not sd:
+            continue  # cross_end 等：不参与分组，但保留在线性步骤
+        if cur_side and sd != cur_side:
+            runs.append({"side": cur_side, "steps": cur_steps})
+            cur_steps = []
+        cur_side = sd
+        cur_steps.append(s)
+    if cur_side and cur_steps:
+        runs.append({"side": cur_side, "steps": cur_steps})
+
+    def _branch(run: Dict[str, Any]) -> Dict[str, Any]:
+        if run["side"] == "pc":
+            return {"name": "pc", "layer": "desktop", "steps": run["steps"]}
+        dev_id = ""
+        for s in run["steps"]:
+            if isinstance(s, dict) and s.get("device_id"):
+                dev_id = str(s["device_id"])
+                break
+        return {"name": "mobile", "layer": "mobile", "steps": run["steps"], "device_id": dev_id}
+
+    def _stage(idx: int, pc_run: Optional[Dict[str, Any]], mob_run: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        branches: List[Dict[str, Any]] = []
+        if pc_run:
+            branches.append(_branch(pc_run))
+        if mob_run:
+            branches.append(_branch(mob_run))
+        return {
+            "id": f"stage_{idx}",
+            "cross_end_parallel": True,
+            "branches": branches,
+            "allow_partial": False,
+            "timeout_sec": 600,
+        }
+
+    stages: List[Dict[str, Any]] = []
+    i = 0
+    stage_no = 1
+    while i < len(runs):
+        cur = runs[i]
+        if i + 1 < len(runs):
+            nxt = runs[i + 1]
+            if cur["side"] != nxt["side"]:
+                pc_run = cur if cur["side"] == "pc" else nxt
+                mob_run = cur if cur["side"] == "mobile" else nxt
+                stages.append(_stage(stage_no, pc_run, mob_run))
+                stage_no += 1
+                i += 2
+                continue
+        # 奇数尾段：单独成 stage（单分支，回放端按串行处理）
+        pc_run = cur if cur["side"] == "pc" else None
+        mob_run = cur if cur["side"] == "mobile" else None
+        stages.append(_stage(stage_no, pc_run, mob_run))
+        stage_no += 1
+        i += 1
+    return stages

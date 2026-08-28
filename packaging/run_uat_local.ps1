@@ -79,7 +79,8 @@ if ($env:UAT_CHECK_UPDATE -eq "1" -and $env:UAT_UPDATE_MANIFEST_URL) {
 if ($Desktop) {
     $env:UAT_DESKTOP_MODE = "1"
     $env:DEPLOYMENT_MODE = "client"
-    $env:FLASK_RUN_HOST = "127.0.0.1"
+    # 0.0.0.0：移动端同步（手机 APK）需要局域网可达（与 Tauri 模式一致）
+    $env:FLASK_RUN_HOST = "0.0.0.0"
     $env:DESKTOP_LAZY_GATEWAY_BOOT = "1"
     $env:TESTORY_FRAMELESS_SHELL = "1"
     Write-Host "启动桌面壳..." -ForegroundColor Green

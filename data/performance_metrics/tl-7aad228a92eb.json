@@ -1,0 +1,19 @@
+{
+  "run_id": "tl-7aad228a92eb",
+  "plan_id": "held-2",
+  "scenario": "lock test",
+  "started_at": "2026-08-27T04:21:28.995857+00:00",
+  "finished_at": "2026-08-27T04:21:29.197227+00:00",
+  "total_ms": 201.1,
+  "success": false,
+  "stage_metrics": [],
+  "device_metrics": {},
+  "sync_wait_ms": 0,
+  "hitl_wait_ms": 0,
+  "risk_check_ms": 0,
+  "overhead_ms": 201.1,
+  "bottleneck": {
+    "type": "none"
+  },
+  "summary": {}
+}

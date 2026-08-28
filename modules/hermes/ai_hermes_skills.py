@@ -320,6 +320,44 @@ def _save_selector_store(store: Dict[str, Any]) -> None:
     path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _collect_selector_alternates(step: Dict[str, Any]) -> List[str]:
+    """从 locator_candidates / uia_anchor.candidates 收集备选 selector（阶段5 自愈学习）。
+
+    回放自愈命中后，主 selector 之外的候选写入学习库 alternates，供后续用例回退定位。
+    """
+    out: List[str] = []
+
+    def _push(v: Any) -> None:
+        v = str(v or "").strip()
+        if v and v not in out:
+            out.append(v)
+
+    lc = step.get("locator_candidates")
+    if isinstance(lc, str) and lc.strip():
+        try:
+            lc = json.loads(lc)
+        except Exception:
+            lc = None
+    if isinstance(lc, list):
+        for c in lc:
+            if isinstance(c, dict):
+                _push(c.get("selector_value") or c.get("value") or c.get("selector"))
+            elif isinstance(c, str):
+                _push(c)
+
+    ua = step.get("uia_anchor")
+    if isinstance(ua, str) and ua.strip():
+        try:
+            ua = json.loads(ua)
+        except Exception:
+            ua = None
+    if isinstance(ua, dict):
+        for c in ua.get("candidates") or []:
+            if isinstance(c, dict):
+                _push(c.get("selector_value") or c.get("value"))
+    return out
+
+
 def extract_selectors_from_plan(plan: Dict[str, Any]) -> List[Dict[str, str]]:
     """从 plan 步骤中提取选择器模式。"""
     selectors: List[Dict[str, str]] = []
@@ -338,6 +376,7 @@ def extract_selectors_from_plan(plan: Dict[str, Any]) -> List[Dict[str, str]]:
                 "action": action,
                 "description": desc,
                 "case_url": url,
+                "alternates": _collect_selector_alternates(step),
             })
     return selectors
 
@@ -375,6 +414,27 @@ def learn_selectors_from_plan(
         if url and url not in entry.get("case_urls", []):
             entry.setdefault("case_urls", []).append(url)
             entry["case_urls"] = entry["case_urls"][-10:]
+        # 阶段5：候选 selector（locator_candidates / uia_anchor.candidates）写入 alternates，
+        # 供 lookup_alternate_selectors 在后续用例回放定位失败时回退（dict 格式对齐 record_selector_healing）
+        alts = item.get("alternates") or []
+        if alts:
+            cur = entry.get("alternates") or []
+            existing_sel = {
+                a.get("selector") for a in cur if isinstance(a, dict) and a.get("selector")
+            }
+            changed = False
+            for a in alts:
+                if a != key and a not in existing_sel:
+                    cur.append({
+                        "selector": a,
+                        "selector_type": item.get("selector_type", "css"),
+                        "action": item.get("action", ""),
+                        "learned_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    existing_sel.add(a)
+                    changed = True
+            if changed:
+                entry["alternates"] = cur[-20:]
         added += 1
 
     _save_selector_store(store)

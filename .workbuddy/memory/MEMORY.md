@@ -6,6 +6,7 @@
 - 前端：Jinja2 SSR + Tailwind CSS + 自定义 CSS，无 SPA 框架
 - 无边框窗口模式 (TESTORY_FRAMELESS_SHELL=1)
 - 启动链：Testory.exe → testory_exe_launcher.py → uat_desktop.py → Flask + pywebview
+- **WSGI 服务器铁律**：桌面端常驻 Flask **严禁用 werkzeug 开发服务器**（`app.run(debug=...)`）。werkzeug 3.0.1 在 `serving.py:347` 执行 `self.rfile.read(10_000_000)`，长期运行内存紧张时抛 `MemoryError`，且崩溃在 URL 解析前，请求被静默丢弃（表现为"对方没发请求"）。`app.py` `__main__` 已改为三级容错：waitress（优先，需联网装）→ wsgiref(ThreadingWSGIServer)（标准库零安装，默认）→ werkzeug（兜底）。并套 `_AccessLogMiddleware`，请求一到达即打印 `INFO:werkzeug:... "{method} {path}"`，补"请求是否到达"可观测性。改动该段启动逻辑时务必保留 wsgiref 分支。
 
 ## 仓库结构（2026-08-26 大重组后）
 - 根目录仅 12 个 .py：app.py、database.py + 10 个 CLI 工具（build_exe/verify_installation/generate_license/cross_end_cli/android_sdk_manager/assertion_engine/element_locator_steward/enhanced_text_extractor/example_intelligent_usage/env_example_sync）
@@ -47,3 +48,5 @@
 - 多个页面使用内嵌 `<style>` 块，需用 `!important` 在全局 CSS 中覆盖
 - Windows 上 `time.time()` 连续调用可能返回相同值（精度问题），TTL/超时判断注意边界（用 `>=` 而非 `>`）
 - 新增业务模块应放入 `modules/<对应域>/`，根目录不再堆放实现文件
+- **Hermes 家目录解析**：`hermes_home_dir()`（`modules/hermes/hermes_config.py`）当 `HERMES_HOME` 含字面量 `%UAT_DATA_DIR%` 且 `UAT_DATA_DIR` 为空时，必须回退 `LOCALAPPDATA/Testory/hermes`，**禁止**回退到仓库根下字面量 `%UAT_DATA_DIR%/hermes` 毒目录（写入 WinError 5）。`UAT_DATA_DIR` 由 `packaging/uat_desktop.py` 设为 `AppData/Local/Testory`，缺失会导致 Hermes 等多处数据目录解析到错误路径。
+- Hermes 网关是**独立 `hermes_agent` 包**（.venv 内 0.16.0），与项目 `modules/` 重组无关；智能体"启动失败"常见真因：网关 8642 未监听+状态文件陈旧假运行、平台↔网关 `API_SERVER_KEY` 不匹配（`resolve_hermes_api_server_key()` 有自愈合）、上游 LLM 403 额度耗尽、CDP 9222 未开。

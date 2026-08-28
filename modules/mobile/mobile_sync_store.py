@@ -14,6 +14,20 @@ from typing import Any, Dict, List, Optional, Tuple
 from flask import jsonify, request
 
 _LOCK = threading.RLock()
+
+
+def _pair_debug_log(message: str) -> None:
+    """把配对/连接诊断信息写到 mobile_sync/pair_debug.log，方便定位真机连接问题。"""
+    try:
+        log_path = _store_file().parent / "pair_debug.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        line = f"[{now}] {message}\n"
+        with _LOCK:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:
+        pass
 _PAIR_CODES: Dict[str, Dict[str, Any]] = {}
 _DEVICE_TOKENS: Dict[str, Dict[str, Any]] = {}
 _RUN_JOBS: Dict[str, Dict[str, Any]] = {}
@@ -1275,6 +1289,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
     # ── 健康检查（无认证，供移动端探测服务器可达性）──
     @app.route("/api/ping", methods=["GET"])
     def api_ping():
+        _pair_debug_log(f"PING from {request.remote_addr} ua={request.user_agent.string!r}")
         return jsonify({"success": True, "message": "pong", "server": "testory"})
 
     @app.route("/api/mobile/sync/pair/init", methods=["POST"])
@@ -1287,13 +1302,52 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
 
         db = Database()
         tid = db.get_user_tenant_id(current_user.id)
-        return jsonify(pair_code_payload(current_user.id, tid))
+        payload = pair_code_payload(current_user.id, tid)
+        _pair_debug_log(f"PAIR_INIT from {request.remote_addr} code={payload.get('pair_code')} user={current_user.id}")
+        return jsonify(payload)
 
     @app.route("/api/mobile/sync/pair/confirm", methods=["POST"])
     @api_error_handler
     def api_mobile_sync_pair_confirm():
-        body = request.get_json(silent=True) or {}
-        ok, msg, token = confirm_pair(body.get("code") or body.get("pair_code"), body.get("device_id"))
+        raw_body = b""
+        try:
+            raw_body = request.get_data(cache=False, as_text=False) or b""
+        except Exception:
+            pass
+        body: Dict[str, Any] = {}
+        try:
+            body = request.get_json(silent=True) or {}
+        except Exception:
+            body = {}
+        if not body and raw_body:
+            try:
+                body = json.loads(raw_body.decode("utf-8", errors="replace"))
+                if not isinstance(body, dict):
+                    body = {"_raw": body}
+            except Exception:
+                pass
+        if not body:
+            try:
+                body = request.form.to_dict()
+            except Exception:
+                pass
+        if not body:
+            try:
+                body = request.args.to_dict()
+            except Exception:
+                pass
+
+        code = (body.get("code") or body.get("pair_code") or "").strip()
+        device_id = (body.get("device_id") or "").strip()
+        _pair_debug_log(
+            f"PAIR_CONFIRM from {request.remote_addr} "
+            f"content_type={request.content_type!r} "
+            f"code={code!r} device_id={device_id!r} "
+            f"raw_len={len(raw_body)} raw={raw_body[:512]!r} "
+            f"headers={dict(request.headers)}"
+        )
+        ok, msg, token = confirm_pair(code, device_id)
+        _pair_debug_log(f"PAIR_CONFIRM result ok={ok} msg={msg!r} token={'yes' if token else 'no'}")
         if not ok:
             return jsonify({"success": False, "error": msg}), 400
         return jsonify({"success": True, "device_token": token})

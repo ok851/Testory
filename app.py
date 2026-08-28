@@ -205,7 +205,12 @@ from modules.core.deployment_hooks import (
     patch_run_case_for_server,
     register_deployment_hooks,
 )
-from modules.core.deployment_config import is_client_mode, should_delegate_execution_to_clients
+from modules.core.deployment_config import (
+    get_deployment_mode,
+    is_client_mode,
+    should_delegate_execution_to_clients,
+)
+from modules.core.client_config_store import get_team_server_url
 from modules.core.client_run_helpers import load_case_and_steps, sync_run_to_team_server
 from modules.ai.cloud_llm_gateway import CloudLLMGateway
 from modules.ai.ai_config_paths import ai_model_registry_path, ai_provider_catalog_path, load_ai_provider_catalog_dict
@@ -1081,7 +1086,7 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
             input_value=iv,
         )
     layer = _ai_str(step.get("automation_layer")).lower() or "web"
-    if layer not in ("web", "desktop", "android"):
+    if layer not in ("web", "desktop", "android", "cross_end"):
         layer = "web"
     strategy = _ai_str(step.get("strategy")) or _ai_str(step.get("selector_type")) or "accessibility_id"
     if layer == "android" and not _ai_str(step.get("selector_type")):
@@ -1096,6 +1101,48 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         ms = ""
     else:
         ms = str(ms).strip()
+    # 跨端规格（OTP 提取 / API 调用）：落库修复（此前被丢弃导致回放必挂）
+    ces = step.get("cross_end_spec")
+    if ces is not None and not isinstance(ces, str):
+        try:
+            ces = json.dumps(ces, ensure_ascii=False)
+        except Exception:
+            ces = ""
+    elif ces is None:
+        ces = ""
+    else:
+        ces = str(ces).strip()
+    # 阶段3/4 扩展：Stage 并行信息 / UIA 树锚点 / 树级校验快照 —— 非 str 先 JSON 序列化
+    stg = step.get("stage_info")
+    if stg is not None and not isinstance(stg, str):
+        try:
+            stg = json.dumps(stg, ensure_ascii=False)
+        except Exception:
+            stg = ""
+    elif stg is None:
+        stg = ""
+    else:
+        stg = str(stg).strip()
+    uia = step.get("uia_anchor")
+    if uia is not None and not isinstance(uia, str):
+        try:
+            uia = json.dumps(uia, ensure_ascii=False)
+        except Exception:
+            uia = ""
+    elif uia is None:
+        uia = ""
+    else:
+        uia = str(uia).strip()
+    ver = step.get("verification")
+    if ver is not None and not isinstance(ver, str):
+        try:
+            ver = json.dumps(ver, ensure_ascii=False)
+        except Exception:
+            ver = ""
+    elif ver is None:
+        ver = ""
+    else:
+        ver = str(ver).strip()
     return {
         "case_id": case_id,
         "action": action,
@@ -1115,6 +1162,10 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         "click_repeat_count": crc,
         "automation_layer": layer,
         "mobile_spec": ms,
+        "cross_end_spec": ces,
+        "stage_info": stg,
+        "uia_anchor": uia,
+        "verification": ver,
     }
 
 # ==================== Flask-Login 初始化 ====================
@@ -2047,8 +2098,8 @@ def api_me():
             'email': current_user.email if hasattr(current_user, 'email') else (Database().get_user_by_id(current_user.id) or {}).get('email')
         },
         'deployment': {
-            'mode': __import__('modules.core.deployment_config').get_deployment_mode().value,
-            'team_server_url': __import__('modules.core.client_config_store').get_team_server_url() if is_client_mode() else '',
+            'mode': get_deployment_mode().value,
+            'team_server_url': get_team_server_url() if is_client_mode() else '',
         },
         'license': {
             'type': license_info.license_type,
@@ -20332,7 +20383,66 @@ if __name__ == '__main__':
     else:
         _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
 
-    app.run(debug=_debug, host=_host, port=_port, threaded=True)
+    # 访问日志中间件：请求「一到达」就记录（不等待 Flask 处理结果），
+    # 这样即使后续处理抛错/崩溃，也能在日志里看到手机端到底有没有把请求发过来——
+    # 这正是此前 werkzeug 在 socket 读取阶段崩溃、手机请求完全“消失”时缺失的关键信息。
+    class _AccessLogMiddleware:
+        def __init__(self, wsgi_app):
+            self.wsgi_app = wsgi_app
+
+        def __call__(self, environ, start_response):
+            from datetime import datetime
+            try:
+                addr = environ.get('REMOTE_ADDR', '-')
+                method = environ.get('REQUEST_METHOD', '-')
+                path = environ.get('PATH_INFO', '-')
+                ts = datetime.now().strftime('%d/%b/%Y %H:%M:%S')
+                print(f"INFO:werkzeug:{addr} - - [{ts}] \"{method} {path} HTTP/1.1\" - -", flush=True)
+            except Exception:
+                pass
+            return self.wsgi_app(environ, start_response)
+
+    # 选用稳定 WSGI 服务器，避免 werkzeug 开发服务器长期运行后内存紧张、
+    # 单次请求需一次性分配 10MB 缓冲而抛 MemoryError，静默丢弃连接
+    # （含手机端配对 /ping、/pair/confirm），导致 APK 报「无法连接」。
+    # 优先级：waitress（生产级，若可用）> wsgiref 多线程（标准库，必可用）> werkzeug。
+    _served = False
+
+    # 1) waitress（生产级，内存稳定、抗并发）
+    if not _served:
+        try:
+            from waitress import serve as _waitress_serve
+            print(f"[Testory] 使用 waitress 生产服务器监听 {_host}:{_port}", flush=True)
+            _waitress_serve(_AccessLogMiddleware(app), host=_host, port=_port, threads=8, channel_timeout=300)
+            _served = True
+        except Exception as _we:
+            print(f"[Testory] waitress 不可用（{_we}），改试 wsgiref", flush=True)
+
+    # 2) wsgiref 多线程（标准库自带，无需安装；逐行读取请求，不会一次性分配 10MB 缓冲）
+    if not _served:
+        try:
+            from wsgiref.simple_server import make_server, WSGIRequestHandler, WSGIServer
+            from socketserver import ThreadingMixIn
+
+            class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+                daemon_threads = True
+
+            class _QuietHandler(WSGIRequestHandler):
+                def log_message(self, *args, **kwargs):
+                    pass  # 访问日志统一由 _AccessLogMiddleware 输出
+
+            print(f"[Testory] 使用 wsgiref(ThreadingWSGIServer) 监听 {_host}:{_port}", flush=True)
+            _srv = make_server(_host, _port, _AccessLogMiddleware(app),
+                               server_class=ThreadingWSGIServer, handler_class=_QuietHandler)
+            _srv.serve_forever()
+            _served = True
+        except Exception as _we:
+            print(f"[Testory] wsgiref 不可用（{_we}），回退 werkzeug 开发服务器", flush=True)
+
+    # 3) 回退 werkzeug 开发服务器
+    if not _served:
+        print(f"[Testory] 回退 werkzeug 开发服务器监听 {_host}:{_port}", flush=True)
+        app.run(debug=_debug, host=_host, port=_port, threaded=True)
 
 
 

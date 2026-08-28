@@ -731,6 +731,132 @@ def _observe_after_action(
         return {"observe_error": str(exc)}
 
 
+def _build_mobile_uia_anchor(node: Dict[str, Any], xml: str = "") -> Dict[str, Any]:
+    """从 UIA 树节点构建稳定锚点候选（回放定位 + 树级校验用）。
+
+    候选优先级（与 mobile_ui_probe.suggest_locator_from_node 对齐）：
+    resource-id → text → content-desc → xpath(bounds 兜底)。
+    tree_fingerprint 供回放自愈时对比树是否漂移。
+    """
+    rid = str(node.get("resource_id") or "").strip()
+    text = str(node.get("text") or "").strip()
+    desc = str(node.get("content_desc") or "").strip()
+    cls = str(node.get("class") or "").strip()
+    b = node.get("bounds") or (0, 0, 0, 0)
+    cands: List[Dict[str, Any]] = []
+    if rid:
+        cands.append({"type": "id", "value": rid, "score": 0.95})
+    if text:
+        cands.append({"type": "text", "value": text, "score": 0.85})
+    if desc:
+        cands.append({"type": "accessibility_id", "value": desc, "score": 0.8})
+    if cls:
+        simple = cls.split(".")[-1]
+        if text:
+            cands.append({"type": "xpath", "value": f"//{simple}[@text='{text}']", "score": 0.6})
+        else:
+            cands.append(
+                {
+                    "type": "xpath",
+                    "value": f"//{simple}[@bounds='[{b[0]},{b[1]}][{b[2]},{b[3]}]']",
+                    "score": 0.5,
+                }
+            )
+    fp = ""
+    if xml:
+        try:
+            import hashlib
+
+            fp = hashlib.sha1(xml.encode("utf-8", "ignore")).hexdigest()[:16]
+        except Exception:
+            fp = ""
+    return {
+        "layer": "android",
+        "candidates": cands,
+        "node": {
+            "resource_id": rid,
+            "text": text,
+            "content_desc": desc,
+            "class": cls,
+            "bounds": list(b) if isinstance(b, (list, tuple)) else b,
+            "clickable": bool(node.get("clickable")),
+            "checked": bool(node.get("checked")),
+            "selected": bool(node.get("selected")),
+        },
+        "tree_fingerprint": fp,
+    }
+
+
+def _verify_after_action(
+    serial: str,
+    anchor: Optional[Dict[str, Any]],
+    *,
+    user_id: int = 0,
+) -> Dict[str, Any]:
+    """动作后从 UIA 树复核锚点节点状态（树级校验，视觉不参与）。
+
+    返回 {found, matched_via, node_state:{text,selected,checked,enabled,clickable},
+    tree_fingerprint}；锚点缺失/取树失败 → {}（静默降级，不阻塞动作）。
+    与 _observe_after_action（截图 OCR）互补：本函数走 UIA 树，是真实性/稳定性根本。
+    """
+    if not anchor or not isinstance(anchor, dict):
+        return {}
+    try:
+        from modules.mobile.mobile_ui_probe import (
+            find_node_by_content_desc,
+            find_node_by_resource_id,
+            find_node_by_text,
+            get_mobile_ui_tree,
+        )
+
+        tree = get_mobile_ui_tree(serial, user_id=user_id)
+        if not tree.get("success") or not tree.get("xml"):
+            return {}
+        xml = tree.get("xml") or ""
+        node = None
+        matched_via = ""
+        for cand in anchor.get("candidates") or []:
+            t = (cand.get("type") or "").strip()
+            v = (cand.get("value") or "").strip()
+            if not v:
+                continue
+            if t == "id":
+                node = find_node_by_resource_id(xml, v)
+                matched_via = "id"
+            elif t == "text":
+                node = find_node_by_text(xml, v)
+                matched_via = "text"
+            elif t == "accessibility_id":
+                node = find_node_by_content_desc(xml, v)
+                matched_via = "accessibility_id"
+            if node:
+                break
+        fp = ""
+        try:
+            import hashlib
+
+            fp = hashlib.sha1(xml.encode("utf-8", "ignore")).hexdigest()[:16]
+        except Exception:
+            pass
+        out: Dict[str, Any] = {
+            "found": node is not None,
+            "matched_via": matched_via if node else "",
+            "tree_fingerprint": fp,
+        }
+        if node:
+            enabled = node.get("enabled")
+            out["node_state"] = {
+                "text": node.get("text") or "",
+                "selected": bool(node.get("selected")),
+                "checked": bool(node.get("checked")),
+                "enabled": bool(enabled) if enabled is not None else True,
+                "clickable": bool(node.get("clickable")),
+            }
+        return out
+    except Exception:
+        return {}
+
+
 def _mobile_execute_action(
     action: str,
     args: Dict[str, Any],
@@ -762,6 +888,7 @@ def _mobile_execute_action(
     if act in ("tap", "click"):
         x = a.get("x")
         y = a.get("y")
+        anchor: Optional[Dict[str, Any]] = None
         if x is None or y is None:
             # 通过 UI 树按文本/resource-id 定位
             desc = str(a.get("description") or a.get("text") or a.get("locate") or "")
@@ -790,7 +917,7 @@ def _mobile_execute_action(
                 center = locate_center(node)
                 if center:
                     x, y = center
-                    a["locator"] = (node.get("resource_id") or node.get("text") or "")[:80]
+                    anchor = _build_mobile_uia_anchor(node, xml)
             if x is None or y is None:
                 return {
                     "success": False,
@@ -809,6 +936,9 @@ def _mobile_execute_action(
         except MobileDeviceLockError as le:
             return {"success": False, "ok": False, "error": str(le), "action": "tap", "serial": serial}
         result["action"] = "tap"
+        if anchor:
+            result["uia_anchor"] = anchor
+            result["verification"] = _verify_after_action(serial, anchor, user_id=user_id)
         result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
         result["serial"] = serial
         return result
@@ -821,6 +951,17 @@ def _mobile_execute_action(
         y2 = a.get("y2") if a.get("y2") is not None else a.get("to_y")
         if x1 is None or y1 is None or x2 is None or y2 is None:
             return {"success": False, "ok": False, "error": "swipe 需要 x1/y1/x2/y2 坐标"}
+        swipe_anchor: Optional[Dict[str, Any]] = None
+        try:
+            from modules.mobile.mobile_ui_probe import find_node_at_point, get_mobile_ui_tree
+
+            _t = get_mobile_ui_tree(serial, user_id=user_id)
+            if _t.get("success") and _t.get("xml"):
+                _n = find_node_at_point(_t["xml"], int(x1 or 0), int(y1 or 0))
+                if _n:
+                    swipe_anchor = _build_mobile_uia_anchor(_n, _t["xml"])
+        except Exception:
+            swipe_anchor = None
         try:
             with mobile_device_guard(
                 serial,
@@ -834,6 +975,8 @@ def _mobile_execute_action(
         except MobileDeviceLockError as le:
             return {"success": False, "ok": False, "error": str(le), "action": "swipe", "serial": serial}
         result["action"] = "swipe"
+        if swipe_anchor:
+            result["uia_anchor"] = swipe_anchor
         result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
         result["serial"] = serial
         return result

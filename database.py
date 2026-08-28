@@ -63,7 +63,7 @@ _TEST_STEPS_SELECT = (
     "id, case_id, action, selector_type, selector_value, input_value, description, "
     "step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, "
     "compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec, "
-    "captcha_max_attempts, mobile_spec"
+    "captcha_max_attempts, mobile_spec, cross_end_spec, stage_info, uia_anchor, verification"
 )
 
 
@@ -438,6 +438,29 @@ class Database:
 
         try:
             cursor.execute("ALTER TABLE test_steps ADD COLUMN mobile_spec TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # 跨端步骤扩展：OTP 提取 / API 调用等 JSON 规格（extract_otp/api_call）
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN cross_end_spec TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # 阶段3/4 跨端并行落库扩展（Stage 级并行 + UIA 树锚点 + 树级校验快照）
+        # stage_info：{stage_id, branch, layer, device_id, allow_partial, timeout_sec}，回放按 stage 聚合并行
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN stage_info TEXT")
+        except sqlite3.OperationalError:
+            pass
+        # uia_anchor：{layer, candidates:[{type,value,score}], node, tree_fingerprint}，回放定位/自愈回退链
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN uia_anchor TEXT")
+        except sqlite3.OperationalError:
+            pass
+        # verification：{found, matched_via, node_state, tree_fingerprint}，回放逐步树级复核
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN verification TEXT")
         except sqlite3.OperationalError:
             pass
 
@@ -2324,7 +2347,10 @@ class Database:
                          locator_candidates: str = "", click_repeat_count: int = 1,
                          api_spec: str = "", automation_layer: str = "web",
                          desktop_spec: str = "", mobile_spec: str = "",
-                         captcha_max_attempts: Optional[int] = None) -> int:
+                         captcha_max_attempts: Optional[int] = None,
+                         cross_end_spec: str = "",
+                         stage_info: str = "", uia_anchor: str = "",
+                         verification: str = "") -> int:
         """创建测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -2343,7 +2369,7 @@ class Database:
         if crc > 99:
             crc = 99
         layer = (automation_layer or "web").strip().lower()
-        if layer not in ("web", "desktop", "android"):
+        if layer not in ("web", "desktop", "android", "cross_end"):
             layer = "web"
         if desktop_spec is not None and not isinstance(desktop_spec, str):
             try:
@@ -2357,6 +2383,39 @@ class Database:
             except Exception:
                 mobile_spec = ""
         mobile_spec = mobile_spec or ""
+        ces = ""
+        if cross_end_spec is not None and not isinstance(cross_end_spec, str):
+            try:
+                ces = json.dumps(cross_end_spec, ensure_ascii=False)
+            except Exception:
+                ces = ""
+        elif cross_end_spec is not None:
+            ces = cross_end_spec
+        # 阶段3/4 扩展：stage_info / uia_anchor / verification —— 非 str 先 JSON 序列化（与 cross_end_spec 同模式）
+        stage_json = ""
+        if stage_info is not None and not isinstance(stage_info, str):
+            try:
+                stage_json = json.dumps(stage_info, ensure_ascii=False)
+            except Exception:
+                stage_json = ""
+        elif stage_info is not None:
+            stage_json = stage_info
+        uia_json = ""
+        if uia_anchor is not None and not isinstance(uia_anchor, str):
+            try:
+                uia_json = json.dumps(uia_anchor, ensure_ascii=False)
+            except Exception:
+                uia_json = ""
+        elif uia_anchor is not None:
+            uia_json = uia_anchor
+        verify_json = ""
+        if verification is not None and not isinstance(verification, str):
+            try:
+                verify_json = json.dumps(verification, ensure_ascii=False)
+            except Exception:
+                verify_json = ""
+        elif verification is not None:
+            verify_json = verification
         cma = None
         if captcha_max_attempts is not None:
             try:
@@ -2368,9 +2427,9 @@ class Database:
             
         cursor.execute(
             """INSERT INTO test_steps 
-               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec, captcha_max_attempts, mobile_spec) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc, api_spec or '', layer, desktop_spec, cma, mobile_spec)
+               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec, captcha_max_attempts, mobile_spec, cross_end_spec, stage_info, uia_anchor, verification) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc, api_spec or '', layer, desktop_spec, cma, mobile_spec, ces, stage_json, uia_json, verify_json)
         )
         step_id = cursor.lastrowid
             
@@ -2437,7 +2496,7 @@ class Database:
                     selector_type = 'xpath' if str(selector_value).startswith('//') or str(selector_value).startswith('/') else 'css'
                     
                 layer = (step.get("automation_layer") or "web").strip().lower()
-                if layer not in ("web", "desktop", "android"):
+                if layer not in ("web", "desktop", "android", "cross_end"):
                     layer = "web"
                 ds = step.get("desktop_spec") or ""
                 ms = step.get("mobile_spec") or ""
@@ -2451,11 +2510,36 @@ class Database:
                         ms = json.dumps(ms, ensure_ascii=False)
                     except Exception:
                         ms = ""
+                # 阶段1/3/4 扩展：跨端 spec / Stage 并行 / UIA 锚点 / 树级校验快照
+                ces = step.get("cross_end_spec") or ""
+                if ces is not None and not isinstance(ces, str):
+                    try:
+                        ces = json.dumps(ces, ensure_ascii=False)
+                    except Exception:
+                        ces = ""
+                stg = step.get("stage_info") or ""
+                if stg is not None and not isinstance(stg, str):
+                    try:
+                        stg = json.dumps(stg, ensure_ascii=False)
+                    except Exception:
+                        stg = ""
+                uia = step.get("uia_anchor") or ""
+                if uia is not None and not isinstance(uia, str):
+                    try:
+                        uia = json.dumps(uia, ensure_ascii=False)
+                    except Exception:
+                        uia = ""
+                ver = step.get("verification") or ""
+                if ver is not None and not isinstance(ver, str):
+                    try:
+                        ver = json.dumps(ver, ensure_ascii=False)
+                    except Exception:
+                        ver = ""
                 cursor.execute(
                     """INSERT INTO test_steps 
-                       (case_id, action, selector_type, selector_value, input_value, description, step_order, locator_candidates, automation_layer, desktop_spec, mobile_spec) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order, locator_candidates, layer, ds or "", ms or "")
+                       (case_id, action, selector_type, selector_value, input_value, description, step_order, locator_candidates, automation_layer, desktop_spec, mobile_spec, cross_end_spec, stage_info, uia_anchor, verification) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order, locator_candidates, layer, ds or "", ms or "", ces, stg, uia, ver)
                 )
                 
             conn.commit()
@@ -2516,6 +2600,10 @@ class Database:
             'desktop_spec': row[20] if len(row) > 20 else '',
             'captcha_max_attempts': row[21] if len(row) > 21 else None,
             'mobile_spec': row[22] if len(row) > 22 else '',
+            'cross_end_spec': (row[23] if len(row) > 23 else '') or '',
+            'stage_info': (row[24] if len(row) > 24 else '') or '',
+            'uia_anchor': (row[25] if len(row) > 25 else '') or '',
+            'verification': (row[26] if len(row) > 26 else '') or '',
         }
 
     def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:

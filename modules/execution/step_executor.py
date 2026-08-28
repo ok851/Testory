@@ -311,6 +311,65 @@ def validate_desktop_step_result(result: Any, action: str) -> Dict[str, Any]:
     return result
 
 
+def _apply_tree_verification(step: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+    """回放树级校验：步骤带录制期 verification 快照时，动作后从 UIA 树复核节点状态。
+
+    原则：UIA 树是真实性/稳定性根本，视觉不参与判定。
+    - 默认告警不阻断（result["tree_verify"]="warn" + warning 文本），防树抖动误杀
+    - verification.strict=True 时返回 error_code=TREE_VERIFY_FAILED（阻断）
+    """
+    v = step.get("verification")
+    if not isinstance(v, dict) or not v:
+        return result
+    if not isinstance(result, dict):
+        return result
+    strict = bool(v.get("strict"))
+    check: Dict[str, Any] = {}
+    try:
+        layer = normalize_automation_layer(step)
+        if layer == "android":
+            from modules.mobile.mobile_cross_end_tools import _verify_after_action
+
+            anchor = step.get("uia_anchor")
+            serial = ""
+            ms = step.get("mobile_spec")
+            if isinstance(ms, dict):
+                serial = str(ms.get("serial") or step.get("serial") or "")
+            else:
+                serial = str(step.get("serial") or "")
+            check = _verify_after_action(
+                serial, anchor if isinstance(anchor, dict) else None, user_id=0
+            )
+        elif layer == "desktop":
+            from modules.desktop.windows_desktop_tools import _build_desktop_uia_anchor
+
+            x = result.get("x")
+            y = result.get("y")
+            if x and y:
+                check = _build_desktop_uia_anchor(int(x), int(y))
+    except Exception:
+        check = {}
+    if not check:
+        return result
+    recorded_found = bool(v.get("found"))
+    actual_found = bool(check.get("found"))
+    if recorded_found and not actual_found:
+        msg = (
+            f"树级校验未通过：录制时节点存在（{v.get('matched_via') or '-'}），"
+            f"回放后未命中（{check.get('matched_via') or '-'}）"
+        )
+        if strict:
+            result["error_code"] = "TREE_VERIFY_FAILED"
+            result["error"] = result.get("error") or msg
+            result["status"] = "error"
+        else:
+            result["warning"] = (str(result.get("warning") or "") + "；" + msg).strip("；")
+            result["tree_verify"] = "warn"
+        return result
+    result["tree_verify"] = "ok"
+    return result
+
+
 def sync_execute_step_by_layer(
     step: Dict[str, Any],
     *,
@@ -332,7 +391,7 @@ def sync_execute_step_by_layer(
             otp = result.get("sms_otp") or ""
             if otp:
                 set_case_var("sms_otp", str(otp))
-        return validate_desktop_step_result(result, action)
+        return _apply_tree_verification(step, validate_desktop_step_result(result, action))
 
     if layer == "android":
         if not sync_mobile_execute_step or not validate_mobile_step_result:
@@ -345,7 +404,9 @@ def sync_execute_step_by_layer(
             otp = result.get("sms_otp") or ""
             if otp:
                 set_case_var("sms_otp", str(otp))
-        return validate_mobile_step_result(result, action)
+        return _apply_tree_verification(
+            exec_step, validate_mobile_step_result(result, action)
+        )
 
     if web_executor:
         web_executor(step)

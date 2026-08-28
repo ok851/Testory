@@ -20,10 +20,9 @@ def hermes_home_dir() -> Path:
             if uat:
                 raw = raw.replace("%UAT_DATA_DIR%", uat).replace("%uat_data_dir%", uat)
             else:
-                # 仓库内常见字面目录名「%UAT_DATA_DIR%/hermes」
-                lit = Path(__file__).resolve().parents[2] / "%UAT_DATA_DIR%" / "hermes"
-                if lit.is_dir():
-                    return lit
+                # 仓库内字面目录名「%UAT_DATA_DIR%/hermes」是历史残留毒目录：
+                # 写入会触发 WinError 5（拒绝访问），且并非真实数据目录。
+                # 不再回退到它，统一落到 LOCALAPPDATA/Testory/hermes（与日志路径逻辑一致）。
                 return Path(os.environ.get("LOCALAPPDATA", "")) / "Testory" / "hermes"
         return Path(os.path.expandvars(raw))
     uat = (os.environ.get("UAT_DATA_DIR") or "").strip()

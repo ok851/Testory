@@ -553,6 +553,219 @@ def _batch_case_gap_seconds() -> float:
     return max(0.0, min(float(ms), 5000.0)) / 1000.0
 
 
+# ─────────────────────────────────────────────────────────────
+# 阶段5：Stage 级并行回放（回放端按 stage_info 重建并行 stage）
+# ─────────────────────────────────────────────────────────────
+
+def _jsonish(obj: Any) -> Any:
+    """JSON 串 / None / dict 统一为 dict（解析失败返回 None）。"""
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, str) and obj.strip():
+        try:
+            return json.loads(obj)
+        except Exception:
+            return None
+    return None
+
+
+def _side_from_layer(layer: str) -> str:
+    """自动化层 → 并行端（pc / mobile / ""=不参与分组）。与 ai_action_recorder._side_for_layer 对齐。"""
+    layer = (layer or "").strip().lower()
+    if layer in ("web", "desktop", "pc"):
+        return "pc"
+    if layer in ("android", "mobile"):
+        return "mobile"
+    return ""
+
+
+def _layer_of_step(step: Dict[str, Any]) -> str:
+    layer = str(step.get("automation_layer") or "").strip().lower()
+    if not layer:
+        layer = str(step.get("layer") or "").strip().lower()
+    return layer
+
+
+def _pc_branch_parallel_safe(steps: List[Dict[str, Any]]) -> bool:
+    """PC 分支是否可交给桌面线程执行器并行：所有步骤均为 desktop/pc 层。
+
+    web 步骤依赖 playwright async 上下文（self.page），无法在 ThreadPool 内执行，
+    因此含 web 步骤的 PC 分支必须降级串行（走主循环按层分发）。
+    """
+    for s in steps:
+        if not isinstance(s, dict):
+            return False
+        if _layer_of_step(s) not in ("desktop", "pc"):
+            return False
+    return True
+
+
+def _mobile_branch_prepare(branch: Dict[str, Any]) -> Dict[str, Any]:
+    """手机分支预处理：无 selector 的步骤用 uia_anchor.node.bounds 中心降级为 coordinate tap。
+
+    APK job 定位依赖 selector_type/selector_value；录制期锚点补录后 selector 仍可能缺失
+    （视觉辅助回退），此时用 UIA 树 bounds 中心坐标兜底，并标记 degraded=true。
+    """
+    out_branch = dict(branch)
+    steps: List[Dict[str, Any]] = []
+    for s in branch.get("steps") or []:
+        if not isinstance(s, dict):
+            steps.append(s)
+            continue
+        s = dict(s)
+        sel_type = str(s.get("selector_type") or "").strip()
+        sel_val = str(s.get("selector_value") or "").strip()
+        if not sel_val and s.get("selector"):
+            # build_execution_steps 把 selector_value 写入了 selector 键，兼容两种形态
+            sel_val = str(s.get("selector") or "").strip()
+            s["selector_value"] = sel_val
+        if not (sel_type and sel_val):
+            ua = _jsonish(s.get("uia_anchor"))
+            node = (ua or {}).get("node") or {}
+            bounds = node.get("bounds")
+            if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
+                try:
+                    cx = int((int(bounds[0]) + int(bounds[2])) / 2)
+                    cy = int((int(bounds[1]) + int(bounds[3])) / 2)
+                except (TypeError, ValueError):
+                    cx = cy = None
+                if cx is not None and cy is not None:
+                    s["selector_type"] = "coordinate"
+                    s["selector_value"] = f"{cx},{cy}"
+                    s["degraded"] = True
+        steps.append(s)
+    out_branch["steps"] = steps
+    return out_branch
+
+
+def _rebuild_stage(
+    stage_id: str,
+    branch_groups: Dict[str, List[Dict[str, Any]]],
+    template: Dict[str, Any],
+) -> Dict[str, Any]:
+    """按 stage_info 重建 stage schema（对齐 multi_device_scheduler.execute_cross_end_parallel_stage）。"""
+    branches: List[Dict[str, Any]] = []
+    for name, steps in branch_groups.items():
+        if not steps:
+            continue
+        tpl: Dict[str, Any] = {}
+        for s in steps:
+            si = _jsonish(s.get("stage_info")) or {}
+            if si.get("branch") == name:
+                tpl = si
+                break
+        layer = str(tpl.get("layer") or "")
+        side = _side_from_layer(layer)
+        if side == "pc" or name in ("pc", "desktop", "web"):
+            branches.append({
+                "name": name,
+                "layer": layer or "desktop",
+                "steps": steps,
+            })
+        else:
+            dev_id = str(tpl.get("device_id") or "")
+            if not dev_id:
+                for s in steps:
+                    if s.get("device_id") or s.get("device_serial"):
+                        dev_id = str(s.get("device_id") or s.get("device_serial"))
+                        break
+            branches.append(_mobile_branch_prepare({
+                "name": name,
+                "layer": layer or "mobile",
+                "steps": steps,
+                "device_id": dev_id,
+            }))
+    return {
+        "id": stage_id,
+        "cross_end_parallel": True,
+        "branches": branches,
+        "allow_partial": bool(template.get("allow_partial", False)),
+        "timeout_sec": float(template.get("timeout_sec", 600) or 600),
+    }
+
+
+def partition_steps_by_stage(execution_steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """将执行步骤按 stage_info 拆分为有序执行单元（阶段5 回放并行入口）。
+
+    Returns:
+        [] — 无任何 stage_info（旧用例/单端用例 → 调用方走原串行循环，零影响）。
+        否则返回有序单元列表，每项为：
+          {"type": "serial", "steps": [...]} — 无 stage_info 的线性步骤（保持原始顺序）
+          {"type": "stage", "stage": {...}}  — 可并行 stage（pc 全桌面 + mobile 分支）
+
+    安全降级：PC 分支含 web 步骤（依赖 playwright async 上下文）或单分支 stage
+    无法并行 → 合并回 serial 单元，按 step_order 保持原始顺序串行执行。
+    """
+    if not isinstance(execution_steps, list) or not execution_steps:
+        return []
+    any_stage = any(_jsonish(s.get("stage_info")) for s in execution_steps if isinstance(s, dict))
+    if not any_stage:
+        return []
+
+    units: List[Dict[str, Any]] = []
+    cur_serial: List[Dict[str, Any]] = []
+    cur_stage_id: Optional[str] = None
+    cur_branches: Dict[str, List[Dict[str, Any]]] = {}
+    cur_template: Dict[str, Any] = {}
+
+    def _flush_serial() -> None:
+        nonlocal cur_serial
+        if cur_serial:
+            units.append({"type": "serial", "steps": cur_serial})
+            cur_serial = []
+
+    def _flush_stage() -> None:
+        nonlocal cur_stage_id, cur_branches, cur_template
+        if cur_stage_id is None:
+            return
+        stage = _rebuild_stage(cur_stage_id, cur_branches, cur_template)
+        branches = stage.get("branches") or []
+        pc_ok = False
+        mob_ok = False
+        for b in branches:
+            side = _side_from_layer(str(b.get("layer") or ""))
+            if side == "pc":
+                pc_ok = _pc_branch_parallel_safe(b.get("steps") or [])
+            elif side == "mobile":
+                mob_ok = True
+        if len(branches) >= 2 and pc_ok and mob_ok:
+            units.append({"type": "stage", "stage": stage})
+        else:
+            # 降级串行：按 step_order 保持原始顺序
+            merged: List[Dict[str, Any]] = []
+            for b in branches:
+                merged.extend(b.get("steps") or [])
+            merged.sort(key=lambda x: x.get("step_order") if isinstance(x, dict) else 0)
+            if merged:
+                units.append({"type": "serial", "steps": merged})
+        cur_stage_id = None
+        cur_branches = {}
+        cur_template = {}
+
+    for s in execution_steps:
+        if not isinstance(s, dict):
+            _flush_stage()
+            cur_serial.append(s)
+            continue
+        si = _jsonish(s.get("stage_info"))
+        if not si or not si.get("stage_id"):
+            _flush_stage()
+            cur_serial.append(s)
+            continue
+        sid = str(si["stage_id"])
+        if cur_stage_id is not None and sid != cur_stage_id:
+            _flush_stage()
+        if cur_stage_id is None:
+            _flush_serial()  # 串行段必须在 stage 段之前落袋，保持原始顺序
+            cur_stage_id = sid
+            cur_template = si
+        bname = str(si.get("branch") or "branch")
+        cur_branches.setdefault(bname, []).append(s)
+    _flush_stage()
+    _flush_serial()
+    return units
+
+
 def parse_platform_scroll_input_value(input_value: Optional[str]) -> Dict[str, int]:
     """解析步骤里滚动距离的存储格式 up:a,down:b,left:c,right:d（与 list_steps 编辑页一致）。"""
     vals: Dict[str, int] = {"up": 0, "down": 0, "left": 0, "right": 0}
@@ -10461,6 +10674,16 @@ class PlaywrightAutomation:
                     exec_step["desktop_spec"] = enriched["desktop_spec"]
                 elif step.get("desktop_spec"):
                     exec_step["desktop_spec"] = step.get("desktop_spec")
+                # 阶段4/5：透传跨端分组与锚点字段（回放并行 + 自愈依赖，白名单式防污染）
+                for _k in ("step_order", "stage_info", "uia_anchor", "verification",
+                           "device_id", "device_serial"):
+                    if step.get(_k) is not None:
+                        exec_step[_k] = step[_k]
+                for _k in ("mobile_spec", "cross_end_spec"):
+                    if enriched.get(_k):
+                        exec_step[_k] = enriched[_k]
+                    elif step.get(_k):
+                        exec_step[_k] = step[_k]
                 execution_steps.append(exec_step)
             return execution_steps
         
@@ -11003,6 +11226,9 @@ class PlaywrightAutomation:
     async def _execute_case_steps(self, execution_steps: List[Dict[str, Any]]) -> Dict[str, Any]:
         """执行单个测试用例的所有步骤（严格在当前页面执行，禁止多标签页并行）
 
+        阶段5：含 stage_info 的跨端用例 → Stage 级并行（PC 桌面分支 + 手机分支并行）；
+        无 stage_info（旧用例/单端用例）→ 走原串行循环，零影响。
+
         Returns:
             含 step_results、steps_completed、total_steps、all_steps_done 的字典
         """
@@ -11015,11 +11241,53 @@ class PlaywrightAutomation:
         except Exception:
             pass
 
+        units = partition_steps_by_stage(execution_steps)
+        if not units:
+            # 无 stage_info：原串行路径（旧用例零影响）
+            return await self._run_steps_serial(execution_steps)
+
+        case_results: List[Dict[str, Any]] = []
+        steps_completed = 0
+        total_units = len(units)
+        for ui, unit in enumerate(units):
+            stop_checker = getattr(self, "_external_stop_checker", None)
+            if callable(stop_checker) and stop_checker():
+                case_results.append({
+                    "status": "stopped",
+                    "step": "unknown",
+                    "error": "用户已停止执行"
+                })
+                break
+            uat_logger.info(
+                f"🔄 [CASE_STEP] 执行单元 {ui+1}/{total_units} "
+                f"({'并行 stage ' + str(unit['stage'].get('id')) if unit['type'] == 'stage' else f'串行 {len(unit["steps"])} 步'})"
+            )
+            if unit["type"] == "serial":
+                out = await self._run_steps_serial(unit["steps"])
+            else:
+                out = await self._run_stage_parallel(unit["stage"])
+            case_results.extend(out.get("step_results") or [])
+            steps_completed += int(out.get("steps_completed") or 0)
+            if not out.get("all_steps_done"):
+                uat_logger.error("🛑 [CASE_STEP] 当前执行单元失败，终止后续单元")
+                break
+
+        all_steps_done = steps_completed >= len(execution_steps) and not any(
+            (r or {}).get("status") in ("error", "stopped", "failed") for r in case_results
+        )
+        return {
+            "step_results": case_results,
+            "steps_completed": steps_completed,
+            "total_steps": len(execution_steps),
+            "all_steps_done": all_steps_done,
+        }
+
+    async def _run_steps_serial(self, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """串行执行一组步骤（原 for 循环逻辑：单步 60s 超时 + 阶段5 自愈重定位）。"""
         case_results: List[Dict[str, Any]] = []
         steps_completed = 0
 
-        # 逐个执行步骤
-        for i, step in enumerate(execution_steps):
+        for i, step in enumerate(steps):
             stop_checker = getattr(self, "_external_stop_checker", None)
             if callable(stop_checker) and stop_checker():
                 case_results.append({
@@ -11028,8 +11296,8 @@ class PlaywrightAutomation:
                     "error": "用户已停止执行"
                 })
                 break
-            uat_logger.info(f"🎯 [CASE_STEP] 执行步骤 {i+1}/{len(execution_steps)}: {step.get('action', 'unknown')}")
-            
+            uat_logger.info(f"🎯 [CASE_STEP] 执行步骤 {i+1}/{len(steps)}: {step.get('action', 'unknown')}")
+
             try:
                 # 🔥 修改：为每个步骤执行添加60秒超时控制
                 import asyncio
@@ -11042,7 +11310,7 @@ class PlaywrightAutomation:
                 case_results.extend(step_result if isinstance(step_result, list) else [step_result])
                 steps_completed += 1
                 uat_logger.info(f"✅ [CASE_STEP] 步骤 {i+1} 执行成功")
-                
+
             except asyncio.TimeoutError as timeout_e:
                 # 检查是否在超时中有更具体的错误信息
                 last_exception = getattr(self, '_last_step_exception', None)
@@ -11067,18 +11335,26 @@ class PlaywrightAutomation:
                 if fb:
                     error_result["failure_diag"] = fb
                 case_results.append(error_result)
-                
+
                 uat_logger.error(f"🛑 [CASE_STEP] 步骤 {i+1} 执行失败，立即终止当前用例执行")
                 # 🔥 修改：立即中断当前用例执行，跳出循环
                 break
-                
+
             except Exception as step_error:
                 import traceback
                 uat_logger.error(f"❌ [CASE_STEP] 步骤 {i+1} 异常: {type(step_error).__name__}: {str(step_error)}")
-                
-                error_result = { 
-                    "status": "error", 
-                    "step": step.get('action', 'unknown'), 
+
+                # 阶段5 自愈：失败步骤按 uia_anchor.candidates 依次回退重定位
+                healed = await self._try_self_heal_step(step)
+                if healed:
+                    case_results.extend(healed if isinstance(healed, list) else [healed])
+                    steps_completed += 1
+                    uat_logger.info(f"✅ [CASE_STEP] 步骤 {i+1} 自愈成功（uia_anchor 候选重定位）")
+                    continue
+
+                error_result = {
+                    "status": "error",
+                    "step": step.get('action', 'unknown'),
                     "error": str(step_error)
                 }
                 fb = await self.capture_step_failure_bundle(step, error_result.get("error") or "")
@@ -11087,15 +11363,151 @@ class PlaywrightAutomation:
                 case_results.append(error_result)
                 break
 
-        all_steps_done = steps_completed >= len(execution_steps) and not any(
+        all_steps_done = steps_completed >= len(steps) and not any(
             (r or {}).get("status") in ("error", "stopped", "failed") for r in case_results
         )
         return {
             "step_results": case_results,
             "steps_completed": steps_completed,
-            "total_steps": len(execution_steps),
+            "total_steps": len(steps),
             "all_steps_done": all_steps_done,
         }
+
+    async def _run_stage_parallel(self, stage: Dict[str, Any]) -> Dict[str, Any]:
+        """执行一个跨端并行 stage：PC 桌面分支 + 手机分支 ThreadPool 并行。
+
+        stage schema 对齐 multi_device_scheduler.execute_cross_end_parallel_stage：
+        {id, cross_end_parallel:true, branches:[{name, layer, steps, device_id}],
+         allow_partial, timeout_sec}。任一分支失败且非 allow_partial → stage 失败终止。
+        """
+        import asyncio
+        from ai_modules.execute.multi_device_scheduler import execute_cross_end_parallel_stage
+        from modules.execution.step_executor import set_case_var
+
+        _ctx = getattr(self, "_execution_context", None)
+        _user_id = 0
+        if _ctx is not None:
+            try:
+                _user_id = int(getattr(_ctx, "user_id", 0) or 0)
+            except (TypeError, ValueError):
+                _user_id = 0
+
+        branches = stage.get("branches") or []
+        total_in_stage = sum(len(b.get("steps") or []) for b in branches)
+        uat_logger.info(
+            f"⚡ [CASE_STEP] 执行跨端并行 stage {stage.get('id')}（{len(branches)} 分支，{total_in_stage} 步）"
+        )
+        t0 = time.time()
+        result, extracted = await asyncio.to_thread(
+            execute_cross_end_parallel_stage, stage, user_id=_user_id
+        )
+        # 变量抽取回写运行时变量（如 extract_otp 的 sms_otp）
+        if isinstance(extracted, dict):
+            for k, v in extracted.items():
+                try:
+                    set_case_var(str(k), str(v))
+                except Exception:
+                    pass
+
+        step_results: List[Dict[str, Any]] = []
+        for br in result.get("branch_results") or []:
+            srs = br.get("step_results") or []
+            if not srs:
+                payload = br.get("result_payload") or {}
+                srs = payload.get("results") or []
+            for sr in srs:
+                if isinstance(sr, dict):
+                    sr = dict(sr)
+                    sr.setdefault("branch", br.get("branch"))
+                    step_results.append(sr)
+
+        ok = bool(result.get("ok_assert"))
+        elapsed_ms = result.get("elapsed_ms", 0)
+        uat_logger.info(
+            f"⚡ [CASE_STEP] stage {stage.get('id')} 完成 ok={ok} "
+            f"耗时={elapsed_ms}ms 结果条数={len(step_results)}"
+        )
+        if not ok:
+            err_msg = str(result.get("error") or "跨端并行 stage 执行失败")
+            uat_logger.error(f"🛑 [CASE_STEP] stage {stage.get('id')} 失败: {err_msg}")
+            step_results.append({
+                "status": "error",
+                "step": f"stage:{stage.get('id')}",
+                "error": err_msg,
+                "stage_id": stage.get("id"),
+            })
+        elif result.get("partial_success"):
+            # allow_partial 部分分支失败：追加 warning，避免假绿（门禁下非 success 不得当绿）
+            warn_msg = str(result.get("error") or f"部分分支失败: {result.get('failed_branches')}")
+            uat_logger.warning(f"⚠️ [CASE_STEP] stage {stage.get('id')} 部分成功: {warn_msg}")
+            step_results.append({
+                "status": "warning",
+                "step": f"stage:{stage.get('id')}",
+                "warning": warn_msg,
+                "stage_id": stage.get("id"),
+            })
+        return {
+            "step_results": step_results,
+            "steps_completed": total_in_stage,
+            "total_steps": total_in_stage,
+            "all_steps_done": ok,
+        }
+
+    async def _try_self_heal_step(self, step: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """失败步骤按 uia_anchor.candidates 依次回退重定位（阶段5 自愈）。
+
+        仅当步骤带 uia_anchor 且含候选 selector 时尝试；命中后通过 update_test_step
+        回写 selector_type/selector_value（自愈学习，candidates 已按 score 降序）。
+        未命中或不可自愈 → None（调用方按原逻辑终止）。
+        """
+        if not isinstance(step, dict):
+            return None
+        ua = _jsonish(step.get("uia_anchor"))
+        if not isinstance(ua, dict):
+            return None
+        cands = ua.get("candidates") or []
+        if not cands:
+            return None
+        step_id = step.get("id")
+        from modules.execution.execution_factory import get_executor_factory
+
+        for cand in cands:
+            if not isinstance(cand, dict):
+                continue
+            sel_type = str(cand.get("selector_type") or cand.get("type") or "").strip() or "css"
+            sel_value = str(cand.get("selector_value") or cand.get("value") or "").strip()
+            if not sel_value:
+                continue
+            trial = dict(step)
+            trial["selector"] = sel_value
+            trial["selector_value"] = sel_value
+            trial["selector_type"] = sel_type
+            try:
+                res = await get_executor_factory().execute_step_async(trial, self)
+            except Exception:
+                continue
+            res_list = res if isinstance(res, list) else [res]
+            if not res_list:
+                continue
+            if any((r or {}).get("status") in ("error", "failed") for r in res_list):
+                continue
+            # 命中：回写 DB（提升命中项 score 由 candidates 降序顺序保证）
+            if step_id:
+                try:
+                    from database import Database
+
+                    Database().update_test_step(
+                        int(step_id),
+                        selector_type=sel_type,
+                        selector_value=sel_value,
+                    )
+                    uat_logger.info(
+                        f"🔧 [SELF_HEAL] 步骤 {step_id} 自愈命中，回写 selector {sel_type}={sel_value}"
+                    )
+                except Exception as e:
+                    uat_logger.warning(f"🔧 [SELF_HEAL] 自愈回写失败: {e}")
+            return res_list
+        return None
     
     async def execute_single_step(self, step: Dict[str, Any]) -> List[Dict[str, Any]]:
         """执行单个测试步骤（强制在主页面执行，禁用多标签页）
