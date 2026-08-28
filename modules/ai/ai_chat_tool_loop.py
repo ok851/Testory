@@ -5847,19 +5847,69 @@ def run_ai_chat_with_tools_stream(
                     else:
                         _ce_tgt = name[:120]
                     _ce_status = "success" if _ce_ok else "failed"
-                    yield (
-                        "action_records",
-                        [
-                            {
-                                "action_type": name,
-                                "target": _ce_tgt,
-                                "status": _ce_status,
-                                "result": (result_text or "")[:100],
-                                "has_vision": False,
-                                "env_verify": None,
-                            }
-                        ],
-                    )
+                    # mobile_run_steps：按 steps IR 逐条下发实时用例步骤，
+                    # 否则面板只有一条"手机回放 N 步"的聚合记录
+                    _ce_rows = None
+                    if name == "mobile_run_steps" and isinstance(call_args.get("steps"), list):
+                        _rp_ce = parsed_ce.get("result_payload") if isinstance(parsed_ce, dict) else None
+                        _sres_ce = (
+                            _rp_ce.get("results")
+                            if isinstance(_rp_ce, dict) and isinstance(_rp_ce.get("results"), list)
+                            else []
+                        )
+                        _rows_ce = []
+                        for _i_ce, _sd_ce in enumerate(call_args["steps"]):
+                            if not isinstance(_sd_ce, dict):
+                                continue
+                            _sr_ce = (
+                                _sres_ce[_i_ce]
+                                if _i_ce < len(_sres_ce) and isinstance(_sres_ce[_i_ce], dict)
+                                else {}
+                            )
+                            _ok_i_ce = _sr_ce.get("success")
+                            if _ok_i_ce is None:
+                                _ok_i_ce = _ce_ok
+                            _rows_ce.append(
+                                {
+                                    "action_type": f"mobile_{str(_sd_ce.get('action') or 'step')}",
+                                    "target": str(
+                                        _sd_ce.get("stepDescription")
+                                        or _sd_ce.get("step_description")
+                                        or _sd_ce.get("description")
+                                        or _sd_ce.get("text")
+                                        or _sd_ce.get("selector")
+                                        or _sd_ce.get("package")
+                                        or _sd_ce.get("action")
+                                        or "step"
+                                    )[:120],
+                                    "status": "success" if _ok_i_ce else "failed",
+                                    "result": str(
+                                        _sr_ce.get("errorMessage")
+                                        or _sr_ce.get("error_message")
+                                        or ""
+                                    )[:100],
+                                    "has_vision": False,
+                                    "env_verify": None,
+                                }
+                            )
+                        if _rows_ce:
+                            _ce_rows = _rows_ce
+                    if _ce_rows is not None:
+                        yield ("action_records", _ce_rows)
+                    else:
+                        yield (
+                            "action_records",
+                            [
+                                {
+                                    "action_type": name,
+                                    "target": _ce_tgt,
+                                    "status": _ce_status,
+                                    "result": (result_text or "")[:100],
+                                    "has_vision": False,
+                                    "env_verify": None,
+                                }
+                            ],
+                        )
                 except Exception:
                     pass
             elif name == "api_call":

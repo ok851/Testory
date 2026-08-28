@@ -64,7 +64,7 @@ def patch_browser_tool() -> bool:
 # 命中缓存返回时附带 "cached": true。pip 升级 .venv 后重跑本脚本恢复。
 _BROWSER_READONLY_CACHE: Dict[str, Tuple[float, float, str]] = {}  # key -> (ts, ttl, payload)
 _BROWSER_READONLY_CACHE_LOCK = threading.Lock()
-_BROWSER_SNAPSHOT_TTL = 3.0   # 快照缓存 TTL（秒）
+_BROWSER_SNAPSHOT_TTL = 8.0   # 快照缓存 TTL（秒）；变更命令会主动失效缓存，可适当放宽
 _BROWSER_CONSOLE_TTL = 5.0    # console 日志缓存 TTL（秒）
 _BROWSER_CACHE_MAX = 96
 
@@ -158,7 +158,7 @@ def _browser_cached_json(key: str):
         except Exception:
             pass'''
     ok &= _apply(BROWSER_TOOL, "snapshot 写缓存",
-                 "        logger.debug(\"supervisor snapshot merge failed: %s\", _sv_exc)\n\n        return json.dumps(response, ensure_ascii=False)",
+                 "logger.debug(\"supervisor snapshot merge failed: %s\", _sv_exc)",
                  snap_write)
 
     # ── 1e. browser_navigate：自动快照写入缓存 ──

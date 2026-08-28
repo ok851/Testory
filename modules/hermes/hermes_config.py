@@ -8,6 +8,8 @@ import secrets
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from modules.core.logger import uat_logger
+
 _ACTIVE_CDP_ENDPOINT: str = ""
 
 

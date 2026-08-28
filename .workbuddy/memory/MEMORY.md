@@ -6,7 +6,7 @@
 - 前端：Jinja2 SSR + Tailwind CSS + 自定义 CSS，无 SPA 框架
 - 无边框窗口模式 (TESTORY_FRAMELESS_SHELL=1)
 - 启动链：Testory.exe → testory_exe_launcher.py → uat_desktop.py → Flask + pywebview
-- **WSGI 服务器铁律**：桌面端常驻 Flask **严禁用 werkzeug 开发服务器**（`app.run(debug=...)`）。werkzeug 3.0.1 在 `serving.py:347` 执行 `self.rfile.read(10_000_000)`，长期运行内存紧张时抛 `MemoryError`，且崩溃在 URL 解析前，请求被静默丢弃（表现为"对方没发请求"）。`app.py` `__main__` 已改为三级容错：waitress（优先，需联网装）→ wsgiref(ThreadingWSGIServer)（标准库零安装，默认）→ werkzeug（兜底）。并套 `_AccessLogMiddleware`，请求一到达即打印 `INFO:werkzeug:... "{method} {path}"`，补"请求是否到达"可观测性。改动该段启动逻辑时务必保留 wsgiref 分支。
+- **WSGI 服务器铁律**：桌面端常驻 Flask **严禁用 werkzeug 开发服务器**（`app.run(debug=...)`）。werkzeug 3.0.1 在 `serving.py:347` 执行 `self.rfile.read(10_000_000)`，长期运行内存紧张时抛 `MemoryError`，且崩溃在 URL 解析前，请求被静默丢弃（表现为"对方没发请求"）。`app.py` `__main__` 已改为三级容错：waitress（优先，需联网装）→ wsgiref(ThreadingWSGIServer)（标准库零安装，默认）→ werkzeug（兜底）。并套 `_AccessLogMiddleware`（已抽到 `modules/core/wsgi_middleware.py`），请求一到达即打印访问日志，且**剥除应用下发的 hop-by-hop 响应头**（Connection/Keep-Alive/Transfer-Encoding 等）——WSGI 规范禁止应用返回这类头，werkzeug 容忍但 wsgiref/waitress 会 assert 崩溃；曾导致所有带 `'Connection': 'keep-alive'` 头的 SSE 路由（/api/ai/task/execute 等 4 处）一律 HTTP 500（agent 一收到命令就失败，发生在调模型之前）。改动启动逻辑时务必保留 wsgiref 分支与 hop-by-hop 剥除；新增 SSE 路由时响应头不要再手写 Connection/Keep-Alive。
 
 ## 仓库结构（2026-08-26 大重组后）
 - 根目录仅 12 个 .py：app.py、database.py + 10 个 CLI 工具（build_exe/verify_installation/generate_license/cross_end_cli/android_sdk_manager/assertion_engine/element_locator_steward/enhanced_text_extractor/example_intelligent_usage/env_example_sync）

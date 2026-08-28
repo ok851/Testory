@@ -20383,24 +20383,16 @@ if __name__ == '__main__':
     else:
         _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
 
-    # 访问日志中间件：请求「一到达」就记录（不等待 Flask 处理结果），
-    # 这样即使后续处理抛错/崩溃，也能在日志里看到手机端到底有没有把请求发过来——
-    # 这正是此前 werkzeug 在 socket 读取阶段崩溃、手机请求完全“消失”时缺失的关键信息。
-    class _AccessLogMiddleware:
-        def __init__(self, wsgi_app):
-            self.wsgi_app = wsgi_app
-
-        def __call__(self, environ, start_response):
-            from datetime import datetime
-            try:
-                addr = environ.get('REMOTE_ADDR', '-')
-                method = environ.get('REQUEST_METHOD', '-')
-                path = environ.get('PATH_INFO', '-')
-                ts = datetime.now().strftime('%d/%b/%Y %H:%M:%S')
-                print(f"INFO:werkzeug:{addr} - - [{ts}] \"{method} {path} HTTP/1.1\" - -", flush=True)
-            except Exception:
-                pass
-            return self.wsgi_app(environ, start_response)
+    # WSGI 中间件（modules/core/wsgi_middleware.py）：
+    # 1) 请求「一到达」就记录访问日志（早于 Flask 处理），即使后续崩溃也能看到
+    #    对端是否真的发出了请求——补齐 werkzeug 时代 socket 读取阶段静默丢连接的
+    #    可观测性盲区；
+    # 2) 剥除应用下发的 hop-by-hop 响应头（Connection / Keep-Alive / Transfer-Encoding
+    #    等）。WSGI 规范禁止应用返回这类头：werkzeug 静默容忍，但 wsgiref / waitress
+    #    严格执行规范会在 start_response 阶段直接 assert 崩溃。app.py 的多个 SSE 路由
+    #    （如 /api/ai/task/execute）显式设置了 'Connection: keep-alive'，曾导致 agent
+    #    执行接口一律 HTTP 500（且发生在调用大模型之前）。
+    from modules.core.wsgi_middleware import AccessLogMiddleware as _AccessLogMiddleware
 
     # 选用稳定 WSGI 服务器，避免 werkzeug 开发服务器长期运行后内存紧张、
     # 单次请求需一次性分配 10MB 缓冲而抛 MemoryError，静默丢弃连接

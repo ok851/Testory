@@ -1838,9 +1838,19 @@
         }).then(function(response) {
             if (!response.ok || !response.body) {
                 hideTyping();
-                addChatMessage('执行失败: HTTP ' + response.status);
-                setStatus('error', '失败');
-                finishExecution();
+                // 读取响应体中的真实错误详情（服务器 500 时 body 常含 traceback/原因），
+                // 避免只显示干巴巴的 "HTTP 500" 掩盖真实原因
+                response.text().then(function (t) {
+                    var detail = (t || '').trim().slice(0, 300);
+                    addChatMessage('执行失败: HTTP ' + response.status +
+                        (detail ? '\n' + detail : ''));
+                    setStatus('error', '失败');
+                    finishExecution();
+                }).catch(function () {
+                    addChatMessage('执行失败: HTTP ' + response.status);
+                    setStatus('error', '失败');
+                    finishExecution();
+                });
                 return null;
             }
             return readSSEStream(response.body);

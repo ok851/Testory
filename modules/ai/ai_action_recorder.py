@@ -333,6 +333,10 @@ class ActionRecorder:
         """
         args = args if isinstance(args, dict) else {}
         name = (name or "tool").strip() or "tool"
+        if name == "mobile_run_steps":
+            # 整体工具名归一化后为 run_steps（不可回放）会被整批丢弃，
+            # 导致跨端联动生成的用例缺失手机分支步骤 → 按 steps IR 逐条展开
+            return self._records_from_mobile_steps(args, result, status)
         lifted: Optional[Dict[str, str]] = None
         if name == "browser_console":
             expr = str(args.get("expression") or args.get("code") or args.get("script") or "")
@@ -534,6 +538,72 @@ class ActionRecorder:
         )
         self.records.append(rec)
         return [rec]
+
+    def _records_from_mobile_steps(
+        self,
+        args: Dict[str, Any],
+        result: Any,
+        status: str,
+    ) -> List[ActionRecord]:
+        """mobile_run_steps 逐步展开：让手机分支步骤进入实时用例。
+
+        该工具只返回整体 digest；action_type 归一化后为 run_steps，
+        不在 _REPLAYABLE_ACTION_TYPES 中，会被整条丢弃——跨端联动的
+        手机侧步骤因此在生成用例时全部缺失。此处按 steps IR 逐条
+        合成 mobile_<action> 工具事件，复用 capture_from_tool_event 的
+        归一化/过滤逻辑（失败步骤仍不收录，与 UI verified 过滤对齐）。"""
+        steps = args.get("steps") if isinstance(args.get("steps"), list) else []
+        if not steps:
+            return []
+        parsed: Any = result
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                parsed = None
+        results_list: List[Any] = []
+        overall_ok = True
+        if isinstance(parsed, dict):
+            if parsed.get("success") is False or parsed.get("ok") is False:
+                overall_ok = False
+            payload = parsed.get("result_payload")
+            if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                results_list = payload["results"]
+            elif isinstance(parsed.get("results"), list):
+                results_list = parsed["results"]
+        if (status or "").strip().lower() in ("error", "failed", "fail"):
+            overall_ok = False
+        serial = str(args.get("serial") or args.get("device_id") or "")[:80]
+        out: List[ActionRecord] = []
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            action = str(step.get("action") or "step").strip()
+            synth_name = action if action.startswith("mobile_") else f"mobile_{action}"
+            step_args = dict(step)
+            step_args.pop("stepDescription", None)
+            step_args.pop("step_description", None)
+            step_args.pop("description", None)
+            if serial:
+                step_args.setdefault("serial", serial)
+            step_res = results_list[i] if i < len(results_list) else None
+            if not isinstance(step_res, dict):
+                # 无逐条结果：以整体成败近似
+                step_res = {"success": True} if overall_ok else {"success": False}
+            desc = str(
+                step.get("stepDescription")
+                or step.get("step_description")
+                or step.get("description")
+                or ""
+            )[:80]
+            recs = self.capture_from_tool_event(
+                name=synth_name, args=step_args, result=step_res, status=""
+            )
+            for r in recs:
+                if desc and (not r.target or r.target in (action, synth_name)):
+                    r.target = sanitize_target(desc) or r.target
+                out.append(r)
+        return out
 
     def _records_from_structured(self, data: Dict[str, Any]) -> List[ActionRecord]:
         out: List[ActionRecord] = []
