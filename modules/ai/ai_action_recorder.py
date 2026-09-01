@@ -40,11 +40,15 @@ class ActionRecord:
 def _layer_for_tool_name(name: str) -> str:
     """按工具前缀判定步骤所属自动化层（多端联动录制时覆盖单一 self.platform）。"""
     nm = (name or "").strip().lower()
+    if nm in ("extract_otp", "mobile_extract_otp", "mobile_scrcpy_extract_otp"):
+        return "android"
     if nm.startswith("mobile_"):
         return "android"
     if nm.startswith("windows_") or nm.startswith("desktop_"):
         return "desktop"
-    if nm.startswith("browser_"):
+    if nm.startswith("browser_") or nm in ("navigate", "goto", "click", "type", "fill"):
+        return "web"
+    if nm == "api_call":
         return "web"
     return ""
 
@@ -339,8 +343,45 @@ def sanitize_target(target: str) -> str:
         return ""
     t = str(target).strip()
     t = _NOISE_PAREN_RE.sub("", t).strip()
+    # 去掉 OCR/快照截断产生的前缀残字（如「了获取验证码」）
+    t = re.sub(r"^[了的在是和与及到]\s*", "", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
+
+
+def case_step_dedupe_key(action: str, target: str) -> str:
+    """实时用例去重键：动作 + 规范化目标。"""
+    a = (action or "").strip().lower()
+    if a.startswith("browser_"):
+        a = a[len("browser_") :]
+    t = sanitize_target(target or "").lower()
+    t = re.sub(r"[\s\-–—_·•]+", "", t)
+    return f"{a}|{t}"
+
+
+def should_skip_duplicate_case_step(
+    prev_action: str,
+    prev_target: str,
+    action: str,
+    target: str,
+) -> bool:
+    """相邻同类点击/输入视为重复（如「了获取验证码」与「获取验证码」）。"""
+    k1 = case_step_dedupe_key(prev_action, prev_target)
+    k2 = case_step_dedupe_key(action, target)
+    if not k1 or not k2 or "|" not in k1 or "|" not in k2:
+        return False
+    a1, t1 = k1.split("|", 1)
+    a2, t2 = k2.split("|", 1)
+    if a1 != a2:
+        return False
+    if not t1 or not t2:
+        return k1 == k2
+    if t1 == t2:
+        return True
+    # 一方包含另一方且长度接近（残字前缀）
+    if t1 in t2 or t2 in t1:
+        return abs(len(t1) - len(t2)) <= 2
+    return False
 
 
 def is_state_observation(target: str) -> bool:
@@ -888,9 +929,9 @@ class ActionRecorder:
                 _raw_args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
             except Exception:
                 pass
-            if _raw_name == "mobile_extract_otp" or rec.action_type == "extract_otp":
+            if _raw_name in ("mobile_extract_otp", "mobile_scrcpy_extract_otp") or rec.action_type == "extract_otp":
                 step["action"] = "extract_otp"
-                step["automation_layer"] = "cross_end"
+                step["automation_layer"] = "android"
                 cross_spec = {}
                 if _raw_args.get("timeout_sec"):
                     cross_spec["timeout_sec"] = _raw_args["timeout_sec"]
@@ -911,7 +952,7 @@ class ActionRecorder:
                     step["desktop_spec"] = json.dumps(ds, ensure_ascii=False)
             elif _raw_name == "api_call" or rec.action_type == "api_call":
                 step["action"] = "api_call"
-                step["automation_layer"] = "cross_end"
+                step["automation_layer"] = "web"
                 api_spec = {}
                 api_spec["method"] = str(_raw_args.get("method") or "GET")
                 api_spec["url"] = str(_raw_args.get("url") or "")
@@ -957,6 +998,16 @@ class ActionRecorder:
                 step["vision_info"] = rec.vision_info
             if rec.verification and isinstance(rec.verification, dict):
                 step["verification"] = rec.verification
+            # 相邻重复点击/输入（如「了获取验证码」与「获取验证码」）丢弃后者
+            if steps:
+                prev = steps[-1]
+                if should_skip_duplicate_case_step(
+                    str(prev.get("action") or ""),
+                    str(prev.get("target") or ""),
+                    str(step.get("action") or ""),
+                    str(step.get("target") or ""),
+                ):
+                    continue
             steps.append(step)
         return steps
 

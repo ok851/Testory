@@ -9119,6 +9119,7 @@ def api_ai_task_execute():
                 hermes_partial = False
                 hermes_failed = False
                 last_reply_sent = ""
+                _last_case_step_key = ""
                 for evt_type, evt_data in run_ai_chat_with_tools_stream(
                     local_ai_service=local_ai_service,
                     params=params,
@@ -9419,23 +9420,45 @@ def api_ai_task_execute():
                                 continue
                             st = (rec.get('status') or '').lower()
                             # 实时用例：success→verified；warning→verified=false（前端仍展示）
-                            if st in ('success', 'ok', 'done', 'completed', 'complete'):
+                            if st not in ('success', 'ok', 'done', 'completed', 'complete', 'warning'):
+                                continue
+                            _act = rec.get('action_type', '操作')
+                            _tgt = rec.get('target', '目标')
+                            _layer = rec.get('automation_layer') or ''
+                            if _layer == 'cross_end':
+                                _al = str(_act or '').lower()
+                                _layer = 'android' if (
+                                    'extract_otp' in _al or _al.startswith('mobile_')
+                                ) else 'web'
+                            try:
+                                from modules.ai.ai_action_recorder import (
+                                    sanitize_target,
+                                    should_skip_duplicate_case_step,
+                                )
+                                _tgt_clean = sanitize_target(str(_tgt)) or _tgt
+                                if _last_case_step_key:
+                                    _pa = _last_case_step_key.split('\x1f', 1)
+                                    if len(_pa) == 2 and should_skip_duplicate_case_step(
+                                        _pa[0], _pa[1], str(_act), str(_tgt_clean)
+                                    ):
+                                        continue
+                                _last_case_step_key = f"{_act}\x1f{_tgt_clean}"
                                 yield send(
                                     'case_step',
-                                    action=rec.get('action_type', '操作'),
-                                    target=rec.get('target', '目标'),
-                                    verified=True,
-                                    automation_layer=rec.get('automation_layer') or '',
+                                    action=_act,
+                                    target=_tgt_clean,
+                                    verified=(st != 'warning'),
+                                    automation_layer=_layer,
                                     input_value=rec.get('input_value') or '',
                                     device_id=rec.get('device_id') or '',
                                 )
-                            elif st in ('warning',):
+                            except Exception:
                                 yield send(
                                     'case_step',
-                                    action=rec.get('action_type', '操作'),
-                                    target=rec.get('target', '目标'),
-                                    verified=False,
-                                    automation_layer=rec.get('automation_layer') or '',
+                                    action=_act,
+                                    target=_tgt,
+                                    verified=(st != 'warning'),
+                                    automation_layer=_layer,
                                     input_value=rec.get('input_value') or '',
                                     device_id=rec.get('device_id') or '',
                                 )

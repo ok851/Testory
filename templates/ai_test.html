@@ -1991,16 +1991,29 @@
         } else if (ev.type === 'case_step') {
             // 成功=已核验；warning(verified=false)=已执行未核验，仍展示；失败不进用例
             var caseVerified = ev.verified !== false;
-            AI_TEST_STATE.caseSteps.push({
-                num: AI_TEST_STATE.caseSteps.length + 1,
-                action: ev.action || '操作',
-                target: ev.target || '目标',
-                verified: caseVerified,
-                automation_layer: ev.automation_layer || inferLayerFromAction(ev.action),
-                input_value: ev.input_value || '',
-                device_id: ev.device_id || ''
-            });
-            updateCaseCard();
+            var nextAction = ev.action || '操作';
+            var nextTarget = ev.target || '目标';
+            var nextLayer = ev.automation_layer || inferLayerFromAction(nextAction);
+            if (nextLayer === 'cross_end') {
+                nextLayer = (String(nextAction).toLowerCase() === 'extract_otp') ? 'android' : 'web';
+            }
+            var prev = AI_TEST_STATE.caseSteps.length
+                ? AI_TEST_STATE.caseSteps[AI_TEST_STATE.caseSteps.length - 1]
+                : null;
+            if (prev && shouldSkipDuplicateCaseStep(prev.action, prev.target, nextAction, nextTarget)) {
+                // 相邻重复（如「了获取验证码」与「获取验证码」）跳过
+            } else {
+                AI_TEST_STATE.caseSteps.push({
+                    num: AI_TEST_STATE.caseSteps.length + 1,
+                    action: nextAction,
+                    target: nextTarget,
+                    verified: caseVerified,
+                    automation_layer: nextLayer,
+                    input_value: ev.input_value || '',
+                    device_id: ev.device_id || ''
+                });
+                updateCaseCard();
+            }
         } else if (ev.type === 'action_record') {
             // 细粒度动作记录（来自 ActionRecorder）：实际平台动作
             var actionItem = {
@@ -2318,21 +2331,19 @@
 
     function inferLayerFromText(text) {
         var t = String(text || '');
-        if (/手机|mobile_|android|验证码|短信|scrcpy/i.test(t)) return 'android';
+        if (/手机|mobile_|android|验证码|短信|scrcpy|extract_otp/i.test(t)) return 'android';
         if (/桌面|windows_|desktop_/i.test(t)) return 'desktop';
-        if (/browser_|Hermes|网页|DOM/i.test(t)) return 'web';
-        if (/跨端|extract_otp|api_call/i.test(t)) return 'cross_end';
+        if (/browser_|Hermes|网页|DOM|api_call/i.test(t)) return 'web';
         return '';
     }
 
     function inferLayerFromAction(action) {
         var a = String(action || '').toLowerCase();
         if (a.indexOf('mobile_') === 0 || a === 'tap' || a === 'swipe' || a === 'extract_otp') {
-            return a === 'extract_otp' ? 'cross_end' : 'android';
+            return 'android';
         }
         if (a.indexOf('windows_') === 0 || a.indexOf('desktop_') === 0 || a === 'launch_app' || a === 'hotkey') return 'desktop';
-        if (a.indexOf('browser_') === 0 || a === 'navigate' || a === 'goto' || a === 'click' || a === 'type' || a === 'fill') return 'web';
-        if (a === 'api_call') return 'cross_end';
+        if (a.indexOf('browser_') === 0 || a === 'navigate' || a === 'goto' || a === 'click' || a === 'type' || a === 'fill' || a === 'api_call') return 'web';
         return '';
     }
 
@@ -2343,10 +2354,38 @@
         var cls = L;
         if (L === 'android' || L === 'mobile') { label = '手机'; cls = 'android'; }
         else if (L === 'desktop' || L === 'pc') { label = 'PC'; cls = 'desktop'; }
-        else if (L === 'web') { label = 'Web'; cls = 'web'; }
-        else if (L === 'cross_end') { label = '跨端'; cls = 'cross_end'; }
+        else if (L === 'web' || L === 'cross_end') { label = 'Web'; cls = 'web'; }
         else return '';
         return '<span class="ai-layer-badge ' + cls + '">' + label + '</span>';
+    }
+
+    function sanitizeCaseTarget(target) {
+        var t = String(target || '').trim();
+        t = t.replace(/^[了的在是和与及到]\s*/, '');
+        t = t.replace(/\s+/g, ' ').trim();
+        return t;
+    }
+
+    function caseStepDedupeKey(action, target) {
+        var a = String(action || '').trim().toLowerCase();
+        if (a.indexOf('browser_') === 0) a = a.slice(8);
+        var t = sanitizeCaseTarget(target).toLowerCase().replace(/[\s\-–—_·•]+/g, '');
+        return a + '|' + t;
+    }
+
+    function shouldSkipDuplicateCaseStep(prevAction, prevTarget, action, target) {
+        var k1 = caseStepDedupeKey(prevAction, prevTarget);
+        var k2 = caseStepDedupeKey(action, target);
+        if (!k1 || !k2) return false;
+        var p1 = k1.split('|');
+        var p2 = k2.split('|');
+        if (p1[0] !== p2[0]) return false;
+        var t1 = p1[1] || '';
+        var t2 = p2[1] || '';
+        if (!t1 || !t2) return k1 === k2;
+        if (t1 === t2) return true;
+        if ((t1.indexOf(t2) >= 0 || t2.indexOf(t1) >= 0) && Math.abs(t1.length - t2.length) <= 2) return true;
+        return false;
     }
 
     // 语义收敛：连续同类只保留 1 条；禁止「…还有 N 条」

@@ -1819,14 +1819,14 @@ def _prefetch_parallel_hand_results(
 
 def _tool_name_to_layer(name: str) -> str:
     n = (name or "").strip().lower()
-    if n.startswith("mobile_") or n in ("tap", "swipe", "extract_otp"):
-        return "android" if n != "extract_otp" and n != "mobile_extract_otp" else "cross_end"
+    if n.startswith("mobile_") or n in ("tap", "swipe", "extract_otp", "mobile_extract_otp", "mobile_scrcpy_extract_otp"):
+        return "android"
     if n.startswith("windows_") or n.startswith("desktop_"):
         return "desktop"
     if n.startswith("browser_") or n == "hermes_execute":
         return "web"
     if n == "api_call":
-        return "cross_end"
+        return "web"
     return ""
 
 
@@ -2625,6 +2625,79 @@ def _resolve_cross_end_vars(obj: Any, vars_map: Optional[Dict[str, Any]]) -> Any
     if isinstance(obj, list):
         return [_resolve_cross_end_vars(v, vars_map) for v in obj]
     return obj
+
+
+def _otp_exclude_numbers_from_meta(meta: Optional[Dict[str, Any]], params: Optional["ChatToolLoopParams"] = None) -> List[str]:
+    """用户手机号等需从 OTP 候选中排除，避免截取手机号前几位当验证码。"""
+    out: List[str] = []
+    vars_map = (meta or {}).get("cross_end_vars") if isinstance((meta or {}).get("cross_end_vars"), dict) else {}
+    phone = str(vars_map.get("phone_number") or "").strip()
+    if phone:
+        out.append(phone)
+    msg = ""
+    if params is not None:
+        msg = str(getattr(params, "message", "") or "")
+    if msg:
+        try:
+            from modules.ai.agent_intent import extract_cross_end_seed_vars
+
+            seeded = extract_cross_end_seed_vars(msg) or {}
+            p2 = str(seeded.get("phone_number") or "").strip()
+            if p2 and p2 not in out:
+                out.append(p2)
+        except Exception:
+            pass
+    return out
+
+
+def _reject_invented_otp_type(
+    tool_name: str,
+    call_args: Dict[str, Any],
+    meta: Dict[str, Any],
+) -> Optional[str]:
+    """拦截未取码成功时胡乱填 4–6 位数字，或把手机号片段当验证码回填。"""
+    n = (tool_name or "").strip().lower()
+    if n not in ("windows_type_text", "desktop_type_text"):
+        return None
+    text = str((call_args or {}).get("text") or "").strip()
+    if "{{" in text and "sms_otp" in text:
+        return (
+            "验证码变量 {{sms_otp}} 尚未解析：请先成功调用 mobile_extract_otp / "
+            "mobile_scrcpy_extract_otp，禁止编造或跳过取码直接回填。"
+        )
+    if not re.fullmatch(r"\d{4,6}", text):
+        return None
+    # 仅在本轮已涉及取码/验证码任务时拦截
+    used = " ".join(str(x) for x in (meta.get("tools_used") or []))
+    msg_hint = str(meta.get("user_goal") or meta.get("task") or "")
+    otp_context = (
+        "extract_otp" in used
+        or "sms_otp" in used
+        or "验证码" in msg_hint
+        or bool((meta.get("cross_end_vars") or {}).get("sms_otp"))
+        or any("extract_otp" in str(x) for x in (meta.get("tools_used") or []))
+    )
+    if not otp_context:
+        # 宽松：若变量里有 phone 且 text 是其片段，也拦截
+        phone = str((meta.get("cross_end_vars") or {}).get("phone_number") or "")
+        if phone and (text in phone or phone.startswith(text)):
+            return f"禁止把手机号片段「{text}」当作验证码输入。"
+        return None
+    real = str((meta.get("cross_end_vars") or {}).get("sms_otp") or "").strip()
+    if not real:
+        return (
+            f"尚未取得有效验证码（sms_otp 为空），禁止输入「{text}」。"
+            "请先成功调用取码工具，仅使用返回的 sms_otp。"
+        )
+    if text != real:
+        return (
+            f"输入「{text}」与已取得的验证码 sms_otp={real} 不一致；"
+            "禁止编造或使用过期/错误数字，请使用 {{sms_otp}}。"
+        )
+    phone = str((meta.get("cross_end_vars") or {}).get("phone_number") or "")
+    if phone and (text in phone or phone.startswith(text) or phone.endswith(text)):
+        return f"「{text}」疑似手机号片段，不是短信验证码。"
+    return None
 
 
 def _seed_cross_end_vars_from_message(message: str) -> Dict[str, str]:
@@ -4120,9 +4193,18 @@ def _prepare_unified_agent_meta(params: "ChatToolLoopParams", plat: str) -> Dict
 
             sess = get_or_create_session(uid, sid)
             merged = dict(sess.get("cross_end_vars") or {})
+            # 新任务不沿用上一轮 sms_otp，避免把过期/错误验证码回填到网页
+            merged.pop("sms_otp", None)
+            try:
+                cur = sess.get("cross_end_vars")
+                if isinstance(cur, dict):
+                    cur.pop("sms_otp", None)
+            except Exception:
+                pass
             merged.update(seeded)
             merge_cross_end_vars(uid, seeded, session_id=sid)
-            cross_vars = merged
+            cross_vars = dict(merged)
+            cross_vars.pop("sms_otp", None)
         except Exception:
             cross_vars = seeded
     else:
@@ -4676,6 +4758,15 @@ def run_ai_chat_with_tools(
                         call_args.setdefault("field", "compose")
                     if name in ("windows_click_element", "windows_type_text"):
                         call_args = _prepare_element_context(params, name, call_args, meta)
+                    _otp_invent = _reject_invented_otp_type(name, call_args, meta)
+                    if _otp_invent:
+                        result_text = json.dumps(
+                            {"ok": False, "success": False, "error": _otp_invent, "error_code": "OTP_INVENTED"},
+                            ensure_ascii=False,
+                        )
+                        meta["tools_used"].append(f"{name}_blocked_otp")
+                        messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                        continue
                     result_text = _dispatch_desktop_or_screen_tool(name, call_args)
                     if name in ("windows_click_element", "windows_type_text"):
                         if not _desktop_tool_succeeded(result_text):
@@ -4704,6 +4795,9 @@ def run_ai_chat_with_tools(
                         meta["tools_used"].append(f"{name}_blocked_order")
                         messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
                         continue
+                    _ex = _otp_exclude_numbers_from_meta(meta, params)
+                    if _ex and not call_args.get("exclude_numbers"):
+                        call_args["exclude_numbers"] = _ex
                 rem_tool = _remaining_deadline_sec(params)
                 if name.startswith("mobile_"):
                     # 阻塞路径无 UI 进度；仍传 abort，避免空等
@@ -6107,14 +6201,22 @@ def run_ai_chat_with_tools_stream(
                         call_args.setdefault("field", "compose")
                     if name in ("windows_click_element", "windows_type_text"):
                         call_args = _prepare_element_context(params, name, call_args, meta)
-                    result_text = _dispatch_desktop_or_screen_tool(name, call_args)
-                    if name in ("windows_click_element", "windows_type_text"):
-                        if not _desktop_tool_succeeded(result_text):
-                            result_text = _retry_failed_element_operation(
-                                params, name, call_args, meta, result_text
-                            )
-                    meta["tools_used"].append(name)
-                    _record_succeeded_desktop_action(meta, name, call_args, result_text)
+                    _otp_invent = _reject_invented_otp_type(name, call_args, meta)
+                    if _otp_invent:
+                        result_text = json.dumps(
+                            {"ok": False, "success": False, "error": _otp_invent, "error_code": "OTP_INVENTED"},
+                            ensure_ascii=False,
+                        )
+                        meta["tools_used"].append(f"{name}_blocked_otp")
+                    else:
+                        result_text = _dispatch_desktop_or_screen_tool(name, call_args)
+                        if name in ("windows_click_element", "windows_type_text"):
+                            if not _desktop_tool_succeeded(result_text):
+                                result_text = _retry_failed_element_operation(
+                                    params, name, call_args, meta, result_text
+                                )
+                        meta["tools_used"].append(name)
+                        _record_succeeded_desktop_action(meta, name, call_args, result_text)
                 if name in SCREEN_TOOL_NAMES:
                     try:
                         parsed_vis = json.loads(result_text)
@@ -6200,6 +6302,9 @@ def run_ai_chat_with_tools_stream(
                         })
                         messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
                         continue
+                    _ex = _otp_exclude_numbers_from_meta(meta, params)
+                    if _ex and not call_args.get("exclude_numbers"):
+                        call_args["exclude_numbers"] = _ex
                 rem_tool = _remaining_deadline_sec(params)
                 if name.startswith("mobile_"):
                     for pevt, pdata in _run_mobile_tool_with_progress(

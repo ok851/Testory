@@ -16,6 +16,95 @@ def test_parse_otp_from_chinese_sms():
     assert parse_otp_from_text("hello world") is None
 
 
+def test_parse_otp_rejects_phone_fragment():
+    from modules.mobile.mobile_cross_end_tools import parse_otp_from_text
+
+    # 旧逻辑会把手机号前 6 位当验证码
+    assert parse_otp_from_text("验证码已发送至16608943238") is None
+    assert parse_otp_from_text(
+        "您的验证码是 445566，请勿泄露",
+        exclude_numbers=["16608943238"],
+    ) == "445566"
+    assert parse_otp_from_text(
+        "验证码 166089",
+        exclude_numbers=["16608943238"],
+    ) is None
+
+
+def test_parse_otp_from_notification_dump_picks_sms_record():
+    """整坨 dumpsys 含噪声数字时，只取短信通知条目里的真验证码。"""
+    import time
+
+    from modules.mobile.mobile_cross_end_tools import parse_otp_from_notification_dump
+
+    now = int(time.time() * 1000)
+    dump = f"""
+NotificationRecord(0x1: pkg=com.android.systemui user=UserHandle{{0}}
+  notification={{
+    extras={{
+      android.title=String (系统服务)
+      android.text=String (内存占用 882211 请清理)
+    }}
+  }} postTime={now - 60000}
+)
+NotificationRecord(0x2: pkg=com.android.mms user=UserHandle{{0}}
+  notification={{
+    tickerText=【测试】验证码,
+    extras={{
+      android.title=String (1069xxx)
+      android.text=String (【测试】您的验证码是 729154，5分钟内有效)
+    }}
+  }} postTime={now - 5000}
+)
+NotificationRecord(0x3: pkg=com.example.shop user=UserHandle{{0}}
+  notification={{
+    extras={{
+      android.title=String (物流)
+      android.text=String (快递单号 9988776655 已发货)
+    }}
+  }} postTime={now - 2000}
+)
+"""
+    otp, meta = parse_otp_from_notification_dump(
+        dump, exclude_numbers=["16608943238"]
+    )
+    assert otp == "729154"
+    assert "mms" in (meta.get("picked_pkg") or "")
+
+
+def test_parse_otp_from_notification_dump_ignores_phone_in_sms_text():
+    import time
+
+    from modules.mobile.mobile_cross_end_tools import parse_otp_from_notification_dump
+
+    now = int(time.time() * 1000)
+    dump = f"""
+NotificationRecord(0x9: pkg=com.google.android.apps.messaging
+  extras={{
+    android.title=String (10086)
+    android.text=String (验证码已发送至16608943238，请注意查收)
+  }} postTime={now}
+)
+"""
+    otp, meta = parse_otp_from_notification_dump(
+        dump, exclude_numbers=["16608943238"]
+    )
+    assert otp is None
+    assert meta.get("otp_candidates", 0) == 0
+
+
+def test_case_step_dedupe_and_sanitize():
+    from modules.ai.ai_action_recorder import (
+        sanitize_target,
+        should_skip_duplicate_case_step,
+    )
+
+    assert sanitize_target("了获取验证码") == "获取验证码"
+    assert should_skip_duplicate_case_step(
+        "click", "了获取验证码", "click", "获取验证码"
+    )
+
+
 def test_mobile_extract_otp_uses_mock_env(monkeypatch):
     from modules.mobile.mobile_cross_end_tools import mobile_extract_otp
 

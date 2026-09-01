@@ -16,13 +16,219 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-# 常见短信验证码：4–8 位数字；优先匹配「验证码」附近
+# 常见短信验证码：4–6 位；必须贴近关键词，且必须是完整数字串（避免从手机号截前 6 位）
 _DEFAULT_OTP_RE = re.compile(
-    r"(?:验证码|校验码|动态码|code|Code)[^\d]{0,12}(\d{4,8})"
-    r"|(\d{4,8})[^\d]{0,8}(?:为您的验证码|是您的验证码)",
+    r"(?:验证码|校验码|动态码|code|Code|OTP|otp)[^\d]{0,12}(\d{4,6})(?!\d)"
+    r"|(\d{4,6})(?!\d)[^\d]{0,8}(?:为您的验证码|是您的验证码)",
     re.IGNORECASE,
 )
-_FALLBACK_DIGIT_RE = re.compile(r"(?<!\d)(\d{4,8})(?!\d)")
+_NEAR_OTP_FALLBACK_RE = re.compile(
+    r"(?:验证码|校验码|动态码)[^\n\d]{0,20}(\d{4,6})(?!\d)",
+    re.IGNORECASE,
+)
+_PHONE_RE_LOCAL = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
+
+# dumpsys notification 结构化字段
+_NOTIF_RECORD_SPLIT_RE = re.compile(r"(?=NotificationRecord\()")
+_NOTIF_PKG_RE = re.compile(r"\bpkg=([^\s]+)")
+_NOTIF_OP_PKG_RE = re.compile(r"\bopPkg=([^\s]+)")
+_NOTIF_POST_TIME_RE = re.compile(r"\bpostTime=(\d+)")
+_NOTIF_WHEN_RE = re.compile(r"\bwhen(?:Time)?=(\d+)")
+_NOTIF_TICKER_RE = re.compile(r"tickerText=([^\n]*)")
+# extras: android.title=String (内容)
+_NOTIF_EXTRA_STRING_RE = re.compile(
+    r"android\.(?:title|text|bigText|subText|infoText|summaryText)"
+    r"=String\s*\((.*?)\)(?=\s*(?:\r?\n|android\.|[},]|$))",
+    re.DOTALL,
+)
+_OTP_KEYWORDS = (
+    "验证码",
+    "校验码",
+    "动态码",
+    "verification code",
+    "verify code",
+    "otp",
+)
+_SMS_PKG_HINTS = (
+    "mms",
+    "sms",
+    "messaging",
+    "telephony",
+    "message",
+    "短信",
+    "信息",
+)
+
+
+def _notification_pkg_looks_like_sms(pkg: str) -> bool:
+    p = (pkg or "").lower()
+    if not p:
+        return False
+    if any(h in p for h in _SMS_PKG_HINTS):
+        return True
+    # 运营商 / 银行类验证码通知也常见
+    return False
+
+
+def _extract_extra_string_fields(block: str) -> List[str]:
+    """从单条 NotificationRecord 中提取用户可见文案字段。"""
+    texts: List[str] = []
+    for m in _NOTIF_EXTRA_STRING_RE.finditer(block or ""):
+        val = (m.group(1) or "").strip()
+        if not val or val.lower() in ("null", "true", "false", "[redacted]"):
+            continue
+        # ApplicationInfo / Icon 等噪声
+        if val.startswith("ApplicationInfo{") or val.startswith("Icon("):
+            continue
+        texts.append(val)
+    tm = _NOTIF_TICKER_RE.search(block or "")
+    if tm:
+        tick = (tm.group(1) or "").strip()
+        if tick and tick.lower() not in ("null", "null,"):
+            # tickerText=xxx, ... 截到逗号前
+            tick = tick.split(",")[0].strip()
+            if tick and tick.lower() != "null":
+                texts.append(tick)
+    return texts
+
+
+def iter_notification_records(dump_text: str) -> List[Dict[str, Any]]:
+    """把 dumpsys notification 拆成结构化条目（只保留可见文案，不整坨乱解析）。"""
+    raw = dump_text or ""
+    if not raw.strip():
+        return []
+    chunks = _NOTIF_RECORD_SPLIT_RE.split(raw)
+    out: List[Dict[str, Any]] = []
+    for chunk in chunks:
+        if "NotificationRecord" not in chunk and "pkg=" not in chunk:
+            continue
+        pkg = ""
+        m_pkg = _NOTIF_PKG_RE.search(chunk)
+        if m_pkg:
+            pkg = (m_pkg.group(1) or "").strip()
+        if not pkg:
+            m_op = _NOTIF_OP_PKG_RE.search(chunk)
+            if m_op:
+                pkg = (m_op.group(1) or "").strip()
+        post_time = 0
+        m_pt = _NOTIF_POST_TIME_RE.search(chunk) or _NOTIF_WHEN_RE.search(chunk)
+        if m_pt:
+            try:
+                post_time = int(m_pt.group(1))
+            except ValueError:
+                post_time = 0
+        fields = _extract_extra_string_fields(chunk)
+        if not fields and not pkg:
+            continue
+        body = "\n".join(fields)
+        out.append(
+            {
+                "pkg": pkg,
+                "post_time": post_time,
+                "texts": fields,
+                "body": body,
+            }
+        )
+    return out
+
+
+def parse_otp_from_notification_dump(
+    dump_text: str,
+    *,
+    pattern: str = "",
+    sender_hint: str = "",
+    exclude_numbers: Optional[List[str]] = None,
+    max_age_ms: int = 15 * 60 * 1000,
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """从 dumpsys 按「单条通知」取验证码。
+
+    规则：
+    - 只解析 android.title / android.text / bigText / ticker，禁止对整份 dumpsys 抠数字；
+    - 正文须含验证码关键词，且能解析出合理 4–6 位码；
+    - 优先短信类包名；同条件下取 postTime 最新；
+    - 过旧通知（默认 15 分钟）降权/丢弃。
+    """
+    records = iter_notification_records(dump_text)
+    meta: Dict[str, Any] = {
+        "records_total": len(records),
+        "otp_candidates": 0,
+        "picked_pkg": "",
+        "picked_preview": "",
+    }
+    if not records:
+        return None, meta
+
+    now_ms = int(time.time() * 1000)
+    hint = (sender_hint or "").strip().lower()
+    scored: List[Tuple[int, int, str, Dict[str, Any]]] = []
+
+    for rec in records:
+        body = str(rec.get("body") or "")
+        if not body.strip():
+            continue
+        body_l = body.lower()
+        if hint and hint not in body_l and hint not in str(rec.get("pkg") or "").lower():
+            # sender_hint 未命中：仍允许，但低分
+            hint_bonus = 0
+        else:
+            hint_bonus = 30 if hint else 0
+
+        if not any(k.lower() in body_l if k.isascii() else k in body for k in _OTP_KEYWORDS):
+            continue
+
+        otp = parse_otp_from_text(
+            body,
+            pattern=pattern,
+            prefer_near_keywords=True,
+            exclude_numbers=exclude_numbers,
+        )
+        if not otp:
+            continue
+
+        meta["otp_candidates"] = int(meta["otp_candidates"]) + 1
+        pkg = str(rec.get("pkg") or "")
+        post_time = int(rec.get("post_time") or 0)
+        score = 100 + hint_bonus
+        if _notification_pkg_looks_like_sms(pkg):
+            score += 50
+        # 年龄：有时间戳时，过旧直接跳过；无时间戳降分但仍可用
+        if post_time > 0:
+            pt_ms = post_time if post_time >= 1_000_000_000_000 else post_time * 1000
+            age = abs(now_ms - pt_ms)
+            if max_age_ms > 0 and age > max_age_ms:
+                continue
+            # 越新越高分
+            score += max(0, 40 - int(age / 60000))
+        else:
+            score -= 20
+
+        scored.append((score, post_time, otp, rec))
+
+    if not scored:
+        return None, meta
+
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    best_score, _, best_otp, best_rec = scored[0]
+    meta["picked_pkg"] = str(best_rec.get("pkg") or "")
+    meta["picked_preview"] = str(best_rec.get("body") or "")[:160]
+    meta["picked_score"] = best_score
+    return best_otp, meta
+
+
+def _is_plausible_sms_otp(otp: str, *, exclude_numbers: Optional[List[str]] = None) -> bool:
+    """过滤手机号片段、全相同数字等无效「验证码」。"""
+    s = (otp or "").strip()
+    if not re.fullmatch(r"\d{4,6}", s):
+        return False
+    if len(set(s)) == 1:
+        return False
+    for ex in exclude_numbers or []:
+        exs = re.sub(r"\D", "", str(ex or ""))
+        if not exs:
+            continue
+        if s == exs or s in exs or exs.endswith(s) or exs.startswith(s):
+            return False
+    return True
 
 
 def parse_otp_from_text(
@@ -30,30 +236,60 @@ def parse_otp_from_text(
     *,
     pattern: str = "",
     prefer_near_keywords: bool = True,
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Optional[str]:
-    """从通知/短信原文解析 OTP。失败返回 None。"""
+    """从通知/短信原文解析 OTP。失败返回 None。
+
+    不做「整页随便抓 4–8 位数字」；含验证码关键词的行优先。
+    """
     raw = (text or "").strip()
     if not raw:
         return None
-    if pattern:
-        try:
-            m = re.search(pattern, raw)
-            if m:
-                return (m.group(1) if m.lastindex else m.group(0) or "").strip() or None
-        except re.error:
-            pass
-    if prefer_near_keywords:
-        m = _DEFAULT_OTP_RE.search(raw)
+    excludes = list(exclude_numbers or [])
+    excludes.extend(_PHONE_RE_LOCAL.findall(raw))
+
+    def _try_blob(blob: str) -> Optional[str]:
+        if pattern:
+            try:
+                m = re.search(pattern, blob)
+                if m:
+                    cand = (m.group(1) if m.lastindex else m.group(0) or "").strip() or None
+                    if cand and _is_plausible_sms_otp(cand, exclude_numbers=excludes):
+                        return cand
+            except re.error:
+                pass
+        if not prefer_near_keywords:
+            return None
+        m = _DEFAULT_OTP_RE.search(blob)
         if m:
             for g in m.groups():
-                if g:
+                if g and _is_plausible_sms_otp(g, exclude_numbers=excludes):
                     return g
-    # 含验证码关键词时再宽松取码
-    if any(k in raw for k in ("验证码", "校验码", "动态码", "verification", "OTP", "otp")):
-        m2 = _FALLBACK_DIGIT_RE.search(raw)
-        if m2:
+        m2 = _NEAR_OTP_FALLBACK_RE.search(blob)
+        if m2 and _is_plausible_sms_otp(m2.group(1), exclude_numbers=excludes):
             return m2.group(1)
-    return None
+        return None
+
+    # 优先只在含关键词的行上解析，降低 dumpsys 噪声误匹配
+    keyed_lines = [
+        ln
+        for ln in raw.splitlines()
+        if any(
+            k in ln
+            for k in ("验证码", "校验码", "动态码", "verification", "OTP", "otp")
+        )
+        or re.search(r"(?<![A-Za-z])code(?![A-Za-z])", ln, re.IGNORECASE)
+    ]
+    for ln in keyed_lines:
+        hit = _try_blob(ln)
+        if hit:
+            return hit
+    # 多行拼成一段再试（title/text 分行时）
+    if keyed_lines:
+        hit = _try_blob("\n".join(keyed_lines))
+        if hit:
+            return hit
+    return _try_blob(raw)
 
 
 def _mock_otp() -> str:
@@ -199,6 +435,7 @@ def mobile_extract_otp(
     abort_event: Any = None,
     on_tick: Any = None,
     allow_scrcpy_vision: bool = True,
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """高层工具：三级 OTP 获取策略（scrcpy 视觉优先）
 
@@ -219,6 +456,7 @@ def mobile_extract_otp(
 
     device_id = ""
     evidence: List[Dict[str, Any]] = []
+    excludes = [str(x) for x in (exclude_numbers or []) if str(x).strip()]
 
     # ── 一级：scrcpy 视觉（快速主路径）──
     # 直接 ADB screencap + OCR，无需 APK enqueue/await 轮询，2-5 秒出结果
@@ -227,10 +465,21 @@ def mobile_extract_otp(
             user_id=user_id,
             sender_hint=sender_hint,
             pattern=pattern,
+            exclude_numbers=excludes,
         )
         if scrcpy_result.get("success"):
-            scrcpy_result["evidence"] = evidence + scrcpy_result.get("evidence", [])
-            return scrcpy_result
+            otp_v = str(scrcpy_result.get("sms_otp") or "")
+            if otp_v and not _is_plausible_sms_otp(otp_v, exclude_numbers=excludes):
+                scrcpy_result = {
+                    "success": False,
+                    "ok": False,
+                    "error": f"识别到疑似手机号片段而非验证码: {otp_v}",
+                    "error_code": "OTP_LOOKS_LIKE_PHONE",
+                    "evidence": scrcpy_result.get("evidence") or [],
+                }
+            else:
+                scrcpy_result["evidence"] = evidence + scrcpy_result.get("evidence", [])
+                return scrcpy_result
         # scrcpy 视觉未成功，记录 evidence 继续走 APK 兜底
         evidence.append({
             "type": "scrcpy_vision",
@@ -316,9 +565,11 @@ def mobile_extract_otp(
                 or r.get("errorMessage")
                 or ""
             )
-            otp = parse_otp_from_text(str(blob), pattern=pattern) or ""
+            otp = parse_otp_from_text(str(blob), pattern=pattern, exclude_numbers=excludes) or ""
             if otp:
                 break
+    if otp and not _is_plausible_sms_otp(otp, exclude_numbers=excludes):
+        otp = ""
     st = str(job.get("status") or "").strip().lower()
     ok = bool(otp) and st in ("success", "ok")
     if otp and "sms_otp" not in vars_out:
@@ -357,6 +608,7 @@ def _try_scrcpy_vision_otp(
     user_id: int = 0,
     sender_hint: str = "",
     pattern: str = "",
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """尝试 scrcpy 视觉路径提取验证码。
 
@@ -386,8 +638,9 @@ def _try_scrcpy_vision_otp(
         pattern=pattern,
         user_id=user_id,
         navigate_to_messages=False,
+        exclude_numbers=exclude_numbers,
     )
-    result["source"] = "scrcpy_vision"
+    result["source"] = result.get("source") or "scrcpy_vision"
     return result
 
 
@@ -1237,6 +1490,9 @@ def dispatch_cross_end_tool(
                 k: v for k, v in a.items() if k not in ("text",)
             })
         if n in ("mobile_extract_otp", "mobile_await_notification"):
+            _ex = a.get("exclude_numbers")
+            if not isinstance(_ex, list):
+                _ex = []
             return mobile_extract_otp(
                 timeout_sec=float(a.get("timeout_sec") or a.get("timeout") or 120),
                 sender_hint=str(a.get("sender_hint") or a.get("sender") or ""),
@@ -1245,6 +1501,7 @@ def dispatch_cross_end_tool(
                 device_id=str(a.get("device_id") or ""),
                 abort_event=abort_event,
                 on_tick=on_tick,
+                exclude_numbers=_ex,
             )
         if n == "mobile_scrcpy_screenshot":
             from modules.mobile.mobile_scrcpy_vision import get_device_serial_for_user
@@ -1254,6 +1511,9 @@ def dispatch_cross_end_tool(
             # 避免该入口瞬时截图失败连续 2 次触发 mobile_flow_halted 熔断。
             return _screen_text_with_ui_tree_fallback(serial)
         if n == "mobile_scrcpy_extract_otp":
+            _ex2 = a.get("exclude_numbers")
+            if not isinstance(_ex2, list):
+                _ex2 = []
             return mobile_extract_otp(
                 timeout_sec=float(a.get("timeout_sec") or 30),
                 sender_hint=str(a.get("sender_hint") or ""),
@@ -1264,6 +1524,7 @@ def dispatch_cross_end_tool(
                 on_tick=on_tick,
                 mock_allowed=False,
                 allow_scrcpy_vision=True,
+                exclude_numbers=_ex2,
             )
         if n == "mobile_run_steps":
             steps = a.get("steps") or []

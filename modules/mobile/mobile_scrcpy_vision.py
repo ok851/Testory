@@ -22,12 +22,6 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-_DEFAULT_OTP_RE = re.compile(
-    r"(?:验证码|校验码|动态码|code|Code|OTP|otp)[^\d]{0,12}(\d{4,8})"
-    r"|(\d{4,8})[^\d]{0,8}(?:为您的验证码|是您的验证码|验证码|code)",
-    re.IGNORECASE,
-)
-_FALLBACK_DIGIT_RE = re.compile(r"(?<!\d)(\d{4,8})(?!\d)")
 
 # [Testory-patch] 截图失败诊断：capture_device_frame 失败原因按 serial 记录，
 # 供调用方（mobile_get_screen_text 等）在错误信息中透出，替代"设备截图失败"盲区。
@@ -132,42 +126,31 @@ def extract_otp_from_ocr(
     *,
     sender_hint: str = "",
     pattern: str = "",
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Optional[str]:
-    """从 OCR 结果提取验证码。"""
+    """从 OCR / dumpsys 文本提取验证码（复用严格解析，禁止乱抓手机号片段）。"""
     if not isinstance(ocr_result, dict):
         return None
     texts = ocr_result.get("texts") or ocr_result.get("text_joined") or ""
     if isinstance(texts, list):
-        text_blob = " ".join(str(t) for t in texts if t)
+        text_blob = "\n".join(str(t) for t in texts if t)
     else:
         text_blob = str(texts)
 
     if not text_blob:
         return None
 
-    # 1. 自定义 pattern
-    if pattern:
-        try:
-            m = re.search(pattern, text_blob)
-            if m:
-                return (m.group(1) if m.lastindex else m.group(0) or "").strip() or None
-        except re.error:
-            pass
+    try:
+        from modules.mobile.mobile_cross_end_tools import parse_otp_from_text
 
-    # 2. 标准 OTP regex
-    m = _DEFAULT_OTP_RE.search(text_blob)
-    if m:
-        for g in m.groups():
-            if g:
-                return g
-
-    # 3. 宽松匹配：含验证码关键词时取 4-8 位数字
-    if any(k in text_blob for k in ("验证码", "校验码", "动态码", "verification", "OTP", "otp", "code", "Code")):
-        m2 = _FALLBACK_DIGIT_RE.search(text_blob)
-        if m2:
-            return m2.group(1)
-
-    return None
+        return parse_otp_from_text(
+            text_blob,
+            pattern=pattern,
+            prefer_near_keywords=True,
+            exclude_numbers=exclude_numbers,
+        )
+    except Exception:
+        return None
 
 
 def extract_otp_from_device(
@@ -178,6 +161,7 @@ def extract_otp_from_device(
     user_id: int = 0,
     device_id: str = "",
     navigate_to_messages: bool = False,
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """scrcpy/ADB 视觉路径：优先通知栏文本 → 当前屏 OCR →（可选）正确打开短信后再 OCR。
 
@@ -185,6 +169,7 @@ def extract_otp_from_device(
     """
     evidence: List[Dict[str, Any]] = []
     serial = (serial or "").strip()
+    excludes = list(exclude_numbers or [])
     if not serial:
         try:
             serial = get_device_serial_for_user(int(user_id or 0))
@@ -201,8 +186,10 @@ def extract_otp_from_device(
             "source": "scrcpy_vision",
         }
 
-    # 1) 通知栏 dumpsys（不切应用，最快且不误导航）
-    notif_otp, notif_ev = _extract_otp_from_notifications(serial, pattern=pattern, sender_hint=sender_hint)
+    # 1) 通知栏 dumpsys（按单条 NotificationRecord 解析，禁止整坨乱抠）
+    notif_otp, notif_ev = _extract_otp_from_notifications(
+        serial, pattern=pattern, sender_hint=sender_hint, exclude_numbers=excludes
+    )
     evidence.extend(notif_ev)
     if notif_otp:
         return {
@@ -214,8 +201,25 @@ def extract_otp_from_device(
             "source": "adb_notification",
         }
 
+    # 1b) 短信收件箱（有权限时比通知更准；无权限则静默跳过）
+    sms_otp, sms_ev = _extract_otp_from_sms_inbox(
+        serial, pattern=pattern, exclude_numbers=excludes
+    )
+    evidence.extend(sms_ev)
+    if sms_otp:
+        return {
+            "success": True,
+            "ok": True,
+            "sms_otp": sms_otp,
+            "variables": {"sms_otp": sms_otp},
+            "evidence": evidence,
+            "source": "sms_inbox",
+        }
+
     # 2) 下拉通知栏后 OCR（仍不离开当前 App 太远）
-    shade_otp, shade_ev = _extract_otp_via_notification_shade(serial, pattern=pattern, sender_hint=sender_hint)
+    shade_otp, shade_ev = _extract_otp_via_notification_shade(
+        serial, pattern=pattern, sender_hint=sender_hint, exclude_numbers=excludes
+    )
     evidence.extend(shade_ev)
     if shade_otp:
         return {
@@ -228,7 +232,9 @@ def extract_otp_from_device(
         }
 
     # 3) 当前屏幕 OCR（短信可能已在前台）
-    cur_otp, cur_ev = _ocr_screen_for_otp(serial, pattern=pattern, sender_hint=sender_hint)
+    cur_otp, cur_ev = _ocr_screen_for_otp(
+        serial, pattern=pattern, sender_hint=sender_hint, exclude_numbers=excludes
+    )
     evidence.extend(cur_ev)
     if cur_otp:
         return {
@@ -246,7 +252,9 @@ def extract_otp_from_device(
         evidence.append({"type": "navigate_to_messages", "ok": nav_ok, "detail": nav_detail})
         if nav_ok:
             time.sleep(1.0)
-            msg_otp, msg_ev = _ocr_screen_for_otp(serial, pattern=pattern, sender_hint=sender_hint)
+            msg_otp, msg_ev = _ocr_screen_for_otp(
+                serial, pattern=pattern, sender_hint=sender_hint, exclude_numbers=excludes
+            )
             evidence.extend(msg_ev)
             if msg_otp:
                 return {
@@ -290,6 +298,7 @@ def _ocr_screen_for_otp(
     *,
     pattern: str = "",
     sender_hint: str = "",
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     evidence: List[Dict[str, Any]] = []
     png = capture_device_frame(serial)
@@ -304,7 +313,12 @@ def _ocr_screen_for_otp(
     texts = ocr_result.get("texts") or []
     preview = " | ".join(str(t) for t in texts[:8])
     evidence.append({"type": "ocr", "ok": True, "texts_count": len(texts), "texts_preview": preview[:200]})
-    otp = extract_otp_from_ocr(ocr_result, sender_hint=sender_hint, pattern=pattern)
+    otp = extract_otp_from_ocr(
+        ocr_result,
+        sender_hint=sender_hint,
+        pattern=pattern,
+        exclude_numbers=exclude_numbers,
+    )
     return otp, evidence
 
 
@@ -313,10 +327,13 @@ def _extract_otp_from_notifications(
     *,
     pattern: str = "",
     sender_hint: str = "",
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
-    """从 dumpsys notification 文本解析验证码，不切换前台应用。"""
+    """从 dumpsys notification 按单条通知解析验证码（禁止整坨乱抠数字）。"""
     evidence: List[Dict[str, Any]] = []
     try:
+        from modules.mobile.mobile_cross_end_tools import parse_otp_from_notification_dump
+
         cmd = _adb_base(serial) + ["shell", "dumpsys", "notification", "--noredact"]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12, check=False)
         blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
@@ -325,21 +342,95 @@ def _extract_otp_from_notifications(
             proc2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=12, check=False)
             blob = (proc2.stdout or "") + "\n" + (proc2.stderr or "")
         evidence.append({"type": "dumpsys_notification", "ok": bool(blob), "size": len(blob)})
-        if sender_hint and sender_hint not in blob:
-            # 仍尝试整段解析；hint 仅作弱过滤
-            pass
-        # 复用 OCR 提取逻辑（同一套正则）
-        otp = extract_otp_from_ocr(
-            {"texts": [blob], "text_joined": blob},
-            sender_hint=sender_hint,
+        otp, meta = parse_otp_from_notification_dump(
+            blob,
             pattern=pattern,
+            sender_hint=sender_hint,
+            exclude_numbers=exclude_numbers,
+        )
+        evidence.append(
+            {
+                "type": "notification_otp",
+                "ok": bool(otp),
+                "records_total": meta.get("records_total"),
+                "otp_candidates": meta.get("otp_candidates"),
+                "picked_pkg": meta.get("picked_pkg") or "",
+                "picked_preview": (meta.get("picked_preview") or "")[:120],
+            }
         )
         if otp:
-            evidence.append({"type": "notification_otp", "ok": True})
             return otp, evidence
-        evidence.append({"type": "notification_otp", "ok": False})
     except Exception as exc:
         evidence.append({"type": "dumpsys_notification", "ok": False, "error": str(exc)[:160]})
+    return None, evidence
+
+
+def _extract_otp_from_sms_inbox(
+    serial: str,
+    *,
+    pattern: str = "",
+    exclude_numbers: Optional[List[str]] = None,
+    lookback_ms: int = 15 * 60 * 1000,
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """尝试 content://sms/inbox 读取最近短信（无 READ_SMS 权限时会失败，属正常）。"""
+    evidence: List[Dict[str, Any]] = []
+    try:
+        from modules.mobile.mobile_cross_end_tools import parse_otp_from_text
+
+        since = int(time.time() * 1000) - int(lookback_ms)
+        # 部分机型 content query 语法不同；失败即跳过
+        cmd = _adb_base(serial) + [
+            "shell",
+            "content",
+            "query",
+            "--uri",
+            "content://sms/inbox",
+            "--projection",
+            "body:date:address",
+            "--sort",
+            "date DESC",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        evidence.append(
+            {
+                "type": "sms_inbox_query",
+                "ok": proc.returncode == 0 and "Row:" in out,
+                "size": len(out),
+                "rc": proc.returncode,
+            }
+        )
+        if "Row:" not in out:
+            return None, evidence
+
+        # Row: 0 body=xxx, date=123, address=yyy
+        rows = re.split(r"\n(?=Row:\s*\d+)", out)
+        for row in rows[:12]:
+            if "body=" not in row:
+                continue
+            body_m = re.search(r"\bbody=([^,\n]*(?:,(?!\s*(?:date|address|_id)=)[^,\n]*)*)", row)
+            date_m = re.search(r"\bdate=(\d+)", row)
+            body = (body_m.group(1) if body_m else "").strip()
+            if not body:
+                continue
+            if date_m:
+                try:
+                    dt = int(date_m.group(1))
+                    if dt < 1_000_000_000_000:
+                        dt *= 1000
+                    if dt < since:
+                        continue
+                except ValueError:
+                    pass
+            otp = parse_otp_from_text(
+                body, pattern=pattern, prefer_near_keywords=True, exclude_numbers=exclude_numbers
+            )
+            if otp:
+                evidence.append({"type": "sms_inbox_otp", "ok": True, "preview": body[:80]})
+                return otp, evidence
+        evidence.append({"type": "sms_inbox_otp", "ok": False})
+    except Exception as exc:
+        evidence.append({"type": "sms_inbox_query", "ok": False, "error": str(exc)[:160]})
     return None, evidence
 
 
@@ -348,6 +439,7 @@ def _extract_otp_via_notification_shade(
     *,
     pattern: str = "",
     sender_hint: str = "",
+    exclude_numbers: Optional[List[str]] = None,
 ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     evidence: List[Dict[str, Any]] = []
     try:
@@ -358,7 +450,9 @@ def _extract_otp_via_notification_shade(
     except Exception as exc:
         evidence.append({"type": "expand_notifications", "ok": False, "error": str(exc)[:120]})
         return None, evidence
-    otp, ocr_ev = _ocr_screen_for_otp(serial, pattern=pattern, sender_hint=sender_hint)
+    otp, ocr_ev = _ocr_screen_for_otp(
+        serial, pattern=pattern, sender_hint=sender_hint, exclude_numbers=exclude_numbers
+    )
     evidence.extend(ocr_ev)
     try:
         collapse = _adb_base(serial) + ["shell", "cmd", "statusbar", "collapse"]
