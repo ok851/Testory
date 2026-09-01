@@ -153,11 +153,17 @@
                 stopBtn.addEventListener('click', function(){
                     stopBtn.disabled = true;
                     stopBtn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:6px;"></i>正在关闭...';
+                    stopStatusPolling();
+                    renderState(placeholder, modeBadge, udid, 'stopping');
                     fetch('/api/mobile/mirror/stop-external', {
                         method:'POST', headers:{'Content-Type':'application/json'},
                         body: JSON.stringify({ udid: udid })
-                    }).then(function(r){ return r.json(); }).then(function(){
+                    }).then(function(r){ return r.json(); }).then(function(data){
+                        // 关闭后强制刷新状态；若仍有残留，idle 下可再次启动（后端会清进程）
                         initMirror();
+                        if(data && data.remaining_pids && data.remaining_pids.length){
+                            console.warn('scrcpy remaining', data.remaining_pids);
+                        }
                     }).catch(function(){ initMirror(); });
                 });
             }

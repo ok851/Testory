@@ -173,16 +173,18 @@ def ensure_mobile_hand_ready(
         "success": False,
         "ok": False,
         "error": (
-            f"[MOBILE_POLLER_STALE] 手机已配对，但近 {int(stale)}s 内无任务轮询心跳"
-            f"（已等待重试 {max_attempts} 次）。"
-            "mobile_run_steps / mobile_run_case 需要 APK 无障碍服务内的 PcRunJobPoller。"
-            "请打开手机无障碍，确认 APK 界面显示已连接后再试；"
-            "若只需 PC 遥控点击，请改用 mobile_tap / mobile_swipe（不依赖 poller）。"
+            f"[MOBILE_POLLER_STALE] 手机已配对，但近 {int(stale)}s 内 APK 未上报任务轮询心跳"
+            f"（已等待重试 {max_attempts} 次）。\n"
+            "说明：你在手机上看到的 scrcpy/ADB 遥控点击、截图 OCR 不依赖此心跳；"
+            "只有下发到 APK 本机执行的任务（mobile_run_steps / mobile_run_case / 通知栏取码兜底）"
+            "才需要无障碍里的 PcRunJobPoller。\n"
+            "处理：打开手机无障碍并保持 APK「已连接」；若仅需 PC 遥控/屏幕取码，"
+            "请用 mobile_tap / mobile_swipe / mobile_scrcpy_extract_otp（屏幕 OCR 路径）。"
         ),
         "error_code": "MOBILE_POLLER_STALE",
         "poller_status": last_status,
         "paired_devices": [d.get("device_id") for d in devices],
-        "hint": "use_mobile_tap_for_pc_remote_or_enable_apk_poller",
+        "hint": "pc_remote_ok_without_poller__apk_jobs_need_poller",
     }
 
 
@@ -241,7 +243,23 @@ def mobile_extract_otp(
     hand_err = ensure_mobile_hand_ready(user_id, device_id, poller_retry=2)
     if hand_err:
         evidence.append({"type": "hand_check", "ok": False, "error": hand_err.get("error", "")})
-        return hand_err
+        scrcpy_err = ""
+        for ev in evidence:
+            if isinstance(ev, dict) and ev.get("type") == "scrcpy_vision" and ev.get("error"):
+                scrcpy_err = str(ev.get("error") or "")
+                break
+        # 合并文案：用户常看到手机已被遥控/截图，却只收到 poller 报错，易误解为「完全没操作」
+        merged = (
+            "屏幕 OCR 取码未成功"
+            + (f"（{scrcpy_err[:160]}）" if scrcpy_err else "")
+            + "；随后尝试 APK 通知通道也不可用：\n"
+            + str(hand_err.get("error") or "")
+        )
+        out = dict(hand_err)
+        out["error"] = merged
+        out["evidence"] = evidence
+        out["source"] = "scrcpy_then_poller_unavailable"
+        return out
 
     job_meta = {
         "skill": "extract_otp",
@@ -361,12 +379,13 @@ def _try_scrcpy_vision_otp(
             "error": "无可用设备 serial",
         }
 
+    # 默认不强制打开短信 App：优先通知栏；避免误进其它页面导致无法回填
     result = extract_otp_from_device(
         serial,
         sender_hint=sender_hint,
         pattern=pattern,
         user_id=user_id,
-        navigate_to_messages=True,
+        navigate_to_messages=False,
     )
     result["source"] = "scrcpy_vision"
     return result
@@ -509,15 +528,19 @@ def desktop_focus(app_name: str) -> Dict[str, Any]:
 # ════════════════════════════════════════════════════════════
 
 def _resolve_device_serial(user_id: int = 0, serial: str = "") -> str:
+    """解析 adb serial；传入的 ANDROID_ID / 离线 serial 一律丢弃并回退到在线设备。"""
     serial = (serial or "").strip()
-    if serial:
-        return serial
     try:
-        from modules.mobile.mobile_scrcpy_vision import get_device_serial_for_user
+        from modules.mobile.mobile_scrcpy_vision import (
+            get_device_serial_for_user,
+            is_adb_serial_online,
+        )
 
+        if serial and is_adb_serial_online(serial):
+            return serial
         return get_device_serial_for_user(int(user_id or 0))
     except Exception:
-        return ""
+        return serial
 
 
 def _scrcpy_session_ready(serial: str) -> bool:
@@ -695,14 +718,27 @@ def _observe_after_action(
     serial: str,
     user_id: int = 0,
     observe: Any = True,
+    verification: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """操作后视觉反馈：observe=true 默认 OCR（<1s）；observe=deep 追加 VLM 描述。
+    """操作后视觉反馈（与树级校验合并）。
 
-    不做持续流式喂 VLM（token 不可控）；默认只 OCR，深度理解按需开启。
+    分级：
+    - observe=False/None/"off" → 跳过；
+    - 默认（True/"true"/"yes"/"1"）→ 轻量 OCR；若树级校验已确认动作生效
+      （verification.found=True）则连 OCR 也跳过——树级校验是真实性根本；
+    - "deep"/"vlm" → OCR + VLM 概括（按需，token 可控）。
+
+    不做持续流式喂 VLM。
     """
-    mode = str(observe or "").strip().lower()
+    if observe is False or observe is None:
+        return {}
+    mode = str(observe).strip().lower() if not isinstance(observe, bool) else "light"
     if mode in ("0", "false", "no", "off", "none"):
         return {}
+    deep = mode in ("deep", "vlm")
+    # 树级校验已确认动作生效且未要求 deep → 免截图/OCR
+    if not deep and isinstance(verification, dict) and verification.get("found"):
+        return {"observation": {"skipped": "tree_verified"}}
     try:
         from modules.mobile.mobile_scrcpy_vision import capture_device_frame, ocr_device_frame
 
@@ -714,7 +750,7 @@ def _observe_after_action(
             "texts": ocr.get("texts", []),
             "text_joined": ocr.get("text_joined", ""),
         }
-        if mode in ("deep", "vlm", "1", "true", "yes"):
+        if deep:
             try:
                 from modules.ai.ai_vision_local import vision_describe
 
@@ -936,10 +972,16 @@ def _mobile_execute_action(
         except MobileDeviceLockError as le:
             return {"success": False, "ok": False, "error": str(le), "action": "tap", "serial": serial}
         result["action"] = "tap"
+        _tap_verification: Optional[Dict[str, Any]] = None
         if anchor:
             result["uia_anchor"] = anchor
-            result["verification"] = _verify_after_action(serial, anchor, user_id=user_id)
-        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+            _tap_verification = _verify_after_action(serial, anchor, user_id=user_id)
+            result["verification"] = _tap_verification
+        result.update(
+            _observe_after_action(
+                serial, user_id, a.get("observe", False), verification=_tap_verification
+            )
+        )
         result["serial"] = serial
         return result
 
@@ -977,7 +1019,7 @@ def _mobile_execute_action(
         result["action"] = "swipe"
         if swipe_anchor:
             result["uia_anchor"] = swipe_anchor
-        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+        result.update(_observe_after_action(serial, user_id, a.get("observe", False)))
         result["serial"] = serial
         return result
 
@@ -1009,7 +1051,7 @@ def _mobile_execute_action(
         except MobileDeviceLockError as le:
             return {"success": False, "ok": False, "error": str(le), "action": "input", "serial": serial}
         result["action"] = "input"
-        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+        result.update(_observe_after_action(serial, user_id, a.get("observe", False)))
         result["serial"] = serial
         return result
 
@@ -1034,7 +1076,7 @@ def _mobile_execute_action(
         except MobileDeviceLockError as le:
             return {"success": False, "ok": False, "error": str(le), "action": act, "serial": serial}
         result["action"] = act
-        result.update(_observe_after_action(serial, user_id, a.get("observe", True)))
+        result.update(_observe_after_action(serial, user_id, a.get("observe", False)))
         result["serial"] = serial
         return result
 
@@ -1073,15 +1115,56 @@ def mobile_get_ui_tree(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, A
     )
 
 
-def mobile_get_screen_text(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
-    from modules.mobile.mobile_scrcpy_vision import capture_device_frame, ocr_device_frame
+def _screen_text_with_ui_tree_fallback(serial: str) -> Dict[str, Any]:
+    """截图 OCR 文本；失败时降级为 UIA 树文本（等价甚至更结构化的信息源）。
 
-    serial = _resolve_device_serial(int(user_id or 0), str(args.get("serial") or ""))
+    统一入口：mobile_get_screen_text / mobile_scrcpy_screenshot 均走此函数，
+    避免任一入口截图瞬时失败（设备抖动/adb 冲突）连续 2 次触发
+    mobile_flow_halted 熔断。source ∈ {mobile_screencap_ocr, ui_tree_fallback}
+    """
+    from modules.mobile.mobile_scrcpy_vision import (
+        capture_device_frame,
+        get_last_capture_error,
+        ocr_device_frame,
+    )
+
+    serial = (serial or "").strip()
     if not serial:
         return {"success": False, "ok": False, "error": "无可用设备 serial"}
     png = capture_device_frame(serial)
     if not png:
-        return {"success": False, "ok": False, "error": "设备截图失败"}
+        # [Testory-patch] 截图失败降级：UIA 树文本是等价（甚至更结构化）的信息源，
+        # 避免截图瞬时失败（设备抖动/adb 冲突）连续 2 次即触发 mobile_flow_halted 熔断。
+        from modules.mobile.mobile_ui_probe import get_mobile_ui_tree
+
+        tree = get_mobile_ui_tree(serial)
+        if tree.get("success"):
+            texts = [
+                t
+                for n in tree.get("nodes", [])
+                for t in ((n.get("text") or "").strip(), (n.get("content_desc") or "").strip())
+                if t
+            ]
+            return {
+                "success": True,
+                "ok": True,
+                "serial": serial,
+                "texts": texts,
+                "text_joined": tree.get("compact_text") or "\n".join(texts),
+                "source": "ui_tree_fallback",
+                "screenshot_error": get_last_capture_error(serial) or "设备截图失败（已降级 UI 树文本）",
+            }
+        return {
+            "success": False,
+            "ok": False,
+            "serial": serial,
+            "error": (
+                "设备截图失败"
+                f"（{get_last_capture_error(serial) or '未知原因'}）；"
+                f"UI 树兜底亦失败：{tree.get('error', '')}。"
+                "请检查手机连接与 USB 调试（adb devices 确认设备在线）后重试。"
+            ),
+        }
     ocr = ocr_device_frame(png)
     return {
         "success": True,
@@ -1091,6 +1174,11 @@ def mobile_get_screen_text(args: Dict[str, Any], *, user_id: int = 0) -> Dict[st
         "text_joined": ocr.get("text_joined", ""),
         "source": "mobile_screencap_ocr",
     }
+
+
+def mobile_get_screen_text(args: Dict[str, Any], *, user_id: int = 0) -> Dict[str, Any]:
+    serial = _resolve_device_serial(int(user_id or 0), str(args.get("serial") or ""))
+    return _screen_text_with_ui_tree_fallback(serial)
 
 
 MOBILE_TOOL_NAMES = frozenset(
@@ -1159,23 +1247,12 @@ def dispatch_cross_end_tool(
                 on_tick=on_tick,
             )
         if n == "mobile_scrcpy_screenshot":
-            from modules.mobile.mobile_scrcpy_vision import get_device_serial_for_user, capture_device_frame, ocr_device_frame
+            from modules.mobile.mobile_scrcpy_vision import get_device_serial_for_user
+
             serial = str(a.get("serial") or "") or get_device_serial_for_user(int(a.get("user_id") or 0))
-            if not serial:
-                return {"success": False, "error": "无可用设备 serial"}
-            png = capture_device_frame(serial)
-            if not png:
-                return {"success": False, "error": "设备截图失败"}
-            ocr = ocr_device_frame(png)
-            return {
-                "success": True,
-                "ok": True,
-                "serial": serial,
-                "image_size": len(png),
-                "texts": ocr.get("texts", []),
-                "text_joined": ocr.get("text_joined", ""),
-                "source": "scrcpy_vision",
-            }
+            # [Testory-patch] 与 mobile_get_screen_text 同源：截图失败自动降级 UIA 树文本，
+            # 避免该入口瞬时截图失败连续 2 次触发 mobile_flow_halted 熔断。
+            return _screen_text_with_ui_tree_fallback(serial)
         if n == "mobile_scrcpy_extract_otp":
             return mobile_extract_otp(
                 timeout_sec=float(a.get("timeout_sec") or 30),
@@ -1318,7 +1395,7 @@ def cross_end_tool_schemas(
             "function": {
                 "name": "mobile_scrcpy_screenshot",
                 "description": (
-                    "快速截取已配对手机屏幕并 OCR 识别文字（scrcpy 视觉路径，亚秒级）。"
+                    "截取已配对手机屏幕并 OCR（投屏会话热时优先 scrcpy 关键帧，否则 adb screencap）。定位请优先 mobile_get_ui_tree。"
                     "用于多端联动中快速获取手机屏幕内容，无需 APK 轮询。"
                     "返回 texts（OCR 文本列表）和 text_joined（合并文本）。"
                 ),
@@ -1335,8 +1412,8 @@ def cross_end_tool_schemas(
             "function": {
                 "name": "mobile_scrcpy_extract_otp",
                 "description": (
-                    "通过 scrcpy 视觉快速提取验证码（截图+OCR，2-5秒）。"
-                    "先导航到信息/短信应用，截图后 OCR 识别验证码。"
+                    "通过通知栏/屏幕 OCR 快速提取验证码（优先 dumpsys notification，"
+                    "再下拉通知栏 OCR；不盲目打开短信外其它应用）。"
                     "速度远快于 mobile_extract_otp 的 APK 轮询路径。"
                 ),
                 "parameters": {
@@ -1405,7 +1482,7 @@ def cross_end_tool_schemas(
                 "description": (
                     "在已配对手机上执行点击。优先按 UI 树文本定位（description/text 传可见文案如「登录」「发送验证码」），"
                     "也可直接给 x/y 物理像素坐标。自动选择执行通道：活跃 scrcpy 注入 → ADB → 手机本机。"
-                    "observe=true（默认）会在点击后自动 OCR 屏幕反馈。多端联动典型用法：先 mobile_get_ui_tree 找目标文案，再本工具点击。"
+                    "默认不 OCR（结构树核验优先）；observe=true 时才截屏 OCR。典型用法：先 mobile_get_ui_tree，再本工具点击。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -1428,7 +1505,7 @@ def cross_end_tool_schemas(
                 "description": (
                     "在已配对手机上滑动（x1,y1 → x2,y2，物理像素坐标）。"
                     "duration_ms 控制时长（默认 300，长滑动可给 800+）。"
-                    "observe=true（默认）滑动后自动 OCR 反馈。"
+                    "默认不 OCR；observe=true 时滑动后截屏反馈。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -1452,7 +1529,7 @@ def cross_end_tool_schemas(
                 "description": (
                     "向手机当前聚焦输入框输入文本。ASCII 文本走 PC 快速通道；中文等非 ASCII 自动走手机本机剪贴板/无障碍输入"
                     "（PC 侧 ADB 不支持中文）。input_label 可选：输入框可见文案，帮助手机端定位目标输入框。"
-                    "observe=true（默认）输入后自动 OCR 反馈。"
+                    "默认不 OCR；observe=true 时输入后截屏反馈。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -1471,7 +1548,7 @@ def cross_end_tool_schemas(
             "type": "function",
             "function": {
                 "name": "mobile_back",
-                "description": "手机返回键。observe=true（默认）按下后自动 OCR 反馈。",
+                "description": "手机返回键。默认不 OCR；observe=true 时按下后截屏反馈。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1485,7 +1562,7 @@ def cross_end_tool_schemas(
             "type": "function",
             "function": {
                 "name": "mobile_home",
-                "description": "手机 Home 键，回到桌面。observe=true（默认）按下后自动 OCR 反馈。",
+                "description": "手机 Home 键。默认不 OCR；observe=true 时按下后截屏反馈。",
                 "parameters": {
                     "type": "object",
                     "properties": {

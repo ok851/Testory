@@ -54,6 +54,14 @@ def _dom_cache_set(key: str, value: str) -> None:
         pass
 
 
+def invalidate_dom_cache() -> None:
+    """浏览器变更动作后失效 DOM 短缓存，避免 SPA 同 URL 脏读。"""
+    try:
+        _dom_cache.clear()
+    except Exception:
+        pass
+
+
 def _dom_cache_key_for_page(suffix: str = "") -> str:
     try:
         pu = _page.url if _page and not _page.is_closed() else ""
@@ -68,8 +76,8 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
     确保本机有头浏览器已启动并连接 CDP（优先系统 Edge/Chrome）。
     Hermes 通过 sync_hermes_cdp_endpoint() attach 到同一浏览器。
 
-    启动策略：进程只开 about:blank 单标签，业务 URL 一律 page.goto；
-    禁止把业务 URL 放进浏览器命令行（否则 Edge 会「新建标签页」+ 目标页双开）。
+    启动策略：有业务 URL 时命令行直接打开目标页；无 URL 时用 about:blank。
+    若已有页面且目标 URL 不同，再 page.goto；启动后清理多余空白标签。
 
     force_new: True 时强制关闭现有浏览器实例并重新启动，确保全新会话。
     """
@@ -103,13 +111,41 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
             _page = None
             _cdp_ws = ""
 
+        def _need_goto(page_url: str, target: str) -> bool:
+            if not target:
+                return False
+            cur = (page_url or "").strip().lower()
+            tgt = target.strip().lower()
+            if not cur or cur in ("about:blank", "chrome://newtab/", "edge://newtab/"):
+                return True
+            try:
+                from urllib.parse import urlparse
+
+                a, b = urlparse(cur), urlparse(tgt)
+                if (a.netloc or "").lower() == (b.netloc or "").lower() and (b.netloc or ""):
+                    return False
+            except Exception:
+                pass
+            return tgt.rstrip("/") not in cur and cur.rstrip("/") not in tgt
+
         if _page and not _page.is_closed():
             if nav_url:
                 try:
-                    _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
+                    cur_u = ""
+                    try:
+                        cur_u = str(_page.url or "")
+                    except Exception:
+                        cur_u = ""
+                    if _need_goto(cur_u, nav_url):
+                        _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
                     _cdp_mod._set(pending_start_url="")
                 except Exception:
                     pass
+            try:
+                port = int((_cdp_mod._snap() or {}).get("debug_port") or 0)
+                _cdp_mod.close_blank_cdp_targets(port, keep_url_substr=nav_url or "")
+            except Exception:
+                pass
             uat_logger.info("[Browser] 复用现有浏览器实例")
             return True
 
@@ -181,10 +217,21 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
 
             if nav_url and _page and not _page.is_closed():
                 try:
-                    _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
+                    cur_u = ""
+                    try:
+                        cur_u = str(_page.url or "")
+                    except Exception:
+                        cur_u = ""
+                    # 命令行已打开目标页则跳过二次 goto；仅空白/错页时补导航
+                    if _need_goto(cur_u, nav_url):
+                        _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
                     _cdp_mod._set(pending_start_url="")
                 except Exception:
                     pass
+            try:
+                _cdp_mod.close_blank_cdp_targets(_debug_port, keep_url_substr=nav_url or "")
+            except Exception:
+                pass
             return bool(_page and not _page.is_closed())
         except Exception as e:
             uat_logger.warning("本机浏览器桥接失败: %s", e)
@@ -432,21 +479,23 @@ def _wait_for_page_ready(timeout_ms: int = 5000) -> bool:
     return False
 
 
-def get_dom_context_pack(*, skip_wait: bool = False, wait_timeout_ms: int = 3000) -> str:
+def get_dom_context_pack(*, skip_wait: bool = False, wait_timeout_ms: int = 3000, force: bool = False) -> str:
     """获取 DOM 上下文包（供 _build_system_prompt 使用）。
     
     改进：增加等待页面加载和重试机制，确保获取到有效的 DOM 信息。
     + 8 秒 TTL 缓存（同一 URL/标题 不重复采集）。
     skip_wait: 外层已 wait 过时传 True，避免双次 3s 等待。
+    force: True 时跳过缓存强制重采。
     """
     global _page
     if not _page or _page.is_closed():
         return ""
     
     _ck = _dom_cache_key_for_page("ctx")
-    _cached = _dom_cache_get(_ck)
-    if _cached:
-        return _cached
+    if not force:
+        _cached = _dom_cache_get(_ck)
+        if _cached:
+            return _cached
 
     # 等待页面就绪（可由 get_rich_page_context 跳过，避免双 wait）
     if not skip_wait:

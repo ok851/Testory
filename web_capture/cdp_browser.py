@@ -473,9 +473,9 @@ def _launch_debug_browser_unlocked(
     os.makedirs(udir, exist_ok=True)
 
     start_url = (url or "").strip()
-    # 关键：命令行不要带业务 URL。
-    # Edge/Chrome 带 URL 启动时常见「新建标签页」+ 目标页双标签；
-    # 正确做法是只开一个默认标签，再由 Playwright page.goto 在该标签内导航。
+    # 有业务 URL 时命令行直接打开目标页，避免先 about:blank 再二次导航。
+    # 若 Edge 额外弹出新标签页，后续 close_blank_cdp_targets / pick_best_page 会收敛。
+    initial_page = start_url if start_url.lower().startswith(("http://", "https://")) else "about:blank"
     args = [
         exe,
         f"--remote-debugging-port={debug_port}",
@@ -488,8 +488,8 @@ def _launch_debug_browser_unlocked(
         "--window-position=0,0",
         "--disable-features=TranslateUI,InfiniteSessionRestore",
         "--noerrdialogs",
-        "--homepage=about:blank",
-        "about:blank",
+        f"--homepage={initial_page}",
+        initial_page,
     ]
 
     try:

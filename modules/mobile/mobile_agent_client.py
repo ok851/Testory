@@ -255,6 +255,7 @@ def agent_page_source(udid: str = "") -> Dict[str, Any]:
         "POST",
         "/internal/inspect/page-source",
         body={"udid": udid},
+        timeout_sec=10.0,  # UI 树属短请求；默认 120s 会让三级兜底链整体阻塞
     )
     if err and not payload:
         return {"success": False, "error": err}

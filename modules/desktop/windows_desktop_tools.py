@@ -2779,17 +2779,7 @@ def windows_click_element(
             except Exception:
                 all_ocr_blocks = []
 
-        # 搜索：OCR（含左上放大）→ UIA → 微信布局估算 → Ctrl+F
-        if search_like and png:
-            ocr_cands = _ocr_find_candidates("搜索", png)
-            for c in ocr_cands:
-                c["x"] = int(c["x"]) + off_x
-                c["y"] = int(c["y"]) + off_y
-            if ocr_cands:
-                # 优先窗口上半、偏左的候选（会话列表搜索）
-                ocr_cands.sort(key=lambda c: (int(c.get("y") or 0), int(c.get("x") or 0)))
-                target = ocr_cands[0]
-
+        # 结构优先：UIA 先于 OCR（含搜索框）
         if target is None:
             uia_cands = _uia_find_candidates(desc)
             if search_like:
@@ -2798,7 +2788,6 @@ def windows_click_element(
                         uia_cands.append(c)
                 target = _pick_search_uia_candidate(uia_cands)
             elif len(uia_cands) > 1:
-                # 通用：多候选时挑列表项（避开搜索框原文/次要分区），不再直接 flow_halt
                 target = _pick_wechat_search_result_candidate(
                     uia_cands, query=desc, all_blocks=all_ocr_blocks
                 ) or uia_cands[0]
@@ -2806,6 +2795,16 @@ def windows_click_element(
                 target = uia_cands[0]
             elif uia_cands and float(uia_cands[0].get("score") or 0) >= 0.99:
                 target = uia_cands[0]
+
+        # 搜索：UIA 未命中再 OCR（含左上放大）→ 微信布局估算 → Ctrl+F
+        if target is None and search_like and png:
+            ocr_cands = _ocr_find_candidates("搜索", png)
+            for c in ocr_cands:
+                c["x"] = int(c["x"]) + off_x
+                c["y"] = int(c["y"]) + off_y
+            if ocr_cands:
+                ocr_cands.sort(key=lambda c: (int(c.get("y") or 0), int(c.get("x") or 0)))
+                target = ocr_cands[0]
 
         if target is None and search_like:
             hwnd0 = int(get_desktop_target().get("hwnd") or 0)
@@ -3530,6 +3529,78 @@ def windows_wait(
     }
 
 
+def windows_get_ui_tree(
+    max_depth: int = 4,
+    max_nodes: int = 120,
+    hwnd: int = 0,
+) -> Dict[str, Any]:
+    """读取前台（或指定 hwnd）窗口 UIA 控件树，供 Agent 结构优先定位。"""
+    try:
+        from modules.desktop.desktop_uia_core import dump_foreground_uia_tree, wake_accessibility_around_point
+    except Exception as exc:
+        return {
+            "success": False,
+            "ok": False,
+            "error": f"UIA 模块不可用: {exc}",
+            "suggestion": "确认已安装 pywinauto / comtypes，再重试。",
+        }
+    depth = max(1, min(int(max_depth or 4), 8))
+    nodes_cap = max(20, min(int(max_nodes or 120), 300))
+    try:
+        if hwnd:
+            # 指定 hwnd：暂用前台 dump（ElementFromHandle 路径在 dump 内）；先尝试激活
+            try:
+                import ctypes
+
+                ctypes.windll.user32.SetForegroundWindow(int(hwnd))
+            except Exception:
+                pass
+        nodes = dump_foreground_uia_tree(max_depth=depth, max_nodes=nodes_cap)
+        if not nodes:
+            # Electron/假容器：唤醒无障碍后再 dump 一次
+            try:
+                wake_accessibility_around_point(0, 0)
+            except Exception:
+                pass
+            nodes = dump_foreground_uia_tree(max_depth=depth, max_nodes=nodes_cap)
+        lines: List[str] = []
+        for i, n in enumerate(nodes or []):
+            name = str(n.get("name") or "").strip()
+            ctype = str(n.get("control_type") or "").strip()
+            cls = str(n.get("class_name") or "").strip()
+            rect = n.get("rect") or {}
+            aid = str(n.get("automation_id") or "").strip()
+            bits = [f"[{i}]", ctype or "(no-name)"]
+            if ctype:
+                bits.append(ctype)
+            if aid:
+                bits.append(f"id={aid}")
+            if cls:
+                bits.append(cls)
+            if isinstance(rect, dict) and rect:
+                bits.append(
+                    f"({rect.get('left', 0)},{rect.get('top', 0)})-"
+                    f"({rect.get('right', 0)},{rect.get('bottom', 0)})"
+                )
+            lines.append(" ".join(bits))
+        compact = "\n".join(lines[:nodes_cap])
+        return {
+            "success": True,
+            "ok": True,
+            "node_count": len(nodes or []),
+            "compact_text": compact,
+            "nodes": (nodes or [])[: min(40, nodes_cap)],
+            "source": "uia",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "ok": False,
+            "error": str(exc)[:300],
+            "suggestion": "可先 windows_focus_app 聚焦目标窗口，再 windows_get_ui_tree；必要时再用 get_screen_text。",
+        }
+
+
 # ---- schema helpers for FC / MCP ----
 
 # 核心通用原语（不含应用死模板）
@@ -3540,6 +3611,7 @@ WINDOWS_TOOL_NAMES = (
     "windows_type_text",
     "windows_press_key",
     "windows_wait",
+    "windows_get_ui_tree",
 )
 
 # 兼容旧名：仍可 dispatch，但不进默认 FC schema
@@ -3554,6 +3626,7 @@ SCREEN_TOOL_NAMES = (
 CHAT_QUIET_TOOL_NAMES = frozenset(
     {
         "windows_wait",
+        "windows_get_ui_tree",
         "get_screen_text",
         "get_screen_description",
     }
@@ -3603,6 +3676,12 @@ def dispatch_windows_or_screen_tool(name: str, args: Dict[str, Any]) -> Dict[str
         return windows_wait(
             duration_ms=a.get("duration_ms"),
             condition=a.get("condition"),
+        )
+    if n == "windows_get_ui_tree":
+        return windows_get_ui_tree(
+            max_depth=int(a.get("max_depth") or 4),
+            max_nodes=int(a.get("max_nodes") or 120),
+            hwnd=int(a.get("hwnd") or 0),
         )
     if n == "get_screen_text":
         from modules.ai.screen_tools import get_screen_text

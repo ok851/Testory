@@ -36,6 +36,10 @@ except Exception:  # pragma: no cover
 _BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 _DEFAULT_MAX_NODES = 80
 
+# 屏幕分辨率 TTL 缓存（serial -> (ts, (w, h))）：避免每动作 spawn ADB 子进程
+_SCREEN_SIZE_CACHE: Dict[str, Tuple[float, Tuple[int, int]]] = {}
+_SCREEN_SIZE_TTL = 60.0
+
 
 # ────────────────────────────────────────────────────────────
 # XML 解析基础
@@ -267,15 +271,15 @@ def _adb_uiautomator_dump(serial: str) -> str:
             cmd + ["shell", "uiautomator", "dump", remote],
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=10,
             check=False,
         )
-        time.sleep(0.3)
+        time.sleep(0.15)
         proc = subprocess.run(
             cmd + ["exec-out", "cat", remote],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=8,
             check=False,
         )
         return (proc.stdout or "").strip()
@@ -324,8 +328,18 @@ def get_mobile_ui_tree(
             from modules.mobile.mobile_agent_client import agent_page_source
 
             res = agent_page_source(serial)
-            if isinstance(res, dict) and res.get("success"):
-                xml = str(res.get("xml") or res.get("page_source") or "").strip()
+            if isinstance(res, dict) and (res.get("success") or res.get("ok")):
+                # gateway 常包一层 tree: {xml, page_source, ...}
+                tree_obj = res.get("tree") if isinstance(res.get("tree"), dict) else None
+                if tree_obj:
+                    xml = str(
+                        tree_obj.get("xml")
+                        or tree_obj.get("page_source")
+                        or tree_obj.get("source")
+                        or ""
+                    ).strip()
+                if not xml:
+                    xml = str(res.get("xml") or res.get("page_source") or "").strip()
             if xml:
                 source = "agent_http"
         except Exception:
@@ -378,10 +392,21 @@ def get_mobile_ui_tree(
 
 
 def get_screen_size(serial: str = "") -> Tuple[int, int]:
-    """设备物理分辨率（供 scrcpy 注入坐标换算）。"""
+    """设备物理分辨率（供 scrcpy 注入坐标换算）。
+
+    带 TTL 缓存：分辨率在一次会话内基本不变，避免每个 tap/swipe
+    都 spawn 一个 ADB 子进程。缓存 60s 过期，横竖屏切换最多滞后一个 TTL。
+    """
+    key = (serial or "").strip() or "_default"
+    now = time.time()
+    hit = _SCREEN_SIZE_CACHE.get(key)
+    if hit is not None and (now - hit[0]) < _SCREEN_SIZE_TTL:
+        return hit[1]
     try:
         from modules.mobile.mobile_adb_control import adb_get_screen_size
 
-        return adb_get_screen_size(serial)
+        size = adb_get_screen_size(serial)
+        _SCREEN_SIZE_CACHE[key] = (now, size)
+        return size
     except Exception:
         return 1080, 1920

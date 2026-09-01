@@ -17,6 +17,7 @@ Testory 平台补丁脚本：优化 Hermes .venv 依赖包中的 browser 工具�
 2. agent/tool_guardrails.py
    a. hard_stop_enabled 默认 True（工具死循环硬停止，与平台侧上限拦截形成纵深防御）
 """
+import os
 import sys
 from pathlib import Path
 
@@ -216,6 +217,109 @@ def _browser_cached_json(key: str):
     ok &= _apply(BROWSER_TOOL, "browser_eval 失效缓存",
                  "    if _is_camofox_mode():\n        return _camofox_eval(expression, task_id)\n\n    effective_task_id = _last_session_key(task_id or \"default\")",
                  eval_inv)
+
+    # ── 1i. _run_browser_command Popen：显式 cwd 防 \\?\ UNC 回退 ──
+    cwd_main = '''            # ===== [Testory-patch] 显式 cwd =====
+            # 继承的 \\\\?\\ 前缀 cwd（Tauri/长路径启动）会让 cmd.exe 拒绝：
+            # "UNC paths are not supported. Defaulting to Windows directory."
+            # → npx 的 .cmd shim 回退 C:\\Windows 运行，agent-browser daemon
+            #   版本检测/缓存查找错乱（"Daemon version mismatch detected"）。
+            # task_socket_dir 是普通临时目录路径，作 cwd 安全。
+            _cwd = task_socket_dir
+            if _cwd.startswith("\\\\\\\\?\\\\"):
+                _cwd = _cwd[4:]
+            proc = subprocess.Popen(
+                cmd_parts,
+                stdout=stdout_fd,
+                stderr=stderr_fd,
+                stdin=subprocess.DEVNULL,
+                env=browser_env,
+                cwd=_cwd,
+                **_popen_extra,
+            )'''
+    ok &= _apply(BROWSER_TOOL, "Popen 显式 cwd（主命令）",
+                 "            proc = subprocess.Popen(\n                cmd_parts,\n                stdout=stdout_fd,\n                stderr=stderr_fd,\n                stdin=subprocess.DEVNULL,\n                env=browser_env,\n                **_popen_extra,\n            )",
+                 cwd_main)
+
+    # ── 1j. 临时 Chrome 会话 _run_tmp Popen：同样显式 cwd ──
+    cwd_tmp = '''            # ===== [Testory-patch] 显式 cwd（同 _run_browser_command，防 \\\\?\\ UNC 回退）=====
+            _cwd = task_socket_dir
+            if _cwd.startswith("\\\\\\\\?\\\\"):
+                _cwd = _cwd[4:]
+            proc = subprocess.Popen(
+                full, stdout=stdout_fd, stderr=stderr_fd,
+                stdin=subprocess.DEVNULL, env=browser_env,
+                cwd=_cwd,
+                **_popen_extra,
+            )'''
+    ok &= _apply(BROWSER_TOOL, "Popen 显式 cwd（临时会话）",
+                 "            proc = subprocess.Popen(\n                full, stdout=stdout_fd, stderr=stderr_fd,\n                stdin=subprocess.DEVNULL, env=browser_env,\n                **_popen_extra,\n            )",
+                 cwd_tmp)
+
+    # ── 1k. _browser_eval：多行 JS 折叠，防 .cmd shim 经 cmd.exe 传参截断 ──
+    eval_flat = '''    # ===== [Testory-patch] eval 表达式换行折叠 =====
+    # Windows 下 npx 的 .cmd shim 经 cmd.exe 传参，多行 JS 会在首个换行处被
+    # 截断 → "Evaluation error: SyntaxError: Unexpected end of input"。
+    # 折叠为空格（截断必失败，折叠仅影响极少数依赖 ASI 的写法）。
+    if "\\n" in expression or "\\r" in expression:
+        expression = re.sub(r"[\\r\\n]+", " ", expression).strip()'''
+    ok &= _apply(BROWSER_TOOL, "eval 换行折叠",
+                 "    # --- Fallback: agent-browser CLI subprocess (original path) -------------",
+                 eval_flat)
+
+    # ── 1l. _browser_eval：统一换行折叠提前到函数级（快路径 + CLI 双路生效）──
+    # 1k 只覆盖 CLI 兜底路径；快路径（CDPSupervisor）若先走则不会折叠，
+    # 一旦落回 CLI 仍可能截断。统一折叠保证双路行为一致。
+    eval_flat_global = '''    # ===== [Testory-patch] eval 表达式统一换行折叠（快路径 + CLI 双路生效）=====
+    # Windows 下 npx 的 .cmd shim 经 cmd.exe 传参，多行 JS 会在首个换行处被
+    # 截断 → "Evaluation error: SyntaxError: Unexpected end of input"。
+    # 折叠为空格（截断必失败，折叠仅影响极少数依赖 ASI 的写法）。
+    # 快路径 CDP 本身支持多行，但统一折叠保证双路行为一致、CLI 兜底不截断。
+    _eval_orig_len = len(expression)
+    if "\\n" in expression or "\\r" in expression:
+        expression = re.sub(r"[\\r\\n]+", " ", expression).strip()'''
+    ok &= _apply(BROWSER_TOOL, "eval 统一折叠（函数级）",
+                 "    # [Testory-patch] JS eval 可能改变页面状态 → 失效只读缓存\n    _browser_cache_invalidate(effective_task_id)",
+                 eval_flat_global)
+
+    # ── 1m. _browser_eval：快路径 supervisor 惰性重试（时序竞态兜底）──
+    # 平台浏览器可能刚就绪（先 browser_console 后浏览器拉起），supervisor 未注册时
+    # 主动重试 attach；成功后走 CDP 快路径，绕开 CLI 子进程的 cmd.exe 传参问题。
+    eval_sup_retry = '''        # [Testory-patch] 惰性 supervisor 未注册时主动重试 attach：平台浏览器可能
+        # 刚就绪（时序竞态），重试后快路径生效，绕开 CLI 的 cmd.exe 传参截断/超长问题。
+        if supervisor is None:
+            try:
+                _ensure_cdp_supervisor(effective_task_id)
+                supervisor = SUPERVISOR_REGISTRY.get(effective_task_id)
+            except Exception:
+                supervisor = None'''
+    ok &= _apply(BROWSER_TOOL, "eval 快路径 supervisor 重试",
+                 "        supervisor = SUPERVISOR_REGISTRY.get(effective_task_id)\n        if supervisor is not None:",
+                 eval_sup_retry)
+
+    # ── 1n. _browser_eval：CLI 超长保护（cmd.exe 8191 字符上限）──
+    # 超长 JS 会被 cmd.exe 静默截断成误导性的 SyntaxError: Unexpected end of input，
+    # 直接给模型明确指引，而不是把残句丢给子进程浪费时间。
+    eval_long = '''    # ===== [Testory-patch] CLI 超长保护 =====
+    # cmd.exe 命令行上限 8191 字符，超长 JS 会被静默截断成误导性的
+    # SyntaxError: Unexpected end of input。超长时给模型明确指引，
+    # 而不是把截断后的残句丢给子进程浪费时间。
+    if len(expression) > 6000:
+        response = {
+            "success": False,
+            "error": (
+                "JS 表达式过长（"
+                + str(len(expression))
+                + " 字符），无法通过命令行子进程安全执行"
+                "（Windows cmd.exe 上限约 8191 字符，截断会产生误导性语法错误）。"
+                "请改用更精简的表达式，例如 document.body.innerText.slice(0,2000)，"
+                "或将提取逻辑拆成多步、每步控制返回值长度。"
+            ),
+        }
+        return json.dumps(response, ensure_ascii=False)'''
+    ok &= _apply(BROWSER_TOOL, "eval CLI 超长保护",
+                 '    result = _run_browser_command(effective_task_id, "eval", [expression])',
+                 eval_long)
     return ok
 
 
@@ -265,12 +369,43 @@ def apply_patches(*, quiet: bool = True) -> bool:
     return bool(ok1 and ok2)
 
 
+def check_agent_browser_cli() -> bool:
+    """自检：agent-browser 是否已固定安装到 Hermes home node 目录。
+
+    背景：browser_console 的 npx 兜底在 Windows 上每次重新下载（npm 缓存
+    trash 失败 → 缓存无效化），导致 30s 超时 + 版本漂移。正确姿势是把
+    agent-browser 固定装到 <hermes_home>/node（browser_tool 扩展 PATH 的
+    候选目录之一，官方 install.sh 同路径），绕过 npx。幂等、只读。
+    """
+    try:
+        from hermes_config import hermes_home_dir  # 同目录导入（本脚本位于 modules/hermes/）
+        home = Path(hermes_home_dir())
+    except Exception:
+        base = os.environ.get("UAT_DATA_DIR") or os.environ.get("LOCALAPPDATA") or ""
+        home = Path(base) / "Testory" / "hermes" if base else Path(".")
+    shims = [
+        home / "node" / "agent-browser.cmd",   # Windows npm --prefix 根 shim
+        home / "node" / "bin" / "agent-browser",
+        home / "node_modules" / ".bin" / "agent-browser",
+    ]
+    if any(p.is_file() for p in shims):
+        print(f"  [ok] agent-browser 已固定安装（{shims[0].parent if shims[0].parent.exists() else home / 'node'}）")
+        return True
+    print("  [WARN] agent-browser 未固定安装到 Hermes home node 目录。")
+    print("         browser_console 将退回 npx 每次下载（Windows 下易超时/版本漂移）。")
+    print("         修复: npm install -g --prefix <hermes_home>/node agent-browser")
+    print("               例如: node %NPM_PREFIX%/node_modules/npm/bin/npm-cli.js install \\")
+    print("                     -g --prefix C:/Users/<user>/AppData/Local/Testory/hermes/node agent-browser")
+    return True  # 仅自检，不阻断补丁流程
+
+
 if __name__ == "__main__":
     print("== patch_venv_hermes_tools.py ==")
     ok1 = patch_browser_tool()
     ok2 = patch_guardrails()
+    ok4 = check_agent_browser_cli()
     print("== 验证 ==")
     ok3 = verify()
     print("== 完成 ==")
-    print("补丁结果:", "全部成功" if (ok1 and ok2 and ok3) else "有失败，请人工检查")
-    sys.exit(0 if (ok1 and ok2 and ok3) else 1)
+    print("补丁结果:", "全部成功" if (ok1 and ok2 and ok3 and ok4) else "有失败，请人工检查")
+    sys.exit(0 if (ok1 and ok2 and ok3 and ok4) else 1)

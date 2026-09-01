@@ -55,7 +55,11 @@ def test_mobile_extract_otp_awaits_device_job(monkeypatch):
                 "modules.mobile.mobile_cross_end_tools.ensure_mobile_hand_ready",
                 return_value=None,
             ):
-                out = mobile_extract_otp(timeout_sec=30, mock_allowed=True)
+                with patch(
+                    "modules.mobile.mobile_cross_end_tools._try_scrcpy_vision_otp",
+                    return_value={"success": False, "error": "forced_skip"},
+                ):
+                    out = mobile_extract_otp(timeout_sec=30, mock_allowed=True)
     assert out["success"] is True
     assert out["sms_otp"] == "998877"
     assert out["job_id"] == "job-otp-1"

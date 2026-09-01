@@ -307,15 +307,22 @@ def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dic
             bridge_ok, bridge_msg = ensure_bridge_started()
             payload["bridge_ok"] = bool(bridge_ok)
             payload["bridge_message"] = bridge_msg or ""
-            warm_ok, warm_err = warm_scrcpy_session(udid)
-            payload["scrcpy_warm_ok"] = bool(warm_ok)
-            payload["scrcpy_warm_error"] = "" if warm_ok else (warm_err or "")
-            if warm_ok:
-                payload["mirror_backend"] = "scrcpy_ws"
+            # 外置窗口已在跑时不要 warm 内嵌 server（会杀设备端 server → 外置窗自关）
+            if ext_status.get("running"):
+                payload["scrcpy_warm_ok"] = False
+                payload["scrcpy_warm_error"] = "外置 scrcpy 窗口运行中，已跳过内嵌预热"
+                payload["mirror_backend"] = "external_scrcpy"
                 payload["mirror_fallback_reason"] = ""
             else:
-                payload["mirror_backend"] = "external_or_offline"
-                payload["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败"
+                warm_ok, warm_err = warm_scrcpy_session(udid)
+                payload["scrcpy_warm_ok"] = bool(warm_ok)
+                payload["scrcpy_warm_error"] = "" if warm_ok else (warm_err or "")
+                if warm_ok:
+                    payload["mirror_backend"] = "scrcpy_ws"
+                    payload["mirror_fallback_reason"] = ""
+                else:
+                    payload["mirror_backend"] = "external_or_offline"
+                    payload["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败"
             try:
                 payload["mirror_ws_url"] = (
                     f"{scrcpy_bridge_url(client_host)}/?serial={quote(udid, safe='')}"

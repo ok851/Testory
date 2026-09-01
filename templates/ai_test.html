@@ -690,6 +690,21 @@
     .ai-case-step__content { flex: 1; }
     .ai-case-step__action { font-weight: 600; color: #4f46e5; }
     .ai-case-step__target { opacity: 0.8; }
+    .ai-case-step.warning { opacity: 0.85; border-left: 2px solid #f59e0b; }
+    .ai-layer-badge {
+        flex-shrink: 0;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.4;
+        margin-right: 4px;
+    }
+    .ai-layer-badge.pc, .ai-layer-badge.desktop { background: rgba(59,130,246,0.15); color: #2563eb; }
+    .ai-layer-badge.web { background: rgba(16,185,129,0.15); color: #059669; }
+    .ai-layer-badge.android, .ai-layer-badge.mobile { background: rgba(245,158,11,0.15); color: #d97706; }
+    .ai-layer-badge.cross_end { background: rgba(139,92,246,0.15); color: #7c3aed; }
+    .ai-think-item__badge { margin-right: 6px; }
 
     .ai-report-stats {
         display: grid;
@@ -893,7 +908,7 @@
                         <span><i class="fas fa-desktop"></i> 允许观察屏幕</span>
                         <div class="ai-toggle-switch" id="aiScreenShareToggle" onclick="toggleScreenShare()"></div>
                     </div>
-                    <p style="font-size: 11px; color: #94a3b8; margin: 0;">开启后 AI 可按需调用屏幕观察工具（OCR/视觉描述），不会定时自动截图</p>
+                    <p style="font-size: 11px; color: #94a3b8; margin: 0;">允许 Agent <strong>按需</strong>观察本机屏幕（OCR）</p>
                 </div>
 
             </aside>
@@ -1921,13 +1936,31 @@
         }
         if (ev.type === 'think') {
             progressCb();
-            AI_TEST_STATE.thinkSteps.push({
-                step: AI_TEST_STATE.thinkSteps.length + 1,
-                text: ev.text,
-                status: ev.status || 'done'
-            });
+            var thinkText = ev.user_text || ev.text || '';
+            var thinkLayer = ev.layer || inferLayerFromText(thinkText);
+            var thinkReplace = !!ev.replace_last;
+            // 同轮覆盖：后端标记 replace_last，或连续「思考：」残句合并
+            var lastTs = AI_TEST_STATE.thinkSteps[AI_TEST_STATE.thinkSteps.length - 1];
+            if (thinkReplace && lastTs) {
+                lastTs.text = thinkText;
+                lastTs.status = ev.status || 'running';
+                lastTs.layer = thinkLayer || lastTs.layer;
+            } else if (lastTs && /^思考[：:]/.test(String(thinkText)) && /^思考[：:]/.test(String(lastTs.text || ''))) {
+                lastTs.text = thinkText;
+                lastTs.status = ev.status || 'running';
+            } else {
+                // 新决策前，将上一条 running 收尾
+                if (lastTs && lastTs.status === 'running') {
+                    lastTs.status = 'done';
+                }
+                AI_TEST_STATE.thinkSteps.push({
+                    step: AI_TEST_STATE.thinkSteps.length + 1,
+                    text: thinkText,
+                    status: ev.status || 'done',
+                    layer: thinkLayer
+                });
+            }
             updateThinkCard();
-            // 思考步骤只在右侧面板显示，不在中间对话框输出
         } else if (ev.type === 'vision_check') {
             showScreenShareOverlay();
             addChatMessage('👀 ' + ev.text, false);
@@ -1956,15 +1989,16 @@
                 // running 状态不再刷对话框（避免「开始+结束」双倍噪音）
             }
         } else if (ev.type === 'case_step') {
-            // 仅成功步骤进入实时用例（失败只留在执行动作）
-            if (ev.verified === false) {
-                return;
-            }
+            // 成功=已核验；warning(verified=false)=已执行未核验，仍展示；失败不进用例
+            var caseVerified = ev.verified !== false;
             AI_TEST_STATE.caseSteps.push({
                 num: AI_TEST_STATE.caseSteps.length + 1,
                 action: ev.action || '操作',
                 target: ev.target || '目标',
-                verified: true
+                verified: caseVerified,
+                automation_layer: ev.automation_layer || inferLayerFromAction(ev.action),
+                input_value: ev.input_value || '',
+                device_id: ev.device_id || ''
             });
             updateCaseCard();
         } else if (ev.type === 'action_record') {
@@ -2019,10 +2053,38 @@
             setStatus(looksFail ? 'error' : 'success', looksFail ? '未执行' : '已回复');
         } else if (ev.type === 'done') {
             hideTyping();
+            // 收尾思考流 running 状态
+            (AI_TEST_STATE.thinkSteps || []).forEach(function(ts) {
+                if (ts && ts.status === 'running') ts.status = 'done';
+            });
+            updateThinkCard();
             var isFailed = !!ev.failed;
             var isPartial = !isFailed && !!ev.partial;
             var plan = ev.plan || {};
             var steps = plan.steps || [];
+            // 有可保存 plan 时用其步骤对齐实时用例（含 automation_layer）
+            if (steps.length > 0 && AI_TEST_STATE.caseSteps.length === 0) {
+                AI_TEST_STATE.caseSteps = steps.map(function(s, i) {
+                    return {
+                        num: i + 1,
+                        action: s.action || '操作',
+                        target: s.target || s.description || '目标',
+                        verified: true,
+                        automation_layer: s.automation_layer || '',
+                        input_value: s.input_value || '',
+                        device_id: s.device_id || ''
+                    };
+                });
+                updateCaseCard();
+            } else if (steps.length > 0) {
+                // 补齐缺失的 layer
+                steps.forEach(function(s, i) {
+                    if (AI_TEST_STATE.caseSteps[i] && !AI_TEST_STATE.caseSteps[i].automation_layer) {
+                        AI_TEST_STATE.caseSteps[i].automation_layer = s.automation_layer || '';
+                    }
+                });
+                updateCaseCard();
+            }
             var metaSrc = (plan.meta && plan.meta.source) || '';
             var canSave = !isFailed
                 && ev.savable !== false
@@ -2236,10 +2298,8 @@
     function extractThinkType(text) {
         if (!text) return 'other';
         var t = String(text);
-        // 优先匹配 browser_xxx / mobile_xxx / desktop_xxx / windows_xxx 等工具名
         var m = t.match(/\b(browser|mobile|desktop|windows|skill|api|terminal|bash|shell|hermes)_[a-zA-Z0-9_]+/i);
         if (m) return m[0].toLowerCase();
-        // 常见的概括性关键词
         if (/snapshot|快照/.test(t)) return 'browser_snapshot';
         if (/click|点击/i.test(t)) return 'browser_click';
         if (/type|输入|填写/i.test(t)) return 'browser_type';
@@ -2251,36 +2311,66 @@
         if (/extract_otp|验证码|短信/i.test(t)) return 'mobile_extract_otp';
         if (/手机|mobile/i.test(t)) return 'mobile_tool';
         if (/桌面|desktop|windows/i.test(t)) return 'desktop_tool';
+        if (/^思考[：:]/.test(t)) return 'llm_think';
+        if (/第\s*\d+\s*轮|模型推理|推理中/.test(t)) return 'round';
         return 'other';
     }
 
-    // 折叠思考步骤：每种类型连续最多显示 1 条，其余折叠为 "...+N 条同类步骤"
-    function dedupThinkSteps(steps) {
+    function inferLayerFromText(text) {
+        var t = String(text || '');
+        if (/手机|mobile_|android|验证码|短信|scrcpy/i.test(t)) return 'android';
+        if (/桌面|windows_|desktop_/i.test(t)) return 'desktop';
+        if (/browser_|Hermes|网页|DOM/i.test(t)) return 'web';
+        if (/跨端|extract_otp|api_call/i.test(t)) return 'cross_end';
+        return '';
+    }
+
+    function inferLayerFromAction(action) {
+        var a = String(action || '').toLowerCase();
+        if (a.indexOf('mobile_') === 0 || a === 'tap' || a === 'swipe' || a === 'extract_otp') {
+            return a === 'extract_otp' ? 'cross_end' : 'android';
+        }
+        if (a.indexOf('windows_') === 0 || a.indexOf('desktop_') === 0 || a === 'launch_app' || a === 'hotkey') return 'desktop';
+        if (a.indexOf('browser_') === 0 || a === 'navigate' || a === 'goto' || a === 'click' || a === 'type' || a === 'fill') return 'web';
+        if (a === 'api_call') return 'cross_end';
+        return '';
+    }
+
+    function layerBadgeHtml(layer) {
+        var L = String(layer || '').toLowerCase();
+        if (!L) return '';
+        var label = L;
+        var cls = L;
+        if (L === 'android' || L === 'mobile') { label = '手机'; cls = 'android'; }
+        else if (L === 'desktop' || L === 'pc') { label = 'PC'; cls = 'desktop'; }
+        else if (L === 'web') { label = 'Web'; cls = 'web'; }
+        else if (L === 'cross_end') { label = '跨端'; cls = 'cross_end'; }
+        else return '';
+        return '<span class="ai-layer-badge ' + cls + '">' + label + '</span>';
+    }
+
+    // 语义收敛：连续同类只保留 1 条；禁止「…还有 N 条」
+    function collapseThinkSteps(steps) {
         if (!steps || steps.length === 0) return [];
         var out = [];
-        var maxSame = 1;
-        var i = 0;
-        while (i < steps.length) {
+        for (var i = 0; i < steps.length; i++) {
             var s = steps[i];
             var typeKey = extractThinkType(s.text);
-            var run = [s];
-            var j = i + 1;
-            while (j < steps.length && extractThinkType(steps[j].text) === typeKey) {
-                run.push(steps[j]);
-                j++;
-            }
-            var keep = Math.min(run.length, maxSame);
-            for (var k = 0; k < keep; k++) out.push(run[k]);
-            if (run.length > maxSame) {
+            if (out.length > 0 && extractThinkType(out[out.length - 1].text) === typeKey) {
+                out[out.length - 1] = {
+                    step: out[out.length - 1].step,
+                    text: s.text,
+                    status: s.status,
+                    layer: s.layer || out[out.length - 1].layer
+                };
+            } else {
                 out.push({
-                    step: '...',
-                    text: '... 还有 ' + (run.length - maxSame) + ' 条同类步骤（' + typeKey + '）',
-                    status: 'done',
-                    folded: true,
-                    foldedCount: run.length - maxSame
+                    step: out.length + 1,
+                    text: s.text,
+                    status: s.status,
+                    layer: s.layer
                 });
             }
-            i = j;
         }
         return out;
     }
@@ -2288,23 +2378,24 @@
     function updateThinkCard() {
         var count = document.getElementById('aiThinkCount');
         var body = document.getElementById('aiThinkCardBody');
-        var displaySteps = dedupThinkSteps(AI_TEST_STATE.thinkSteps);
+        var displaySteps = collapseThinkSteps(AI_TEST_STATE.thinkSteps);
         count.textContent = displaySteps.length;
         if (displaySteps.length === 0) {
             body.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px 0; font-size: 12px;">暂无思考步骤</div>';
         } else {
             body.innerHTML = displaySteps.map(function(s) {
-                var stepLabel = s.folded ? '...' : (s.status === 'done' ? '✓' : s.step);
-                var itemClass = 'ai-think-item ' + (s.folded ? 'done folded' : s.status);
-                return '<div class="' + itemClass + '"><span class="ai-think-item__step">' + stepLabel + '</span><span class="ai-think-item__text">' + escapeHtml(s.text) + '</span></div>';
+                var stepLabel = s.status === 'done' ? '✓' : s.step;
+                var itemClass = 'ai-think-item ' + (s.status || 'done');
+                var badge = layerBadgeHtml(s.layer || inferLayerFromText(s.text));
+                return '<div class="' + itemClass + '"><span class="ai-think-item__step">' + stepLabel + '</span><span class="ai-think-item__text">' + badge + escapeHtml(s.text) + '</span></div>';
             }).join('');
+            try { body.scrollTop = body.scrollHeight; } catch (e) {}
         }
     }
 
     function updateActionCard() {
         var count = document.getElementById('aiActionCount');
         var body = document.getElementById('aiActionCardBody');
-        // 只显示实际平台动作，过滤元动作（如 hermes_execute）
         var pa = AI_TEST_STATE.platform_actions;
         count.textContent = pa.length;
         if (pa.length === 0) {
@@ -2327,6 +2418,7 @@
                 }
                 return '<div class="ai-action-item ' + a.status + '" title="' + escapeHtml(envTitle) + '">' + envIcon + '<span class="ai-action-item__type">' + escapeHtml(a.type) + '</span><span class="ai-action-item__content">' + escapeHtml(a.content) + '</span></div>';
             }).join('');
+            try { body.scrollTop = body.scrollHeight; } catch (e) {}
         }
     }
 
@@ -2335,14 +2427,22 @@
         var body = document.getElementById('aiCaseCardBody');
         var countValue = document.getElementById('aiCaseCountValue');
         count.textContent = AI_TEST_STATE.caseSteps.length;
-        countValue.textContent = AI_TEST_STATE.caseSteps.length;
+        if (countValue) countValue.textContent = AI_TEST_STATE.caseSteps.length;
         if (AI_TEST_STATE.caseSteps.length === 0) {
-            body.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px 0; font-size: 12px;">暂无生成用例</div>';
+            body.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px 0; font-size: 12px;">需成功完成可回放动作后才会出现</div>';
         } else {
             body.innerHTML = AI_TEST_STATE.caseSteps.map(function(s) {
-                var verifiedIcon = s.verified ? '<span style="color:#22c55e;margin-right:4px;">✓</span>' : '';
-                return '<div class="ai-case-step">' + verifiedIcon + '<span class="ai-case-step__num">' + s.num + '</span><div class="ai-case-step__content"><span class="ai-case-step__action">' + escapeHtml(s.action) + '</span><span class="ai-case-step__target"> → ' + escapeHtml(s.target) + '</span></div></div>';
+                var verifiedIcon = s.verified
+                    ? '<span style="color:#22c55e;margin-right:4px;">✓</span>'
+                    : '<span style="color:#f59e0b;margin-right:4px;" title="已执行未核验">!</span>';
+                var badge = layerBadgeHtml(s.automation_layer);
+                var inputHint = s.input_value
+                    ? '<span class="ai-case-step__target"> 「' + escapeHtml(String(s.input_value).slice(0, 40)) + '」</span>'
+                    : '';
+                var warnCls = s.verified ? '' : ' warning';
+                return '<div class="ai-case-step' + warnCls + '">' + verifiedIcon + '<span class="ai-case-step__num">' + s.num + '</span><div class="ai-case-step__content">' + badge + '<span class="ai-case-step__action">' + escapeHtml(s.action) + '</span><span class="ai-case-step__target"> → ' + escapeHtml(s.target) + '</span>' + inputHint + '</div></div>';
             }).join('');
+            try { body.scrollTop = body.scrollHeight; } catch (e) {}
         }
     }
 

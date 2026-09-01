@@ -883,6 +883,14 @@ def ensure_scrcpy_device_session(serial: str) -> Tuple[Optional["ScrcpyDeviceSes
         return None, "缺少 serial"
     if not _find_scrcpy_server_jar():
         return None, "未找到 scrcpy-server，请在插件市场安装 scrcpy 高帧率投屏"
+    # 外置 scrcpy.exe 窗口运行中：禁止抢占（抢占会杀设备 server → 外置窗自关）
+    try:
+        from modules.mobile.mobile_mirror import is_external_scrcpy_running
+
+        if is_external_scrcpy_running(serial) or is_external_scrcpy_running(""):
+            return None, "外置 scrcpy 窗口运行中，已跳过内嵌 bridge（避免窗口被关闭）"
+    except Exception:
+        pass
     with _persistent_lock:
         existing = _persistent_sessions.get(serial)
         if existing and existing.running:
@@ -1432,6 +1440,18 @@ class ScrcpyFrameRelay:
         # 健康追踪
         self._last_frame_time: float = 0.0
         self._session_restart_count: int = 0
+        # Agent 视觉兜底：缓存最近 config(SPS/PPS) + keyframe NAL
+        self._last_config: bytes = b""
+        self._last_keyframe: bytes = b""
+        self._keyframe_lock = threading.Lock()
+        self._last_keyframe_time: float = 0.0
+
+    def get_cached_keyframe_annexb(self) -> Optional[bytes]:
+        """返回 config+keyframe 拼接的 Annex-B 字节；无关键帧则 None。"""
+        with self._keyframe_lock:
+            if not self._last_keyframe:
+                return None
+            return (self._last_config or b"") + self._last_keyframe
 
     @property
     def seconds_since_last_frame(self) -> float:
@@ -1541,6 +1561,16 @@ class ScrcpyFrameRelay:
                 time.sleep(0.02)
                 continue
             self._last_frame_time = time.time()
+            try:
+                if packet.is_config and packet.payload:
+                    with self._keyframe_lock:
+                        self._last_config = packet.payload
+                elif packet.is_key and packet.payload:
+                    with self._keyframe_lock:
+                        self._last_keyframe = packet.payload
+                        self._last_keyframe_time = time.time()
+            except Exception:
+                pass
             with self._lock:
                 subs = list(self._subscribers.values())
             for sub_q in subs:
@@ -1585,6 +1615,80 @@ def get_scrcpy_relay(serial: str) -> ScrcpyFrameRelay:
             relay = ScrcpyFrameRelay(serial)
             _relays[serial] = relay
         return relay
+
+
+def _decode_h264_annexb_to_png(annexb: bytes) -> Optional[bytes]:
+    """将 Annex-B H.264（config+keyframe）解码为单帧 PNG。失败返回 None。"""
+    if not annexb or len(annexb) < 32:
+        return None
+    import shutil
+    import tempfile
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    tmp_in = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".h264", delete=False) as f:
+            f.write(annexb)
+            tmp_in = f.name
+        proc = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "h264",
+                "-i",
+                tmp_in,
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
+                "-",
+            ],
+            capture_output=True,
+            timeout=5.0,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout and len(proc.stdout) > 100:
+            return proc.stdout
+        return None
+    except Exception:
+        return None
+    finally:
+        if tmp_in:
+            try:
+                os.unlink(tmp_in)
+            except Exception:
+                pass
+
+
+def get_latest_keyframe_png(serial: str = "", *, timeout: float = 2.0) -> Optional[bytes]:
+    """从 scrcpy relay 取最近关键帧并解码为 PNG；无会话/解码失败返回 None。"""
+    serial = (serial or "").strip()
+    if not serial:
+        return None
+    try:
+        relay = get_scrcpy_relay(serial)
+        ok, _err = relay.ensure_started()
+        if not ok:
+            return None
+        deadline = time.time() + max(0.2, float(timeout))
+        while time.time() < deadline:
+            annexb = relay.get_cached_keyframe_annexb()
+            if annexb:
+                png = _decode_h264_annexb_to_png(annexb)
+                if png:
+                    return png
+            time.sleep(0.08)
+        return None
+    except Exception:
+        return None
 
 
 def iter_scrcpy_http_stream(serial: str):
@@ -1674,6 +1778,14 @@ def warm_scrcpy_session(serial: str, *, timeout: Optional[float] = None) -> Tupl
     serial = (serial or "").strip()
     if not serial:
         return False, "缺少 serial"
+    # 外置窗口优先：共享屏幕/连接预热不得关掉用户已打开的 scrcpy 窗
+    try:
+        from modules.mobile.mobile_mirror import is_external_scrcpy_running
+
+        if is_external_scrcpy_running(serial) or is_external_scrcpy_running(""):
+            return False, "外置 scrcpy 窗口运行中，已跳过内嵌预热"
+    except Exception:
+        pass
     warm_timeout = scrcpy_warm_timeout() if timeout is None else max(8.0, float(timeout))
     last_err = ""
     for attempt in range(2):

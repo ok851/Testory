@@ -272,7 +272,7 @@ def poll_steps(udid: str, *, limit: int = 20) -> Dict[str, Any]:
 
 def get_page_source(udid: str) -> Dict[str, Any]:
     try:
-        res = _rpc_call(udid, "getPageSource", {}, timeout=10.0)
+        res = _rpc_call(udid, "getPageSource", {}, timeout=5.0)
         # 统一暴露 xml / page_source 字段
         if isinstance(res, dict):
             xml = res.get("xml") or res.get("page_source") or ""
@@ -285,13 +285,13 @@ def get_page_source(udid: str) -> Dict[str, Any]:
         dump_path = "/sdcard/testory_uidump.xml"
         rc, out, err = _run_adb(
             _adb_cmd(udid) + ["shell", "uiautomator", "dump", dump_path],
-            timeout=20,
+            timeout=10,
         )
         if rc != 0:
             raise RuntimeError(f"getPageSource 失败: {exc}; uiautomator dump 失败: {err or out}") from exc
         rc2, xml, err2 = _run_adb(
             _adb_cmd(udid) + ["shell", "cat", dump_path],
-            timeout=15,
+            timeout=8,
         )
         if rc2 != 0 or not (xml or "").strip():
             raise RuntimeError(f"getPageSource 失败: {exc}; 读取 dump 失败: {err2}") from exc

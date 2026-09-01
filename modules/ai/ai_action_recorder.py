@@ -156,6 +156,98 @@ _REPLAYABLE_ACTION_TYPES = frozenset(
     }
 )
 
+# 各自动化层「平台可复用」步骤白名单（实时用例 / 落库 steps）
+_WEB_CASE_ACTIONS = frozenset(
+    {
+        "navigate",
+        "goto",
+        "click",
+        "type",
+        "fill",
+        "input",
+        "input_text",
+        "scroll",
+        "wait",
+        "assert",
+        "select",
+        "hover",
+        "extract_otp",
+        "api_call",
+    }
+)
+_DESKTOP_CASE_ACTIONS = frozenset(
+    {
+        "launch_app",
+        "open_app",
+        "focus_app",
+        "click",
+        "type",
+        "fill",
+        "input",
+        "input_text",
+        "hotkey",
+        "press_key",
+        "wait",
+        "assert",
+        "extract_otp",
+        "api_call",
+    }
+)
+_ANDROID_CASE_ACTIONS = frozenset(
+    {
+        "tap",
+        "swipe",
+        "input",
+        "input_text",
+        "type",
+        "open_app",
+        "launch_app",
+        "back",
+        "home",
+        "wait",
+        "assert",
+        "extract_otp",
+        "api_call",
+        "click",
+    }
+)
+
+
+def is_case_worthy_for_platform(action_type: str, platform: str = "web") -> bool:
+    """实时用例是否收录该动作：必须可回放，且属于当前主平台（+跨端）步骤词汇。
+
+    网页任务不收录 launch_app/windows_* 等桌面模拟开浏览器步骤。
+    """
+    a = (action_type or "").strip().lower()
+    if a.startswith("browser_"):
+        a = a[len("browser_") :]
+    if a.startswith("windows_") or a.startswith("desktop_"):
+        # 桌面工具名归一化前缀剥离后再判
+        raw = a.split("_", 1)[-1] if "_" in a else a
+        a = {
+            "launch_app": "launch_app",
+            "focus_app": "focus_app",
+            "click_element": "click",
+            "type_text": "input",
+            "press_key": "press_key",
+            "wait": "wait",
+        }.get(raw, raw)
+    if a.startswith("mobile_"):
+        a = a[len("mobile_") :]
+    if not is_replayable_action_type(a) and a not in _REPLAYABLE_ACTION_TYPES:
+        # extract_otp / 已在 replayable 集合
+        if a not in ("extract_otp", "api_call"):
+            return False
+    plat = (platform or "web").strip().lower()
+    if plat in ("web",):
+        return a in _WEB_CASE_ACTIONS
+    if plat in ("desktop", "pc", "windows"):
+        return a in _DESKTOP_CASE_ACTIONS
+    if plat in ("android", "mobile"):
+        return a in _ANDROID_CASE_ACTIONS
+    # auto / cross：三端并集，但仍排除纯元工具名
+    return a in (_WEB_CASE_ACTIONS | _DESKTOP_CASE_ACTIONS | _ANDROID_CASE_ACTIONS)
+
 # browser_console expression → 可回放步骤
 _CONSOLE_CLICK_RE = re.compile(
     r"""(?:\.click\s*\(|click\s*\()""",
@@ -771,6 +863,8 @@ class ActionRecorder:
                 "snapshot",
                 "browser_get_images",
             ):
+                continue
+            if not is_case_worthy_for_platform(rec.action_type, self.platform):
                 continue
             step: Dict[str, Any] = {
                 "action": rec.action_type,

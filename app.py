@@ -8397,6 +8397,36 @@ def api_ai_task_execute():
                     ),
                     status='done',
                 )
+                # 跨端任务：先给出端分配计划，避免模型直接跳到手机取码
+                try:
+                    _nb = bool(getattr(task_route, "needs_browser", False))
+                    _nm = bool(getattr(task_route, "needs_mobile_await", False))
+                    if _nb and _nm:
+                        yield send(
+                            'think',
+                            text=(
+                                "端分配：① 浏览器（打开 URL / 填表 / 点获取验证码）→ "
+                                "② 手机取验证码 → ③ 浏览器回填并登录"
+                            ),
+                            status='done',
+                            layer='cross_end',
+                        )
+                    elif _nb:
+                        yield send(
+                            'think',
+                            text='端分配：浏览器自动化（hermes_execute / CDP）',
+                            status='done',
+                            layer='web',
+                        )
+                    elif _nm:
+                        yield send(
+                            'think',
+                            text='端分配：手机双手（取码 / 本机步骤）',
+                            status='done',
+                            layer='android',
+                        )
+                except Exception:
+                    pass
 
             # 不自动启动：仅检测用户是否已手动点「启动智能体」
             from modules.hermes.hermes_gateway_client import HermesGatewayClient
@@ -8409,25 +8439,56 @@ def api_ai_task_execute():
                 task_route is not None
                 and str(getattr(task_route, "reason", "") or "").startswith("cross_end")
             )
+            _needs_browser_early = bool(
+                task_route is not None
+                and (
+                    bool(getattr(task_route, "needs_browser", False))
+                    or str(getattr(task_route, "platform", "") or "").lower() == "web"
+                )
+            )
+            try:
+                from modules.ai.agent_intent import message_needs_browser as _mnb_early
+
+                _needs_browser_early = _needs_browser_early or _mnb_early(task)
+            except Exception:
+                pass
             _desk_only_early = run_platform == "desktop" or (
                 task_route is not None and bool(getattr(task_route, "needs_desktop_tools", False))
             )
-            _outer_tools_ok_early = _desk_only_early or _needs_mobile_await or _cross_end_cap
-            _hermes_probe_sec = 0.4 if _outer_tools_ok_early else 1.5
+            # 浏览器任务必须 Hermes：手机 await / 跨端词不能单独豁免 Hermes
+            _outer_tools_ok_early = (
+                (_desk_only_early or _needs_mobile_await or _cross_end_cap)
+                and not _needs_browser_early
+            )
+            _hermes_probe_sec = 0.4 if _outer_tools_ok_early else (3.0 if _needs_browser_early else 1.5)
             hermes_available = hermes_client.is_configured() and hermes_client.health_check(
                 timeout_sec=_hermes_probe_sec
             )
+            # 浏览器任务：配置了网关但瞬时探活失败时再探一次，避免误伤
+            if _needs_browser_early and not hermes_available and hermes_client.is_configured():
+                hermes_available = bool(hermes_client.health_check(timeout_sec=3.0))
 
             if abort_event.is_set():
                 yield send('error', error='任务已取消')
                 return
 
             # 明确要做真实操作时才要求智能体已启动；闲聊/问答可走平台 LLM
-            # 桌面外层 windows_* / 跨端 mobile_* 不依赖 Hermes Gateway
+            # 桌面外层 windows_* / 纯手机 await 可不依赖 Hermes；**含网页的任务必须 Hermes**
             _desk_only = _desk_only_early or (
                 task_route is not None and bool(getattr(task_route, "needs_desktop_tools", False))
             )
-            _outer_tools_ok = _desk_only or _needs_mobile_await or _cross_end_cap
+            _outer_tools_ok = (
+                (_desk_only or _needs_mobile_await or _cross_end_cap)
+                and not _needs_browser_early
+            )
+            if needs_automation and not hermes_available and _needs_browser_early:
+                yield send(
+                    'think',
+                    text='本任务需要浏览器自动化，请先在左上角启动智能体后再执行。',
+                    status='warning',
+                )
+                yield send('error', error='请先启动智能体后再执行浏览器/网页类任务')
+                return
             if needs_automation and not hermes_available and not _outer_tools_ok:
                 yield send('think', text='智能体未启动。请先在左上角点击「启动」后再执行自动化任务。', status='warning')
                 yield send('error', error='请先启动智能体后再执行操作类任务')
@@ -8608,12 +8669,12 @@ def api_ai_task_execute():
                 context=task_ctx.to_public_dict(),
             )
 
-            browser_ready_holder = {"ready": False, "nav_done": False}
+            browser_ready_holder = {"ready": False, "nav_done": False, "pending_nav_record": ""}
 
             def _ensure_browser_before_agent():
-                """Web 需要时拉起浏览器；起始 URL 从任务原文解析，禁止依赖已移除的 URL 输入框。
-                
-                关键修复：一旦浏览器已导航到目标页并开始操作，禁止再次 navigate（避免表单清空）。
+                """Web 需要时拉起浏览器；起始 URL 从任务原文解析。
+                首次导航到目标 URL 时通过 pending_nav_record 供实时用例收录。
+                返回 (ok, err) 或 (ok, err, extras)。
                 """
                 from modules.ai.agent_intent import extract_task_url, message_needs_browser
 
@@ -8621,18 +8682,24 @@ def api_ai_task_execute():
                 if not needs_br:
                     return True, ""
                 nav_url = (extract_task_url(task) or url or "").strip()
+                extras = {}
                 if browser_ready_holder["ready"]:
                     from modules.hermes.hermes_config import hermes_cdp_attached
                     if hermes_cdp_attached():
-                        # 关键修复：已完成导航后，不再重新 navigate
                         if nav_url and not browser_ready_holder.get("nav_done"):
                             try:
                                 from modules.ai.ai_external_browser_bridge import ensure_browser
                                 ensure_browser(headless=False, url=nav_url, browser="edge")
                                 browser_ready_holder["nav_done"] = True
+                                browser_ready_holder["pending_nav_record"] = nav_url
+                                extras["navigate_url"] = nav_url
                             except Exception:
                                 pass
-                        return True, ""
+                        pending = (browser_ready_holder.get("pending_nav_record") or "").strip()
+                        if pending:
+                            extras["navigate_url"] = pending
+                            browser_ready_holder["pending_nav_record"] = ""
+                        return (True, "", extras) if extras else (True, "")
                 if not hermes_available:
                     return False, "智能体未启动，无法执行浏览器自动化"
                 try:
@@ -8648,11 +8715,15 @@ def api_ai_task_execute():
                             return False, "本机浏览器启动失败，请确认已安装 Edge/Chrome"
                         if nav_url:
                             browser_ready_holder["nav_done"] = True
+                            browser_ready_holder["pending_nav_record"] = nav_url
+                            extras["navigate_url"] = nav_url
                     elif nav_url and not browser_ready_holder.get("nav_done"):
                         # 已有会话：仅首次导航，后续不再重复
                         try:
                             ensure_browser(headless=False, url=nav_url, browser="edge")
                             browser_ready_holder["nav_done"] = True
+                            browser_ready_holder["pending_nav_record"] = nav_url
+                            extras["navigate_url"] = nav_url
                         except Exception:
                             pass
                     browser_ready_holder["ready"] = True
@@ -8660,7 +8731,11 @@ def api_ai_task_execute():
                         if run_platform == "auto":
                             return True, ""
                         return False, "浏览器 CDP 未连接"
-                    return True, ""
+                    pending = (browser_ready_holder.get("pending_nav_record") or "").strip()
+                    if pending:
+                        extras["navigate_url"] = pending
+                        browser_ready_holder["pending_nav_record"] = ""
+                    return (True, "", extras) if extras else (True, "")
                 except Exception as ex:
                     if run_platform == "auto":
                         return True, ""
@@ -8972,14 +9047,13 @@ def api_ai_task_execute():
                 except Exception:
                     _hands = {"phone": False, "desktop": use_outer_desktop, "browser": False}
 
-                # 连接态双手：保持所有已连接设备的状态，让 AI 可以组合使用
-                # 【新架构】不再强制浏览器任务禁用桌面手，改为保持所有已连接设备可用
-                if _hands.get("desktop"):
-                    use_outer_desktop = True
+                # 连接态双手：网页任务挂 browser+mobile；勿因 desktop 手在线就改走桌面工具
                 if _force_browser_path or run_platform == "web":
                     _hands["browser"] = True
                     run_platform = "web"
-                elif _hands.get("desktop") and not _force_browser_path:
+                    use_outer_desktop = False
+                elif _hands.get("desktop"):
+                    use_outer_desktop = True
                     run_platform = "desktop"
 
                 # 【关键修复 2-B】重新计算 caps_summary
@@ -9022,9 +9096,11 @@ def api_ai_task_execute():
                     abort_event=abort_event,
                     recorder=recorder,
                     allow_screen_tools=True if use_outer_desktop else allow_screen_tools,
-                    # 【新架构】不再强制禁用 windows_*，改为全部挂载后由 AI 根据语义选择
+                    # 浏览器/Web 任务禁止挂 windows_*，避免 Agent 用桌面模拟开网页
                     allow_desktop_windows_tools=(
-                        True if use_outer_desktop else None
+                        False
+                        if (_force_browser_path or run_platform == "web")
+                        else (True if use_outer_desktop else None)
                     ),
                     deadline_ts=deadline_ts,
                     ensure_browser_before_agent=_ensure_browser_before_agent if allow_agent else None,
@@ -9049,16 +9125,32 @@ def api_ai_task_execute():
                     abort_event=abort_event,
                 ):
                     if evt_type == "thinking":
-                        yield send('think', text=evt_data.get('content', 'AI 正在推理...'), status='running')
+                        _ttext = evt_data.get('content', 'AI 正在推理...') if isinstance(evt_data, dict) else str(evt_data)
+                        _user = (evt_data.get('user_text') if isinstance(evt_data, dict) else None) or _ttext
+                        yield send(
+                            'think',
+                            text=_ttext,
+                            user_text=_user,
+                            status=evt_data.get('status', 'running') if isinstance(evt_data, dict) else 'running',
+                            replace_last=bool(evt_data.get('replace_last')) if isinstance(evt_data, dict) else False,
+                            layer=evt_data.get('layer', '') if isinstance(evt_data, dict) else '',
+                        )
 
                     elif evt_type == "tool_call_start":
                         tool_name = evt_data.get('tool', '')
                         args_summary = evt_data.get('args_summary', '')
                         if tool_name == "hermes_execute":
                             yield send('action', action_type='hermes_execute', target=args_summary[:80], status='running')
-                            yield send('think', text='Hermes 正在跨层执行…', status='running')
-                        elif tool_name in ("windows_wait", "get_screen_text", "get_screen_description"):
-                            yield send('think', text=f'{tool_name}…', status='running')
+                            yield send('think', text='浏览器跨层执行', user_text='浏览器跨层执行', status='running', layer='web')
+                        elif tool_name in ("windows_wait", "get_screen_text", "get_screen_description", "windows_get_ui_tree"):
+                            _desk_map = {
+                                "windows_wait": "等待桌面就绪",
+                                "get_screen_text": "识别本机屏幕文字",
+                                "get_screen_description": "描述本机屏幕",
+                                "windows_get_ui_tree": "读取桌面控件树",
+                            }
+                            _ht = _desk_map.get(tool_name, tool_name)
+                            yield send('think', text=_ht, user_text=_ht, status='running', layer='desktop')
                         elif tool_name.startswith("windows_"):
                             yield send(
                                 'action',
@@ -9067,7 +9159,7 @@ def api_ai_task_execute():
                                 status='running',
                                 quiet_chat=True,
                             )
-                            yield send('think', text=f'桌面操作：{tool_name}', status='running')
+                            yield send('think', text=f'桌面操作', user_text=f'桌面操作：{tool_name.replace("windows_", "")}', status='running', layer='desktop')
                         elif tool_name.startswith("mobile_"):
                             yield send(
                                 'action',
@@ -9076,10 +9168,15 @@ def api_ai_task_execute():
                                 status='running',
                                 quiet_chat=True,
                             )
+                            _m_human = '手机取验证码' if tool_name == 'mobile_extract_otp' else (
+                                '等待手机本机执行' if tool_name in ('mobile_run_steps', 'mobile_run_case') else f'手机操作：{tool_name.replace("mobile_", "")}'
+                            )
                             yield send(
                                 'think',
-                                text=f'手机双手：{tool_name}（enqueue 后等待本机领取）',
+                                text=_m_human,
+                                user_text=_m_human,
                                 status='running',
+                                layer='android' if tool_name != 'mobile_extract_otp' else 'cross_end',
                             )
                         elif tool_name.startswith("desktop_"):
                             yield send(
@@ -9089,9 +9186,9 @@ def api_ai_task_execute():
                                 status='running',
                                 quiet_chat=True,
                             )
-                            yield send('think', text=f'桌面双手：{tool_name}', status='running')
+                            yield send('think', text='桌面操作', user_text=f'桌面操作：{tool_name.replace("desktop_", "")}', status='running', layer='desktop')
                         elif tool_name == "refine_test_plan":
-                            yield send('think', text='正在优化测试用例', status='running')
+                            yield send('think', text='正在优化测试用例', user_text='正在优化测试用例', status='done')
 
                         # 发送工具调用开始事件
                         try:
@@ -9317,18 +9414,20 @@ def api_ai_task_execute():
 
                     elif evt_type == "action_records":
                         for rec in (evt_data if isinstance(evt_data, list) else []):
-                            yield send('action_record', **rec)
+                            yield send('action_record', **{k: v for k, v in rec.items() if k != 'skip_case'})
+                            if rec.get('skip_case'):
+                                continue
                             st = (rec.get('status') or '').lower()
-                            # 实时用例收录条件（放宽）：
-                            # - success/ok/done/completed → verified=True（已验证成功）
-                            # - warning（已执行但未验证）→ verified=False（仍可复用，用户可再调）
-                            # 不收录 failed/running/skipped
+                            # 实时用例：success→verified；warning→verified=false（前端仍展示）
                             if st in ('success', 'ok', 'done', 'completed', 'complete'):
                                 yield send(
                                     'case_step',
                                     action=rec.get('action_type', '操作'),
                                     target=rec.get('target', '目标'),
                                     verified=True,
+                                    automation_layer=rec.get('automation_layer') or '',
+                                    input_value=rec.get('input_value') or '',
+                                    device_id=rec.get('device_id') or '',
                                 )
                             elif st in ('warning',):
                                 yield send(
@@ -9336,6 +9435,9 @@ def api_ai_task_execute():
                                     action=rec.get('action_type', '操作'),
                                     target=rec.get('target', '目标'),
                                     verified=False,
+                                    automation_layer=rec.get('automation_layer') or '',
+                                    input_value=rec.get('input_value') or '',
+                                    device_id=rec.get('device_id') or '',
                                 )
 
                     elif evt_type == "vision_start":
@@ -9971,9 +10073,29 @@ def api_ai_screen_share_toggle():
             try:
                 from modules.mobile.mobile_scrcpy_vision import get_device_serial_for_user, capture_device_frame
                 from modules.mobile.mobile_scrcpy_bridge import ensure_bridge_started, warm_scrcpy_session
+                from modules.mobile.mobile_mirror import is_external_scrcpy_running
 
                 serial = get_device_serial_for_user(uid_int) or ""
                 if not serial:
+                    return
+                # 用户已开外置投屏时不要 warm 内嵌（会抢 server → 窗口自关）
+                if is_external_scrcpy_running(serial) or is_external_scrcpy_running(""):
+                    png = None
+                    try:
+                        png = capture_device_frame(serial)
+                    except Exception:
+                        png = None
+                    st = _screen_share_states.get(user_id) or {}
+                    if not st.get("enabled"):
+                        return
+                    st["mobile_warm"] = {
+                        "serial": serial,
+                        "warm_ok": False,
+                        "warm_error": "外置 scrcpy 运行中，共享屏幕改用 adb 截图",
+                        "capture_ok": bool(png),
+                        "mode": "external_scrcpy",
+                    }
+                    _screen_share_states[user_id] = st
                     return
                 ensure_bridge_started()
                 warm_ok, warm_err = warm_scrcpy_session(serial)

@@ -50,3 +50,6 @@
 - 新增业务模块应放入 `modules/<对应域>/`，根目录不再堆放实现文件
 - **Hermes 家目录解析**：`hermes_home_dir()`（`modules/hermes/hermes_config.py`）当 `HERMES_HOME` 含字面量 `%UAT_DATA_DIR%` 且 `UAT_DATA_DIR` 为空时，必须回退 `LOCALAPPDATA/Testory/hermes`，**禁止**回退到仓库根下字面量 `%UAT_DATA_DIR%/hermes` 毒目录（写入 WinError 5）。`UAT_DATA_DIR` 由 `packaging/uat_desktop.py` 设为 `AppData/Local/Testory`，缺失会导致 Hermes 等多处数据目录解析到错误路径。
 - Hermes 网关是**独立 `hermes_agent` 包**（.venv 内 0.16.0），与项目 `modules/` 重组无关；智能体"启动失败"常见真因：网关 8642 未监听+状态文件陈旧假运行、平台↔网关 `API_SERVER_KEY` 不匹配（`resolve_hermes_api_server_key()` 有自愈合）、上游 LLM 403 额度耗尽、CDP 9222 未开。
+- **agent-browser 必须固定安装**（browser_console/browser_snapshot 依赖）：`npm install -g --prefix C:\Users\zxcyb\AppData\Local\Testory\hermes\node agent-browser`（Windows 下 shim 在 `hermes/node/agent-browser.cmd`，正好命中 browser_tool 扩展 PATH 候选目录）。**禁止依赖 npx 兜底**：npm `_npx` 缓存 trash 失败会导致每次重新下载 → 30s 超时 + 版本漂移（0.27.0 vs 0.35.1）。`patch_venv_hermes_tools.py` 重跑时含 `check_agent_browser_cli()` 自检。
+- 网关重启走官方 API：`modules/hermes/hermes_service_bootstrap.py` 的 `restart_hermes_gateway()`（stop + bootstrap，保证 env 注入/API_SERVER_KEY/锁清理），勿直接 taskkill。
+- Windows 多行 JS 经 cmd.exe 传参会在首个换行处截断（`SyntaxError: Unexpected end of input`）：`_browser_eval` 已做换行折叠 + CLI 超长保护（>6000 字符给指引）——`.venv` pip 升级后重跑 patch 脚本恢复。

@@ -16,7 +16,7 @@ class TestWebHermesHints(unittest.TestCase):
         self.assertIn("skill_*", text)
         self.assertNotIn("请先用 skill_view", text)
         self.assertIn("DOM", text)
-        self.assertIn("禁止 browser_navigate", text)
+        self.assertIn("不要重复 navigate", text)
         self.assertNotIn("优先调用已注册的 MCP windows_", text)
 
     def test_web_skills_exclude_desktop(self):

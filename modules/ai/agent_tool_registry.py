@@ -19,10 +19,12 @@ TOOL_LANES = {
         "desktop_type_text",
         "windows_press_key",
         "windows_wait",
+        "windows_get_ui_tree",
     ],
     "observation": [
         "get_screen_text",
         "get_screen_description",
+        "windows_get_ui_tree",
     ],
     "execution_agent": [
         "hermes_execute",
@@ -80,8 +82,8 @@ REGISTERED_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "mobile_scrcpy_extract_otp",
         "description": (
-            "通过 scrcpy 视觉快速提取验证码（截图+OCR，2-5秒）。"
-            "先导航到信息/短信应用，截图后 OCR 识别验证码。"
+            "通过通知栏/屏幕 OCR 快速提取验证码（优先 dumpsys notification，"
+            "再下拉通知栏 OCR；不盲目打开短信外其它应用）。"
             "速度远快于 mobile_extract_otp 的 APK 轮询路径。"
         ),
         "input_schema": {

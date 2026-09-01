@@ -134,7 +134,7 @@ def web_browser_cdp_hint() -> str:
         f"- HERMES_BROWSER_MODE={mode}；只用 browser_* 操作**当前已打开标签页**。\n",
         "- **禁止** 调用任何 skill_* 类工具（含查看技能文档）；规则已全部内联。\n",
         "- **禁止** terminal / curl / bash / windows_* / 桌面 MCP。\n",
-        "- **禁止** 新开空白标签页；平台已导航则 **禁止 browser_navigate**（重复造轮子）。\n",
+        "- **禁止** 新开空白标签页 / about:blank；有目标 URL 时直接 navigate 到目标。\n",
         "- **DOM 优先**：指令内「页面 DOM/可交互控件」是主定位源；有清单则直接 browser_click/browser_type；"
         "browser_snapshot=无障碍树/DOM ref（不是截图）：仅难定位时兜底一次"
         "（全程最多 2 次，禁止连续反复）；视觉/截图仅最终兜底。\n",
@@ -190,12 +190,13 @@ def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = Non
 
     if platform == "web":
         nav_line = (
-            f"- 平台已打开目标页{('：' + start_url) if start_url else ''}；"
-            "用 DOM 清单直接操作；禁止 navigate / 连续 snapshot / skill / terminal。\n"
+            f"- 已在目标站{('：' + start_url) if start_url else ''}；按用户指令逐步 DOM 操作，不要跳步；"
+            "不要重复 navigate / 不要打开 about:blank。\n"
             if already_on_page
             else (
-                f"- 若当前不是目标页，仅允许 **一次** browser_navigate"
-                f"{(' 到 ' + start_url) if start_url else ''}，然后按 DOM 操作；禁止重复 navigate。\n"
+                f"- 请**直接** browser_navigate"
+                f"{(' 到 ' + start_url) if start_url else ' 到任务目标 URL'}（禁止先 about:blank），"
+                "然后按用户指令逐步操作，不要跳过步骤；到达后禁止重复 navigate。\n"
             )
         )
         prefix = (

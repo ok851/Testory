@@ -701,10 +701,12 @@ def _web_hermes_system_prompt() -> str:
     return (
         "你是 Testory 网页自动化执行器。\n\n"
         "【🚫 禁止操作】\n"
-        "- 不要调用 browser_navigate / browser_goto，除非指令明确要求导航\n"
+        "- 不要先导航到 about:blank；有目标 URL 时直接 browser_navigate 到该地址\n"
         "- 不要使用 skill_view、terminal、bash、curl、windows_* 等工具\n"
-        "- 不要编造未实际执行的操作结果\n\n"
+        "- 不要编造未实际执行的操作结果；不要跳过用户指令中的步骤\n\n"
         "【📋 工具使用规则 - 严格遵守】\n"
+        "\n"
+        "✅ browser_navigate(url)：直接打开任务目标地址（禁止 about:blank）\n"
         "\n"
         "✅ browser_snapshot：获取页面结构快照，用于定位元素（**谨慎使用，避免反复调用**）\n"
         "   - 导航后系统已自动返回紧凑快照，且已注入 DOM 清单：**优先用它们定位，无需重复快照**\n"
@@ -728,12 +730,12 @@ def _web_hermes_system_prompt() -> str:
         "   - 不要用它来执行 DOM 操作\n"
         "   - 只有当你需要检查控制台错误时才使用\n\n"
         "【🎯 标准执行流程】\n"
-        "1. 优先使用导航返回的快照 / 系统注入的 DOM 清单定位元素，不要先调 browser_snapshot\n"
-        "2. 从返回结果中找到目标元素的 ref（如 @e5）\n"
-        "3. 使用 browser_click(ref) 或 browser_type(ref, text) 操作元素\n"
-        "4. 仅当需要确认界面是否变化时才调用 browser_snapshot 验证（避免反复快照空转）\n\n"
+        "1. 若不在目标页：browser_navigate 到任务 URL\n"
+        "2. 优先使用导航返回的快照 / 系统注入的 DOM 清单定位元素\n"
+        "3. 使用 browser_click / browser_type 按用户指令逐步操作，不要跳步\n"
+        "4. 仅当需要确认界面是否变化时才调用 browser_snapshot 验证\n\n"
         "【📌 重要提示】\n"
-        "- 页面已就绪时不要调用 browser_navigate\n"
+        "- 已在目标站时不要重复 navigate；不要打开空白页\n"
         "- 遇到验证码/扫码：等待用户在浏览器窗口完成\n"
         "- 操作失败时换另一种方式，不要死循环\n"
     )
@@ -950,7 +952,7 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
                 "description": (
                     "【平台=仅桌面本机GUI·非浏览器】按短控件名点击桌面可见控件（UIA→OCR→VLM 三模定位）。"
                     "【适用】微信/钉钉/Word/记事本/WPS 等本机应用的按钮、菜单、输入框标签。"
-                    "【前置条件】调用前必须先 get_screen_text 获取当前屏幕文本候选，确认是目标应用再点击。"
+                    "【前置条件】优先 windows_get_ui_tree 读控件树确认目标；OCR(get_screen_text) 仅作兜底。"
                     "【严禁】浏览器/网页任务不要调用！浏览器页面元素点击请用 hermes_execute。"
                     "【严禁】不要在 Testory 软件自己的窗口上找「登录」「账号」等网页控件，这些在真实浏览器里。"
                 ),
@@ -963,6 +965,24 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
                         },
                     },
                     "required": ["description"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "windows_get_ui_tree",
+                "description": (
+                    "【平台=仅桌面本机GUI·结构优先】读取前台窗口 UIA 控件树（名称/类型/automation_id/bounds）。"
+                    "桌面点击/输入前优先调用本工具定位；OCR/视觉仅在树缺失或定位失败时使用。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "max_depth": {"type": "integer", "description": "树深度，默认 4"},
+                        "max_nodes": {"type": "integer", "description": "最大节点数，默认 120"},
+                        "hwnd": {"type": "integer", "description": "可选目标窗口句柄；默认前台窗"},
+                    },
                 },
             },
         },
@@ -1684,47 +1704,261 @@ def _record_mobile_tool_outcome(meta: Dict[str, Any], name: str, result_text: st
         meta["halt_reply"] = _mobile_halt_user_facing(name, result_text)
 
 
+def _tool_hand_side(name: str) -> str:
+    n = (name or "").strip()
+    if n.startswith("mobile_"):
+        return "mobile"
+    if n.startswith("windows_") or n.startswith("desktop_"):
+        return "pc"
+    if n in ("get_screen_text", "get_screen_description"):
+        return "pc"
+    return "other"
+
+
+def _hands_parallel_ok(
+    name_a: str,
+    args_a: Optional[Dict[str, Any]],
+    name_b: str,
+    args_b: Optional[Dict[str, Any]],
+    ce_vars: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """同轮 PC∥手机：双手不同、无 OTP/变量依赖时才允许并行。"""
+    if _tool_hand_side(name_a) == "other" or _tool_hand_side(name_b) == "other":
+        return False
+    if {_tool_hand_side(name_a), _tool_hand_side(name_b)} != {"pc", "mobile"}:
+        return False
+    if "extract_otp" in (name_a or "") or "extract_otp" in (name_b or ""):
+        return False
+    try:
+        blob = json.dumps([args_a or {}, args_b or {}], ensure_ascii=False)
+    except Exception:
+        blob = str(args_a) + str(args_b)
+    if "{{" in blob or "sms_otp" in blob:
+        return False
+    for k in (ce_vars or {}):
+        if k and str(k) in blob:
+            return False
+    return True
+
+
+def _prefetch_parallel_hand_results(
+    pending_calls: List[Dict[str, Any]],
+    *,
+    meta: Dict[str, Any],
+    params: Any,
+    abort_event: Any,
+) -> Dict[str, str]:
+    """预取同轮无依赖的 PC∥手机工具结果（按 tid）。失败则返回空，回退串行。"""
+    out: Dict[str, str] = {}
+    if len(pending_calls) < 2:
+        return out
+    # 仅尝试第一对相邻双手
+    a = pending_calls[0]
+    b = pending_calls[1]
+    fn_a = (a.get("function") or {}) if isinstance(a, dict) else {}
+    fn_b = (b.get("function") or {}) if isinstance(b, dict) else {}
+    name_a = str(fn_a.get("name") or "").strip()
+    name_b = str(fn_b.get("name") or "").strip()
+    args_a = _parse_tool_arguments(fn_a.get("arguments") if isinstance(fn_a, dict) else "")
+    args_b = _parse_tool_arguments(fn_b.get("arguments") if isinstance(fn_b, dict) else "")
+    if not _hands_parallel_ok(name_a, args_a, name_b, args_b, meta.get("cross_end_vars")):
+        return out
+    tid_a = str(a.get("id") or "")
+    tid_b = str(b.get("id") or "")
+    if not tid_a or not tid_b:
+        return out
+
+    def _run_one(nm: str, ag: Dict[str, Any]) -> str:
+        try:
+            if nm.startswith("mobile_") or nm.startswith("desktop_"):
+                call_args = _resolve_cross_end_vars(dict(ag or {}), meta.get("cross_end_vars"))
+                if getattr(params, "user_id", None) and not call_args.get("user_id"):
+                    try:
+                        call_args["user_id"] = int(params.user_id)
+                    except Exception:
+                        pass
+                return str(
+                    _dispatch_cross_end_agent_tool(nm, call_args, abort_event=abort_event) or ""
+                )
+            from modules.desktop.windows_desktop_tools import (
+                WINDOWS_TOOL_NAMES,
+                SCREEN_TOOL_NAMES,
+                dispatch_windows_or_screen_tool,
+            )
+
+            if nm in WINDOWS_TOOL_NAMES or nm in SCREEN_TOOL_NAMES:
+                res = dispatch_windows_or_screen_tool(nm, ag or {})
+                return json.dumps(res, ensure_ascii=False) if isinstance(res, dict) else str(res)
+        except Exception as exc:
+            return json.dumps({"ok": False, "success": False, "error": str(exc)[:300]}, ensure_ascii=False)
+        return json.dumps({"ok": False, "error": f"unsupported parallel tool: {nm}"}, ensure_ascii=False)
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futs = {
+                pool.submit(_run_one, name_a, args_a): tid_a,
+                pool.submit(_run_one, name_b, args_b): tid_b,
+            }
+            for fut in as_completed(futs):
+                tid = futs[fut]
+                try:
+                    out[tid] = fut.result()
+                except Exception as exc:
+                    out[tid] = json.dumps(
+                        {"ok": False, "success": False, "error": str(exc)[:300]},
+                        ensure_ascii=False,
+                    )
+        meta["_parallel_hands"] = True
+        meta["_parallel_hand_tools"] = [name_a, name_b]
+    except Exception:
+        return {}
+    return out
+
+
+def _tool_name_to_layer(name: str) -> str:
+    n = (name or "").strip().lower()
+    if n.startswith("mobile_") or n in ("tap", "swipe", "extract_otp"):
+        return "android" if n != "extract_otp" and n != "mobile_extract_otp" else "cross_end"
+    if n.startswith("windows_") or n.startswith("desktop_"):
+        return "desktop"
+    if n.startswith("browser_") or n == "hermes_execute":
+        return "web"
+    if n == "api_call":
+        return "cross_end"
+    return ""
+
+
+def _tool_name_to_user_text(name: str) -> str:
+    """工具名 → 思考面板人话（单条可读）。"""
+    n = (name or "").strip()
+    mapping = {
+        "mobile_extract_otp": "手机取验证码",
+        "mobile_run_steps": "手机执行步骤",
+        "mobile_run_case": "手机执行用例",
+        "mobile_get_ui_tree": "读取手机界面结构",
+        "mobile_get_screen_text": "识别手机屏幕文字",
+        "mobile_scrcpy_screenshot": "截取手机画面",
+        "hermes_execute": "浏览器跨层执行",
+        "windows_get_ui_tree": "读取桌面控件树",
+        "get_screen_text": "识别本机屏幕文字",
+        "get_screen_description": "描述本机屏幕",
+        "api_call": "调用接口",
+        "refine_test_plan": "优化测试用例",
+    }
+    if n in mapping:
+        return mapping[n]
+    if n.startswith("windows_"):
+        return f"桌面操作：{n.replace('windows_', '')}"
+    if n.startswith("desktop_"):
+        return f"桌面操作：{n.replace('desktop_', '')}"
+    if n.startswith("mobile_"):
+        return f"手机操作：{n.replace('mobile_', '')}"
+    if n.startswith("browser_"):
+        return f"网页操作：{n.replace('browser_', '')}"
+    return f"准备执行：{n}" if n else "准备下一步"
+
+
+def _action_records_from_recorder_capture(
+    recs: List[Any],
+    *,
+    platform: str = "web",
+) -> List[Dict[str, Any]]:
+    """ActionRecord 列表 → SSE action_records 字典（含 automation_layer）。"""
+    out: List[Dict[str, Any]] = []
+    try:
+        from modules.ai.ai_action_recorder import (
+            is_case_worthy_for_platform,
+            is_replayable_action_type,
+        )
+    except Exception:
+        is_replayable_action_type = lambda _a: True  # type: ignore
+        is_case_worthy_for_platform = lambda _a, _p: True  # type: ignore
+    for r in recs or []:
+        st = (getattr(r, "status", None) or "warning").strip().lower()
+        if st in ("running", "in_progress", "started", "progress"):
+            continue
+        if st in ("fail", "error", "failed"):
+            pass
+        elif st in ("ok", "done", "success", "completed", "complete"):
+            st = "success"
+        elif st not in ("warning", "skipped"):
+            st = "warning"
+        at = getattr(r, "action_type", "") or ""
+        if not is_replayable_action_type(at):
+            continue
+        # case 白名单：非平台可复用类型仍可进「执行动作」，但标记 skip_case
+        skip_case = not is_case_worthy_for_platform(at, platform)
+        out.append(
+            {
+                "action_type": at or "action",
+                "target": getattr(r, "target", "") or "",
+                "status": st,
+                "result": (getattr(r, "result", None) or "")[:100],
+                "has_vision": False,
+                "env_verify": None,
+                "automation_layer": getattr(r, "platform_layer", "") or "",
+                "input_value": getattr(r, "input_data", "") or "",
+                "device_id": getattr(r, "device_serial", "") or "",
+                "skip_case": skip_case,
+            }
+        )
+    return out
+
+
 def _record_cross_end_or_api_to_recorder(
     params: Any,
     tool_name: str,
     args: Optional[Dict[str, Any]],
     result_text: str,
-) -> None:
-    """把跨端工具（mobile_extract_otp/desktop_type_text）和 api_call 记录到 ActionRecorder。
-    这些工具不经 Hermes SSE，需在此单独记录，否则生成用例时步骤缺失。"""
+) -> List[Dict[str, Any]]:
+    """把跨端工具和 api_call 记录到 ActionRecorder，并返回可推送的 action_records。"""
     rec = getattr(params, "recorder", None)
     if rec is None:
-        return
+        return []
     try:
         ok = True
-        verified = None
         try:
             parsed = json.loads(result_text or "")
             if isinstance(parsed, dict):
                 if parsed.get("success") is False or parsed.get("ok") is False:
                     ok = False
-                if parsed.get("sms_otp"):
-                    verified = True
         except Exception:
             ok = True
-        # 构造 target：api_call 用 url，mobile_extract_otp 用 sender_hint，desktop_type_text 用 text 前 40 字
         a = args or {}
-        if tool_name == "api_call":
-            target = str(a.get("url") or a.get("method") or "api_call")[:80]
-        elif tool_name == "mobile_extract_otp":
-            target = str(a.get("sender_hint") or "短信验证码")[:80]
-        elif tool_name == "desktop_type_text":
-            target = str(a.get("text") or "")[:80] or "desktop_input"
-        else:
-            target = str(tool_name)[:80]
-        rec.capture_from_tool_event(
+        before = len(getattr(rec, "records", []) or [])
+        new_recs = rec.capture_from_tool_event(
             name=tool_name,
             args=a,
             result=result_text,
             status="ok" if ok else "error",
         )
+        # capture 可能已 append；以返回值优先
+        if not new_recs and hasattr(rec, "records"):
+            new_recs = list(rec.records[before:])
+        # job 结果带回 serial 时写入 device_id
+        try:
+            parsed2 = json.loads(result_text or "") if isinstance(result_text, str) else result_text
+            if isinstance(parsed2, dict):
+                serial = str(
+                    parsed2.get("device_id")
+                    or parsed2.get("serial")
+                    or (parsed2.get("result_payload") or {}).get("device_id")
+                    or ""
+                ).strip()
+                if serial:
+                    for r in new_recs or []:
+                        if not getattr(r, "device_serial", ""):
+                            r.device_serial = serial[:80]
+        except Exception:
+            pass
+        return _action_records_from_recorder_capture(
+            new_recs,
+            platform=str(getattr(rec, "platform", None) or "web"),
+        )
     except Exception:
-        pass
+        return []
 
 
 def _desktop_halt_user_facing(tool_name: str, result_text: str) -> str:
@@ -2156,15 +2390,24 @@ def chat_tool_schemas(
     # mobile_*：只要有手机连接就挂载
 
     # Windows 桌面工具可用性
-    if hands is not None and hands.get("desktop") is True:
+    # 网页任务：即使 hands.desktop=True 也不挂 windows_*（防止用桌面模拟浏览器）
+    msg_l = (message or "").strip().lower()
+    _webish = plat in ("web",) or bool(
+        re.search(r"https?://|www\.|\.com|\.cn|\.net|网页|网站|浏览器", msg_l)
+    )
+    if _webish and plat != "desktop":
+        enable_win = False if allow_desktop_windows_tools is not True else True
+    elif hands is not None and hands.get("desktop") is True:
         enable_win = True if allow_desktop_windows_tools is not False else False
     elif allow_desktop_windows_tools is not None:
         enable_win = allow_desktop_windows_tools
     else:
         enable_win = _should_enable_desktop_windows_tools(platform_type, message)
 
-    # cross_end desktop_* / mobile_* 工具
-    include_desk = True if (hands is None or hands.get("desktop")) else False
+    # cross_end：网页任务可挂手机双手，但不挂 desktop_* 外层（避免与 hermes 抢浏览器）
+    include_desk = False if (_webish and plat != "desktop") else (
+        True if (hands is None or hands.get("desktop")) else False
+    )
     include_phone = True if (hands is None or hands.get("phone")) else False
 
     # ===== 2. 挂载可用工具 =====
@@ -2400,6 +2643,11 @@ def _cross_end_strategy_lines() -> List[str]:
         "## 跨端工具原则（能力面，非固定剧本）",
         "- 【平台选择优先】浏览器/网页任务（打开网站、访问 URL、操作浏览器页面）→ 一律 hermes_execute 走 CDP，"
         "**绝对不要**用 desktop_* / windows_* 启动应用或按键盘，禁止在非浏览器窗口乱点！",
+        "- 【网页登录 + 手机验证码（强制顺序，禁止跳步）】",
+        "  1) 先 hermes_execute：打开 URL → 填账号/密码/手机号 → 点击「获取验证码」；",
+        "  2) 再 mobile_extract_otp / mobile_scrcpy_extract_otp 读验证码；",
+        "  3) 再 hermes_execute：把 {{sms_otp}} 填回网页并点击登录。",
+        "  **严禁**在未完成网页打开与「获取验证码」点击前，先调任何 mobile_* 取码工具。",
         "- 桌面 GUI（非浏览器本机应用：微信、钉钉、Word、记事本等）：用 desktop_* / windows_*；"
         "每步根据工具返回再决定下一步，禁止臆造成功。",
         "- 需要短信/通知验证码：调用 mobile_extract_otp，只用工具返回值；禁止编造验证码。",
@@ -2429,6 +2677,32 @@ def _cross_end_strategy_lines() -> List[str]:
         "- 用户目标可能是登录、注册、换绑或其他：按当前界面与目标自行选择控件描述与顺序，勿套死模板。",
         "- 任一步失败：最多再调整尝试 1 次（共 2 轮）；仍失败则停止并向用户如实说明，禁止长时间循环猜测。",
     ]
+
+
+def _web_otp_requires_browser_first(meta: Dict[str, Any], params: Optional["ChatToolLoopParams"]) -> Optional[str]:
+    """含 URL 的登录+取码任务：未完成浏览器段时拦截过早的 mobile 取码。"""
+    msg = ""
+    if params is not None:
+        msg = str(getattr(params, "message", "") or "")
+    if not msg:
+        return None
+    try:
+        from modules.ai.agent_intent import message_needs_browser, message_needs_mobile_await
+
+        if not (message_needs_browser(msg) and message_needs_mobile_await(msg)):
+            return None
+    except Exception:
+        return None
+    used = [str(x or "") for x in (meta.get("tools_used") or [])]
+    browser_touched = bool(meta.get("_platform_nav_done") or meta.get("_web_task_browser_touched"))
+    if any(u.startswith("hermes_execute") or u.startswith("openclaw_execute") for u in used):
+        browser_touched = True
+    if browser_touched:
+        return None
+    return (
+        "本任务含网页地址与手机验证码：请先调用 hermes_execute 完成打开页面、填写账号并点击「获取验证码」，"
+        "再调用 mobile_extract_otp / mobile_scrcpy_extract_otp。请勿跳过浏览器步骤。"
+    )
 
 
 def _build_system_prompt(
@@ -2933,6 +3207,43 @@ def _resolve_start_url_for_hermes(params: Optional[ChatToolLoopParams], args: Di
     return ""
 
 
+def _call_ensure_browser_before_agent(params: Optional[ChatToolLoopParams]) -> Tuple[bool, str, Dict[str, Any]]:
+    """调用平台浏览器就绪回调；兼容 (ok, err) / (ok, err, extras)。"""
+    extras: Dict[str, Any] = {}
+    if not params or not callable(getattr(params, "ensure_browser_before_agent", None)):
+        return True, "", extras
+    try:
+        raw = params.ensure_browser_before_agent()
+    except Exception as ex:
+        return False, str(ex)[:200], extras
+    if not isinstance(raw, tuple):
+        return bool(raw), "", extras
+    ok = bool(raw[0]) if len(raw) >= 1 else False
+    err = str(raw[1] or "") if len(raw) >= 2 else ""
+    if len(raw) >= 3 and isinstance(raw[2], dict):
+        extras = dict(raw[2])
+    return ok, err, extras
+
+
+def _platform_navigate_action_records(extras: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """平台预导航成功后写入实时用例的 navigate 步骤。"""
+    nav = str((extras or {}).get("navigate_url") or "").strip()
+    if not nav or nav.lower() in ("about:blank", "chrome://newtab/", "edge://newtab/"):
+        return []
+    return [
+        {
+            "action_type": "navigate",
+            "target": nav[:200],
+            "input_value": nav[:500],
+            "status": "success",
+            "result": f"navigate {nav[:120]}",
+            "has_vision": False,
+            "env_verify": None,
+            "automation_layer": "web",
+        }
+    ]
+
+
 def _handle_agent_execute(
     *,
     name: str,
@@ -2949,7 +3260,7 @@ def _handle_agent_execute(
         meta["tools_used"].append(f"{tool_key}_blocked")
         err_msg = (
             f"{tool_key} 已禁用：智能体未就绪或当前模式不允许自动化。"
-            "请先启动智能体后再试。"
+            "网页/浏览器任务请先在左上角启动智能体；勿用 windows_* 模拟开网页。"
         )
         return json.dumps(
             {
@@ -2979,30 +3290,25 @@ def _handle_agent_execute(
         )
 
     start_url = _resolve_start_url_for_hermes(params, args)
-    # ── 永久锁定：只要之前任何一轮成功执行过浏览器操作，就禁止再次 navigate ──
-    # 解决：mobile_extract_otp 等待短信期间 CDP 临时波动 → cur_url 空 → already_on=False
-    # → 下一轮重新 browser_navigate → 表单清空的严重缺陷
-    _permanent_forbid = False
-    _permanent_already_on_marker = False
+    # 清除跨任务残留锁；同时失效平台 DOM 短缓存，避免把「上一任务的页面结构」当成本轮已完成依据。
     try:
         from modules.ai.agent_task_context import get_task_context
-        _ctx_for_perm = get_task_context(getattr(params, "agent_session_id", None)) if params else None
-        if _ctx_for_perm:
-            if _ctx_for_perm.vars.get("_permanent_forbid_navigate"):
-                _permanent_forbid = True
-            # 历史中已有浏览器/桌面步骤，说明之前已经在页面上做过操作 → 禁止 navigate
-            if any(
-                str(_r.get("action_type") or "").startswith(("navigate", "goto", "click", "type", "input", "snapshot", "scroll", "tap", "open_app"))
-                or str(_r.get("action_type") or "").startswith(("browser_", "windows_"))
-                for _r in (getattr(_ctx_for_perm, "platform_actions_cache", None) or [])
-            ):
-                _permanent_already_on_marker = True
+
+        _ctx_clear = get_task_context(getattr(params, "agent_session_id", None)) if params else None
+        if _ctx_clear and isinstance(getattr(_ctx_clear, "vars", None), dict):
+            _ctx_clear.vars.pop("_permanent_forbid_navigate", None)
     except Exception:
         pass
     if params and getattr(params, "meta", None) and isinstance(params.meta, dict):
-        if params.meta.get("_permanent_forbid_navigate"):
-            _permanent_forbid = True
-        params.meta["_permanent_forbid_navigate"] = _permanent_forbid or params.meta.get("_permanent_forbid_navigate", False)
+        params.meta.pop("_permanent_forbid_navigate", None)
+    meta.pop("hermes_context_cached", None)
+    try:
+        from modules.ai.ai_external_browser_bridge import invalidate_dom_cache
+
+        invalidate_dom_cache()
+    except Exception:
+        pass
+
     cur_url = ""
     cur_title = ""
     try:
@@ -3011,49 +3317,44 @@ def _handle_agent_execute(
         cur_title = str(cur.get("title") or "").strip()
     except Exception:
         pass
-    # 桥接页状态为空时，从 CDP /json/list 取最佳 http 页，避免误判「未到达」而反复 navigate
-    # 优先匹配 start_url 所在 host 页面，其次取第一个非空白页
+    # 桥接页状态为空时，从 CDP /json/list 取最佳 http 页
     if not cur_url or cur_url.lower() in ("about:blank", "chrome://newtab/", "edge://newtab/"):
-        # ── 修复：永久锁定时即使拿不到 URL，也不认为是空白页（避免误 navigate） ──
-        if _permanent_forbid or _permanent_already_on_marker:
-            if start_url:
-                cur_url = start_url
-                cur_title = cur_title or "（使用历史已在目标页标记，已跳过 CDP 临时空白误判）"
-        else:
-            try:
-                from web_capture.cdp_browser import fetch_cdp_pages, _snap as _cdp_snap, _is_blank_page_url
-                from urllib.parse import urlparse as _urlparse
+        try:
+            from web_capture.cdp_browser import fetch_cdp_pages, _snap as _cdp_snap, _is_blank_page_url
+            from urllib.parse import urlparse as _urlparse
 
-                port = int((_cdp_snap() or {}).get("debug_port") or 0)
-                _pages = fetch_cdp_pages(port)
-                _best_any = None
-                _best_match = None
-                _target_netloc = ""
-                if start_url:
+            port = int((_cdp_snap() or {}).get("debug_port") or 0)
+            _pages = fetch_cdp_pages(port)
+            _best_any = None
+            _best_match = None
+            _target_netloc = ""
+            if start_url:
+                try:
+                    _target_netloc = (_urlparse(start_url).netloc or "").lower()
+                except Exception:
+                    pass
+            for item in _pages:
+                u = str(item.get("url") or "").strip()
+                if not u or _is_blank_page_url(u) or not u.lower().startswith(("http://", "https://")):
+                    continue
+                if _best_any is None:
+                    _best_any = item
+                if _target_netloc:
                     try:
-                        _target_netloc = (_urlparse(start_url).netloc or "").lower()
+                        if (_urlparse(u).netloc or "").lower() == _target_netloc:
+                            _best_match = item
+                            break
                     except Exception:
                         pass
-                for item in _pages:
-                    u = str(item.get("url") or "").strip()
-                    if not u or _is_blank_page_url(u) or not u.lower().startswith(("http://", "https://")):
-                        continue
-                    if _best_any is None:
-                        _best_any = item
-                    if _target_netloc:
-                        try:
-                            if (_urlparse(u).netloc or "").lower() == _target_netloc:
-                                _best_match = item
-                                break
-                        except Exception:
-                            pass
-                _chosen = _best_match or _best_any
-                if _chosen:
-                    cur_url = str(_chosen.get("url") or "").strip()
-                    cur_title = str(_chosen.get("title") or cur_title or "").strip()
-            except Exception:
-                pass
+            _chosen = _best_match or _best_any
+            if _chosen:
+                cur_url = str(_chosen.get("url") or "").strip()
+                cur_title = str(_chosen.get("title") or cur_title or "").strip()
+        except Exception:
+            pass
+
     def _url_looks_on_target(current: str, target: str) -> bool:
+        """严格判定：同 host 不够；需路径也基本一致，避免上一任务残留同站页被当成「本轮已完成」。"""
         if not current or not target:
             return False
         if current in ("about:blank", "chrome://newtab/", "edge://newtab/"):
@@ -3062,20 +3363,33 @@ def _handle_agent_execute(
             from urllib.parse import urlparse
 
             a, b = urlparse(current), urlparse(target)
-            if (a.scheme or "http") and (b.netloc or "").lower() and (a.netloc or "").lower() == (b.netloc or "").lower():
-                # 同 host 即视为已到达（路径可能因登录跳转略有不同）
+            if (a.netloc or "").lower() != (b.netloc or "").lower():
+                return False
+            ap = (a.path or "/").rstrip("/") or "/"
+            bp = (b.path or "/").rstrip("/") or "/"
+            # 同 host 且路径相同/互为前缀才算已到目标（登录跳转后路径可能略变）
+            if ap == bp:
                 return True
+            if bp != "/" and (ap.startswith(bp) or bp.startswith(ap)):
+                return True
+            # 仅同 host、路径完全无关 → 不算 already_on（强制本轮重新 navigate）
+            return False
         except Exception:
             pass
         return target.rstrip("/") in current or current.rstrip("/") in target
 
-    already_on = _url_looks_on_target(cur_url, start_url) if start_url else (
-        bool(cur_url) and cur_url not in ("about:blank", "chrome://newtab/", "edge://newtab/")
-    )
-    # ── 修复：永久标记覆盖（跨端等待期间 CDP 波动时，不丢失已在目标页状态） ──
-    if not already_on and (_permanent_forbid or _permanent_already_on_marker) and bool(cur_url or start_url):
-        already_on = True
-    # 平台侧清理空白标签：仅首次调用时执行（已在目标页时跳过，避免重复 CDP 开销）
+    # 本任务尚未完成平台预导航 / 首次 hermes：即使同站残留页也不锁死 navigate
+    _fresh_web = not bool(meta.get("_web_task_browser_touched"))
+    already_on = False
+    if start_url and not _fresh_web:
+        already_on = _url_looks_on_target(cur_url, start_url)
+    elif start_url and _fresh_web:
+        # 仅当平台本轮已预导航到目标后才视为已在页上
+        already_on = bool(meta.get("_platform_nav_done")) and _url_looks_on_target(cur_url, start_url)
+    elif cur_url and cur_url not in ("about:blank", "chrome://newtab/", "edge://newtab/"):
+        already_on = not _fresh_web
+
+    # 平台侧清理空白标签：仅首次调用时执行
     if not meta.get("_cleared_blank_tabs"):
         meta["_cleared_blank_tabs"] = True
         try:
@@ -3086,88 +3400,55 @@ def _handle_agent_execute(
         except Exception:
             pass
 
-    # 页面上下文采集：已有缓存时直接复用（避免每次重新执行大量 JS 评估）
-    # 仅在新工具调用/未导航到新页面前使用缓存上下文
-    _context_cache_key = "hermes_context_cached"
-    rich_context = meta.get(_context_cache_key) or ""
-    if not rich_context:
+    rich_context = ""
+    # 新任务首次：不注入上一页 DOM「快照」，避免模型以为表单已填完而跳步
+    if not _fresh_web or already_on:
         try:
             from modules.ai.ai_external_browser_bridge import get_rich_page_context
 
-            rich_context = get_rich_page_context(instr)
-            if rich_context:
-                meta[_context_cache_key] = rich_context[:8000]
+            rich_context = get_rich_page_context(instr) or ""
         except Exception:
             rich_context = ""
         if not rich_context:
             try:
                 from modules.ai.ai_external_browser_bridge import get_dom_context_pack, get_page_snapshot
 
-                rich_context = (get_dom_context_pack() or "").strip()
+                rich_context = (get_dom_context_pack(force=True) or "").strip()
                 if not rich_context:
                     rich_context = (get_page_snapshot() or "").strip()
-                if rich_context:
-                    meta[_context_cache_key] = rich_context[:8000]
             except Exception:
                 rich_context = ""
 
-    # 会话初始化逃生通道：部分 Hermes 构建要求先 browser_navigate 才能使用其他
-    # browser_* 工具；若无此例外，「禁止 navigate」会让 snapshot/click 全部报错，
-    # 智能体只能反复 snapshot 空转（死循环根因之一）
-    _nav_escape_note = (
-        "【唯一例外】若 browser_snapshot/browser_click 等报错提示需要先调用 "
-        "browser_navigate（会话未初始化），允许用**当前页面 URL** 调用一次 "
-        "browser_navigate 完成初始化，随后立即继续快照/操作；其余任何情况禁止 navigate。\n"
-    )
     if already_on and cur_url:
         instr = (
             f"【当前浏览器状态】URL={cur_url}，标题={cur_title}。\n"
-            f"⚠️ **重要警告**：浏览器已在目标页面，**禁止**再调用 browser_navigate 重新导航！\n"
-            f"   - browser_navigate 会导致页面重新加载，之前的操作都会丢失\n"
-            f"   - 请直接使用下方的 DOM 信息和 JavaScript 操作页面元素\n"
-            f"   - 如需刷新页面，使用 browser_console(expression=\"location.reload()\") 即可\n\n"
-            f"**禁止** skill_view / terminal / 新开标签 / 连续反复 browser_snapshot（全程最多 2 次）。\n"
-            + _nav_escape_note + "\n"
+            f"浏览器已在目标站，请按用户指令逐步操作，不要跳过步骤；"
+            f"不要重新 browser_navigate 到空白页或其它无关地址。\n"
+            f"**禁止** skill_view / terminal / 新开空白标签 / 连续反复 browser_snapshot（全程最多 2 次）。\n\n"
             + (f"{rich_context[:8000]}\n\n" if rich_context else "")
             + instr
         )
     elif start_url:
         instr = (
             f"【起始 URL】{start_url}\n"
-            f"平台通常已预导航到此 URL；若下方有 DOM 清单或页面状态信息，**禁止**再 browser_navigate。\n"
-            f"⚠️ **警告**：只有在确认浏览器仍在 about:blank 空白页，或 browser 工具报错提示"
-            f"需要先 browser_navigate（会话未初始化）时，才允许 **仅一次** browser_navigate。\n"
-            f"   - 调用前请先检查下方的【页面状态】信息\n"
-            f"   - 如果 URL 已经是目标地址，直接使用 DOM/JavaScript 操作\n"
-            f"   - 到达目标页后 **立即禁止** 再次 navigate\n"
-            f"   - 禁止新开空白标签；禁止连续反复 browser_snapshot（全程最多 2 次）\n\n"
-            + (f"{rich_context[:8000]}\n\n" if rich_context else "")
+            f"这是新任务：请**直接** browser_navigate 到上述目标地址（禁止 about:blank），"
+            f"然后按用户指令逐步填写/点击，不要因为浏览器里残留了其它页面而跳过导航或表单步骤。\n"
+            f"到达目标页后不要重复 navigate；禁止新开空白标签；禁止连续反复 browser_snapshot（全程最多 2 次）。\n\n"
             + instr
         )
     elif rich_context:
         instr = (
-            f"【浏览器状态】页面已就绪，请直接使用下方的 DOM/视觉/JavaScript 信息操作。\n"
-            f"⚠️ **禁止** browser_navigate（除非确认在 about:blank）、skill_view、terminal；"
-            f"禁止连续反复 browser_snapshot（全程最多 2 次）。\n"
-            + _nav_escape_note + "\n"
+            f"【浏览器状态】请按用户指令逐步操作，不要跳过步骤。\n"
+            f"若仍在 about:blank，先 navigate 到任务中的目标 URL；禁止 skill_view / terminal；"
+            f"禁止连续反复 browser_snapshot（全程最多 2 次）。\n\n"
             f"{rich_context[:8000]}\n\n"
             + instr
         )
 
-    # 供熔断：已在目标页时，navigate 出现 1 次即中止
+    # 仅当真实已在目标页时限制重复 navigate；新任务首次永不永久锁定
     meta["hermes_already_on_page"] = bool(already_on)
-    meta["hermes_forbid_navigate"] = bool(already_on or _permanent_forbid or _permanent_already_on_marker)
-    # ── 永久锁定：本轮已判定 forbid_navigate=True → 写入 task_ctx.vars 永久标记跨轮传递 ──
-    if meta["hermes_forbid_navigate"]:
-        try:
-            from modules.ai.agent_task_context import get_task_context
-            _ctx_perm_write = get_task_context(getattr(params, "agent_session_id", None)) if params else None
-            if _ctx_perm_write:
-                _ctx_perm_write.vars["_permanent_forbid_navigate"] = True
-            if params and getattr(params, "meta", None) and isinstance(params.meta, dict):
-                params.meta["_permanent_forbid_navigate"] = True
-        except Exception:
-            pass
+    meta["hermes_forbid_navigate"] = bool(already_on)
+    meta["_web_task_browser_touched"] = True
 
     plat = (getattr(params, "platform_type", None) or "auto") if params else "auto"
     vision_summary = ""
@@ -3335,13 +3616,35 @@ def _handle_agent_execute(
                 # 出现操作/推进工具 → 观测已服务于进展，进入新 epoch 重新计数
                 _browser_epoch_snaps = 0
                 _browser_epoch_consoles = 0
+                try:
+                    from modules.ai.ai_external_browser_bridge import invalidate_dom_cache
+
+                    invalidate_dom_cache()
+                except Exception:
+                    pass
                 return None
             if tn == "browser_snapshot":
                 if _browser_epoch_snaps >= _BROWSER_SNAPSHOT_CAP:
+                    _dom_refill = ""
+                    try:
+                        from modules.ai.ai_external_browser_bridge import (
+                            get_dom_context_pack,
+                            invalidate_dom_cache,
+                        )
+
+                        invalidate_dom_cache()
+                        _dom_refill = (get_dom_context_pack(force=True, skip_wait=True) or "")[:4000]
+                    except Exception:
+                        _dom_refill = ""
+                    _msg = (
+                        "页面快照已达上限（同一阶段最多 2 次）且期间无任何操作，本次 snapshot 已拦截。"
+                        "请基于下方 DOM 清单直接执行下一步操作或结束任务，禁止继续快照。"
+                    )
+                    if _dom_refill:
+                        _msg = _msg + "\n\n【平台注入 DOM（强制刷新）】\n" + _dom_refill
                     return _skip_payload(
                         "snapshot_cap",
-                        "页面快照已达上限（同一阶段最多 2 次）且期间无任何操作，本次 snapshot 已拦截。"
-                        "请基于已有快照 / DOM 清单直接执行下一步操作或结束任务，禁止继续快照。",
+                        _msg,
                         obs_name="browser_snapshot",
                         epoch_snapshots=_browser_epoch_snaps,
                     )
@@ -4254,10 +4557,7 @@ def run_ai_chat_with_tools(
                     )
                     continue
                 if callable(getattr(params, "ensure_browser_before_agent", None)):
-                    try:
-                        ok_br, err_br = params.ensure_browser_before_agent()
-                    except Exception as ex:
-                        ok_br, err_br = False, str(ex)[:200]
+                    ok_br, err_br, _br_extras = _call_ensure_browser_before_agent(params)
                     if not ok_br:
                         result_text = json.dumps(
                             {"ok": False, "error": err_br or "本机浏览器未就绪，无法执行自动化"},
@@ -4272,6 +4572,12 @@ def run_ai_chat_with_tools(
                             }
                         )
                         continue
+                    # 非流式路径：导航记录写入 meta，供后续用例导出
+                    _nav_recs = _platform_navigate_action_records(_br_extras)
+                    if _nav_recs:
+                        meta.setdefault("platform_pre_nav_records", []).extend(_nav_recs)
+                        meta["_platform_nav_done"] = True
+                        meta["_web_task_browser_touched"] = True
                 result_text = _handle_agent_execute(
                     name=name,
                     args=args,
@@ -4384,6 +4690,20 @@ def run_ai_chat_with_tools(
                 )
                 if getattr(params, "user_id", None) and not call_args.get("user_id"):
                     call_args["user_id"] = int(params.user_id)
+                if name in (
+                    "mobile_extract_otp",
+                    "mobile_scrcpy_extract_otp",
+                    "mobile_await_notification",
+                ):
+                    _otp_block = _web_otp_requires_browser_first(meta, params)
+                    if _otp_block:
+                        result_text = json.dumps(
+                            {"ok": False, "success": False, "error": _otp_block, "error_code": "WEB_OTP_ORDER"},
+                            ensure_ascii=False,
+                        )
+                        meta["tools_used"].append(f"{name}_blocked_order")
+                        messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                        continue
                 rem_tool = _remaining_deadline_sec(params)
                 if name.startswith("mobile_"):
                     # 阻塞路径无 UI 进度；仍传 abort，避免空等
@@ -4834,33 +5154,47 @@ def run_ai_chat_with_tools_stream(
             ):
                 if evt_type == "content_delta":
                     content_buf += evt_data
-                    # 每累计约 24 字推一次思考摘要，避免长时间无 UI 更新
-                    if len(content_buf) - last_think_len >= 24:
+                    # 同轮覆盖更新最后一条思考摘要（非整句追加），避免碎片刷屏
+                    if len(content_buf) - last_think_len >= 48:
                         last_think_len = len(content_buf)
                         snippet = content_buf.strip().replace("\n", " ")
                         if len(snippet) > 120:
                             snippet = snippet[:117] + "…"
                         if snippet:
-                            yield ("thinking", {"round": round_idx, "content": f"思考：{snippet}"})
+                            yield (
+                                "thinking",
+                                {
+                                    "round": round_idx,
+                                    "content": f"思考：{snippet}",
+                                    "replace_last": True,
+                                    "user_text": f"思考：{snippet}",
+                                },
+                            )
                 elif evt_type == "tool_call_delta":
                     tname = (evt_data or {}).get("name") or ""
                     if tname and tname not in announced_tools:
                         announced_tools.add(tname)
+                        _human = _tool_name_to_user_text(tname)
                         yield (
                             "thinking",
                             {
                                 "round": round_idx,
-                                "content": f"模型选定工具：{tname}，正在生成参数（尚未真正执行）…",
+                                "content": _human,
+                                "user_text": _human,
+                                "layer": _tool_name_to_layer(tname),
                             },
                         )
                     alen = int((evt_data or {}).get("arguments_len") or 0)
-                    if alen and alen - last_args_think >= 120:
+                    if alen and alen - last_args_think >= 200:
                         last_args_think = alen
+                        # 参数生成中：覆盖同类，不追加噪音
                         yield (
                             "thinking",
                             {
                                 "round": round_idx,
-                                "content": f"正在生成工具参数…（已约 {alen} 字符）",
+                                "content": "正在准备操作参数…",
+                                "user_text": "正在准备操作参数…",
+                                "replace_last": True,
                             },
                         )
                 elif evt_type == "done":
@@ -5091,7 +5425,21 @@ def run_ai_chat_with_tools_stream(
             tool_calls = []
 
         # 同轮多工具：按序执行；任一关键桌面步骤失败则取消后续（流程闸）
+        # 无依赖时预取 PC∥手机第一对结果
         pending_calls = [tc for tc in tool_calls if isinstance(tc, dict)]
+        _parallel_cache = _prefetch_parallel_hand_results(
+            pending_calls, meta=meta, params=params, abort_event=_abort
+        )
+        if _parallel_cache:
+            yield (
+                "thinking",
+                {
+                    "round": round_idx,
+                    "content": "PC与手机并行执行中",
+                    "user_text": "PC与手机并行执行中",
+                    "layer": "cross_end",
+                },
+            )
         idx_tc = 0
         while idx_tc < len(pending_calls):
             tc = pending_calls[idx_tc]
@@ -5114,6 +5462,7 @@ def run_ai_chat_with_tools_stream(
                 raw_args = json.dumps(raw_args, ensure_ascii=False) if raw_args is not None else ""
             args = _parse_tool_arguments(raw_args)
             result_text = ""
+            _prefetched = _parallel_cache.pop(tid, None) if _parallel_cache else None
 
             # 通知前端 tool call 开始
             args_summary = (
@@ -5134,6 +5483,54 @@ def run_ai_chat_with_tools_stream(
                 or str(list(args.keys()))
             )
             yield ("tool_call_start", {"round": round_idx, "tool": name, "args_summary": str(args_summary)[:200]})
+
+            if _prefetched is not None:
+                result_text = _prefetched
+                meta["tools_used"].append(name)
+                # 走跨端/桌面后处理与录制
+                if name.startswith("mobile_") or name.startswith("desktop_") or _is_cross_end_agent_tool(name):
+                    parsed_ce: Any = {}
+                    try:
+                        parsed_ce = json.loads(result_text)
+                        if isinstance(parsed_ce, dict):
+                            if isinstance(parsed_ce.get("variables"), dict):
+                                meta.setdefault("cross_end_vars", {}).update(parsed_ce["variables"])
+                            if parsed_ce.get("sms_otp"):
+                                meta.setdefault("cross_end_vars", {})["sms_otp"] = parsed_ce["sms_otp"]
+                    except Exception:
+                        pass
+                    if name.startswith("mobile_"):
+                        _record_mobile_tool_outcome(meta, name, result_text)
+                    _ce_export = _record_cross_end_or_api_to_recorder(
+                        params, name, args, result_text
+                    )
+                    if _ce_export:
+                        yield ("action_records", _ce_export)
+                elif name.startswith("windows_") or name in ("get_screen_text", "get_screen_description"):
+                    try:
+                        _rec = getattr(params, "recorder", None)
+                        if _rec is not None:
+                            _nr = _rec.capture_from_tool_event(
+                                name=name, args=args, result=result_text, status=""
+                            )
+                            _ex = _action_records_from_recorder_capture(
+                                _nr,
+                                platform=str(
+                                    getattr(_rec, "platform", None)
+                                    or getattr(params, "platform_type", None)
+                                    or "web"
+                                ),
+                            )
+                            if _ex:
+                                yield ("action_records", _ex)
+                    except Exception:
+                        pass
+                yield ("tool_call_result", {
+                    "round": round_idx, "tool": name,
+                    "result_preview": (result_text or "")[:500],
+                })
+                messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                continue
 
             if name in ("hermes_execute", "openclaw_execute"):
                 if _hermes_retry_blocked(meta):
@@ -5165,10 +5562,7 @@ def run_ai_chat_with_tools_stream(
                     )
                     return
                 if callable(getattr(params, "ensure_browser_before_agent", None)):
-                    try:
-                        ok_br, err_br = params.ensure_browser_before_agent()
-                    except Exception as ex:
-                        ok_br, err_br = False, str(ex)[:200]
+                    ok_br, err_br, _br_extras = _call_ensure_browser_before_agent(params)
                     if not ok_br:
                         result_text = json.dumps(
                             {"ok": False, "error": err_br or "本机浏览器未就绪，无法执行自动化"},
@@ -5181,6 +5575,11 @@ def run_ai_chat_with_tools_stream(
                         })
                         messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
                         continue
+                    _nav_recs = _platform_navigate_action_records(_br_extras)
+                    if _nav_recs:
+                        meta["_platform_nav_done"] = True
+                        meta["_web_task_browser_touched"] = True
+                        yield ("action_records", _nav_recs)
                 result_text = ""
                 _trace_q: Any = None
                 try:
@@ -5310,11 +5709,13 @@ def run_ai_chat_with_tools_stream(
                         from modules.ai.ai_action_recorder import (
                             is_observation_tool as _is_obs_tool,
                             is_replayable_action_type as _is_replayable,
+                            is_case_worthy_for_platform as _is_case_worthy,
                             lift_console_expression as _lift_console,
                         )
                     except Exception:
                         _is_obs_tool = lambda _n: False  # type: ignore
                         _is_replayable = lambda _a: True  # type: ignore
+                        _is_case_worthy = lambda _a, _p: True  # type: ignore
                         _lift_console = lambda _e: None  # type: ignore
                     for te in tool_evs[-80:]:
                         if not isinstance(te, dict):
@@ -5336,8 +5737,7 @@ def run_ai_chat_with_tools_stream(
                                 continue
                         elif _is_obs_tool(te_name):
                             continue
-                        # 平台工具（browser_*/windows_*/mobile_*）判定：这类工具即使 result=None、status=running
-                        # 也代表 AI 确实调用过，应当被记录到「执行动作」和「实时用例」。
+                        # 平台工具：无终态 result 时不得造假绿；running/无 result 不进实时用例
                         is_platform_tool = (
                             te_name.startswith("browser_")
                             or te_name.startswith("windows_")
@@ -5349,29 +5749,19 @@ def run_ai_chat_with_tools_stream(
                         # final result 事件中的工具应视为已完成；若有 result 但 status=running，视为 completed
                         if te_has_result and te_status in ("running", "in_progress", "started", "progress", ""):
                             te_status = "completed"
-                        # 【修复】所有平台工具（Web/桌面/移动端）有 args 就不跳过
-                        if is_platform_tool and te_args:
-                            if not te_status or te_status in ("running", "in_progress", "started", "progress"):
-                                te_status = "completed"
-                            if not te_has_result:
-                                # 造一个占位 result，让后续 capture → status 不会变 warning 又被 case_step 过滤
-                                te["result"] = {"ok": True}
-                                te_has_result = True
-                        # 【修复】平台工具即使无 args 但有 name 也要保留（如 mobile_extract_otp 可能无 args）
-                        if is_platform_tool and not te_args and not te_has_result:
-                            # 至少造一个占位 result
-                            te["result"] = {"ok": True}
-                            te_has_result = True
-                            if not te_status or te_status in ("running", "in_progress", "started", "progress"):
-                                te_status = "completed"
+                        # 无 result 的进行中平台工具：跳过（不进 case）；有 result 才收录
+                        if is_platform_tool and not te_has_result:
+                            if te_status in ("running", "in_progress", "started", "progress", ""):
+                                continue
                         if te_status in ("running", "in_progress", "started", "progress"):
                             if te.get("result") is None and te_seen == "tool_calls_delta":
-                                # 非平台工具 + 无 result 的纯 delta，可跳过
                                 if not is_platform_tool:
                                     continue
                             if te.get("result") is None and not te_args:
                                 if not is_platform_tool:
                                     continue
+                            if te.get("result") is None:
+                                continue
                         try:
                             new_recs = rec_tmp.capture_from_tool_event(
                                 name=str(te.get("name") or "tool"),
@@ -5391,6 +5781,11 @@ def run_ai_chat_with_tools_stream(
                                     st = "warning"
                                 if not _is_replayable(r.action_type):
                                     continue
+                                _plat_case = str(
+                                    getattr(getattr(params, "recorder", None), "platform", None)
+                                    or getattr(params, "platform_type", None)
+                                    or "web"
+                                )
                                 out_recs.append(
                                     {
                                         "action_type": r.action_type,
@@ -5399,6 +5794,10 @@ def run_ai_chat_with_tools_stream(
                                         "result": (r.result or "")[:100],
                                         "has_vision": False,
                                         "env_verify": None,
+                                        "automation_layer": getattr(r, "platform_layer", "") or "",
+                                        "input_value": getattr(r, "input_data", "") or "",
+                                        "device_id": getattr(r, "device_serial", "") or "",
+                                        "skip_case": not _is_case_worthy(r.action_type, _plat_case),
                                     }
                                 )
                         except Exception:
@@ -5587,15 +5986,6 @@ def run_ai_chat_with_tools_stream(
                                 )
                             except Exception:
                                 pass
-                            # 如果 fallback 解析到了导航/点击/输入步骤，设置 forbid_navigate
-                            if any(r["action_type"] in ("navigate", "click", "input", "type", "scroll") for r in fb_recs):
-                                try:
-                                    from modules.ai.agent_task_context import get_task_context
-                                    _ctx_fb = get_task_context(getattr(params, "agent_session_id", None)) if params else None
-                                    if _ctx_fb:
-                                        _ctx_fb.vars["_permanent_forbid_navigate"] = True
-                                except Exception:
-                                    pass
                             yield ("action_records", fb_recs)
                     except Exception as _fb_ex:
                         try:
@@ -5792,6 +6182,24 @@ def run_ai_chat_with_tools_stream(
                         call_args["user_id"] = int(params.user_id)
                     except Exception:
                         pass
+                if name in (
+                    "mobile_extract_otp",
+                    "mobile_scrcpy_extract_otp",
+                    "mobile_await_notification",
+                ):
+                    _otp_block = _web_otp_requires_browser_first(meta, params)
+                    if _otp_block:
+                        result_text = json.dumps(
+                            {"ok": False, "success": False, "error": _otp_block, "error_code": "WEB_OTP_ORDER"},
+                            ensure_ascii=False,
+                        )
+                        meta["tools_used"].append(f"{name}_blocked_order")
+                        yield ("tool_call_result", {
+                            "round": round_idx, "tool": name,
+                            "result_preview": result_text[:500],
+                        })
+                        messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                        continue
                 rem_tool = _remaining_deadline_sec(params)
                 if name.startswith("mobile_"):
                     for pevt, pdata in _run_mobile_tool_with_progress(
@@ -5803,7 +6211,13 @@ def run_ai_chat_with_tools_stream(
                         if pevt == "progress":
                             yield (
                                 "thinking",
-                                {"round": round_idx, "content": str(pdata)},
+                                {
+                                    "round": round_idx,
+                                    "content": "等待手机本机执行…",
+                                    "user_text": "等待手机本机执行…",
+                                    "replace_last": True,
+                                    "layer": "android",
+                                },
                             )
                         elif pevt == "result":
                             result_text = str(pdata)
@@ -5832,81 +6246,45 @@ def run_ai_chat_with_tools_stream(
                     pass
                 if name.startswith("mobile_"):
                     _record_mobile_tool_outcome(meta, name, result_text)
-                _record_cross_end_or_api_to_recorder(params, name, call_args, result_text)
+                _ce_export = _record_cross_end_or_api_to_recorder(
+                    params, name, call_args, result_text
+                )
                 try:
-                    _ce_ok = isinstance(parsed_ce, dict) and parsed_ce.get("success") is not False and parsed_ce.get("ok") is not False
-                    _ce_tgt = ""
-                    if name == "mobile_extract_otp":
-                        _ce_tgt = str(call_args.get("sender_hint") or "短信验证码")[:120]
-                    elif name == "mobile_run_steps":
-                        _ce_tgt = f"手机回放 {len(call_args.get('steps') or [])} 步"
-                    elif name == "mobile_run_case":
-                        _ce_tgt = f"用例 #{call_args.get('case_id')}"
-                    elif name.startswith("desktop_"):
-                        _ce_tgt = str(call_args.get("description") or call_args.get("app_name") or call_args.get("text") or name)[:120]
+                    if _ce_export:
+                        yield ("action_records", _ce_export)
                     else:
-                        _ce_tgt = name[:120]
-                    _ce_status = "success" if _ce_ok else "failed"
-                    # mobile_run_steps：按 steps IR 逐条下发实时用例步骤，
-                    # 否则面板只有一条"手机回放 N 步"的聚合记录
-                    _ce_rows = None
-                    if name == "mobile_run_steps" and isinstance(call_args.get("steps"), list):
-                        _rp_ce = parsed_ce.get("result_payload") if isinstance(parsed_ce, dict) else None
-                        _sres_ce = (
-                            _rp_ce.get("results")
-                            if isinstance(_rp_ce, dict) and isinstance(_rp_ce.get("results"), list)
-                            else []
+                        _ce_ok = (
+                            isinstance(parsed_ce, dict)
+                            and parsed_ce.get("success") is not False
+                            and parsed_ce.get("ok") is not False
                         )
-                        _rows_ce = []
-                        for _i_ce, _sd_ce in enumerate(call_args["steps"]):
-                            if not isinstance(_sd_ce, dict):
-                                continue
-                            _sr_ce = (
-                                _sres_ce[_i_ce]
-                                if _i_ce < len(_sres_ce) and isinstance(_sres_ce[_i_ce], dict)
-                                else {}
-                            )
-                            _ok_i_ce = _sr_ce.get("success")
-                            if _ok_i_ce is None:
-                                _ok_i_ce = _ce_ok
-                            _rows_ce.append(
-                                {
-                                    "action_type": f"mobile_{str(_sd_ce.get('action') or 'step')}",
-                                    "target": str(
-                                        _sd_ce.get("stepDescription")
-                                        or _sd_ce.get("step_description")
-                                        or _sd_ce.get("description")
-                                        or _sd_ce.get("text")
-                                        or _sd_ce.get("selector")
-                                        or _sd_ce.get("package")
-                                        or _sd_ce.get("action")
-                                        or "step"
-                                    )[:120],
-                                    "status": "success" if _ok_i_ce else "failed",
-                                    "result": str(
-                                        _sr_ce.get("errorMessage")
-                                        or _sr_ce.get("error_message")
-                                        or ""
-                                    )[:100],
-                                    "has_vision": False,
-                                    "env_verify": None,
-                                }
-                            )
-                        if _rows_ce:
-                            _ce_rows = _rows_ce
-                    if _ce_rows is not None:
-                        yield ("action_records", _ce_rows)
-                    else:
+                        _ce_tgt = name[:120]
+                        if name == "mobile_extract_otp":
+                            _ce_tgt = str(call_args.get("sender_hint") or "短信验证码")[:120]
+                        elif name == "mobile_run_steps":
+                            _ce_tgt = f"手机回放 {len(call_args.get('steps') or [])} 步"
+                        elif name == "mobile_run_case":
+                            _ce_tgt = f"用例 #{call_args.get('case_id')}"
+                        elif name.startswith("desktop_"):
+                            _ce_tgt = str(
+                                call_args.get("description")
+                                or call_args.get("app_name")
+                                or call_args.get("text")
+                                or name
+                            )[:120]
                         yield (
                             "action_records",
                             [
                                 {
                                     "action_type": name,
                                     "target": _ce_tgt,
-                                    "status": _ce_status,
+                                    "status": "success" if _ce_ok else "failed",
                                     "result": (result_text or "")[:100],
                                     "has_vision": False,
                                     "env_verify": None,
+                                    "automation_layer": _tool_name_to_layer(name),
+                                    "input_value": "",
+                                    "device_id": "",
                                 }
                             ],
                         )

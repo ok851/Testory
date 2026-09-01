@@ -214,7 +214,8 @@ class HermesGatewayClient:
     def _default_system_prompt(self) -> str:
         return (
             "【最高优先级】你是 Testory 跨层自动化执行代理。"
-            "网页：CDP 已 attach 且平台常已预导航；禁止再 browser_navigate / 新开空白标签；"
+            "网页：CDP 已 attach；若不在目标页则直接 browser_navigate 到任务 URL（禁止 about:blank）；"
+            "按用户指令逐步执行，不要跳步；"
             "优先用指令内 DOM 控件清单 click/type；"
             "有 DOM 清单时直接操作，不要先调 browser_snapshot；"
             "browser_snapshot 是 DOM/a11y ref（非截图）：仅难定位时兜底（全程最多 2 次，禁止连续反复）；视觉仅兜底。"
