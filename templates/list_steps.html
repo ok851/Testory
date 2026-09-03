@@ -3899,8 +3899,15 @@ function changePage(page) {
                 || 'click'
             ).trim();
             pick2.record_action = action;
-            let description = (document.getElementById(mode === 'edit' ? 'editStepDescription' : 'stepDescription') || {}).value || '';
-            description = String(description).trim() || label;
+            // 桌面捕获编辑：元素名称以可见输入框为准，禁止被隐藏 #editStepDescription
+            // 残留值（如上一 Web 步骤的「输入账号」）覆盖。
+            let description = label;
+            try {
+                const hiddenDesc = (document.getElementById(mode === 'edit' ? 'editStepDescription' : 'stepDescription') || {});
+                if (hiddenDesc && typeof hiddenDesc.value === 'string') {
+                    hiddenDesc.value = label;
+                }
+            } catch (_e) {}
             const spec = Object.assign({}, pick2.desktop_spec || {});
             if (pick2.rectangle) {
                 const r = pick2.rectangle;

@@ -1143,6 +1143,17 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         ver = ""
     else:
         ver = str(ver).strip()
+    # 桌面规格：此前未落库导致 launch_app/attach_window 回放缺参
+    ds = step.get("desktop_spec")
+    if ds is not None and not isinstance(ds, str):
+        try:
+            ds = json.dumps(ds, ensure_ascii=False)
+        except Exception:
+            ds = ""
+    elif ds is None:
+        ds = ""
+    else:
+        ds = str(ds).strip()
     return {
         "case_id": case_id,
         "action": action,
@@ -1161,6 +1172,7 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         "locator_candidates": lc,
         "click_repeat_count": crc,
         "automation_layer": layer,
+        "desktop_spec": ds,
         "mobile_spec": ms,
         "cross_end_spec": ces,
         "stage_info": stg,
@@ -8675,6 +8687,7 @@ def api_ai_task_execute():
                 """Web 需要时拉起浏览器；起始 URL 从任务原文解析。
                 首次导航到目标 URL 时通过 pending_nav_record 供实时用例收录。
                 返回 (ok, err) 或 (ok, err, extras)。
+                用户手动关窗后：必须探测 CDP 存活，禁止凭旧 hermes_cdp_attached 空转。
                 """
                 from modules.ai.agent_intent import extract_task_url, message_needs_browser
 
@@ -8683,12 +8696,34 @@ def api_ai_task_execute():
                     return True, ""
                 nav_url = (extract_task_url(task) or url or "").strip()
                 extras = {}
-                if browser_ready_holder["ready"]:
+                if not hermes_available:
+                    return False, "智能体未启动，无法执行浏览器自动化"
+                try:
+                    from modules.ai.ai_external_browser_bridge import (
+                        ensure_browser,
+                        is_browser_alive,
+                        force_cleanup_browser,
+                    )
                     from modules.hermes.hermes_config import hermes_cdp_attached
-                    if hermes_cdp_attached():
+
+                    alive = bool(is_browser_alive())
+                    attached = bool(hermes_cdp_attached())
+
+                    # 配置里还有 CDP，但进程/端口已死：清干净再启动
+                    if attached and not alive:
+                        uat_logger.info("[Browser] 检测到 CDP 配置残留但浏览器已关闭，正在清理并重启…")
+                        try:
+                            force_cleanup_browser()
+                        except Exception:
+                            pass
+                        attached = False
+                        browser_ready_holder["ready"] = False
+                        browser_ready_holder["nav_done"] = False
+
+                    if browser_ready_holder["ready"] and alive and attached:
+                        # 同任务内再次调用：若目标 URL 尚未导航则补一次
                         if nav_url and not browser_ready_holder.get("nav_done"):
                             try:
-                                from modules.ai.ai_external_browser_bridge import ensure_browser
                                 ensure_browser(headless=False, url=nav_url, browser="edge")
                                 browser_ready_holder["nav_done"] = True
                                 browser_ready_holder["pending_nav_record"] = nav_url
@@ -8700,25 +8735,20 @@ def api_ai_task_execute():
                             extras["navigate_url"] = pending
                             browser_ready_holder["pending_nav_record"] = ""
                         return (True, "", extras) if extras else (True, "")
-                if not hermes_available:
-                    return False, "智能体未启动，无法执行浏览器自动化"
-                try:
-                    from modules.ai.ai_external_browser_bridge import ensure_browser, is_browser_alive, force_cleanup_browser
-                    from modules.hermes.hermes_config import hermes_cdp_attached
-                    if hermes_cdp_attached() and not is_browser_alive():
-                        force_cleanup_browser()
-                    if not hermes_cdp_attached() or not is_browser_alive():
+
+                    # 需要启动或重新附着
+                    if not alive or not attached:
                         ok = ensure_browser(headless=False, url=nav_url or "", browser="edge")
                         if not ok:
                             if run_platform == "auto":
                                 return True, ""
-                            return False, "本机浏览器启动失败，请确认已安装 Edge/Chrome"
+                            return False, "本机浏览器启动失败，请确认已安装 Edge/Chrome，或关闭残留调试进程后重试"
                         if nav_url:
                             browser_ready_holder["nav_done"] = True
                             browser_ready_holder["pending_nav_record"] = nav_url
                             extras["navigate_url"] = nav_url
                     elif nav_url and not browser_ready_holder.get("nav_done"):
-                        # 已有会话：仅首次导航，后续不再重复
+                        # 已有存活会话：导航到本任务目标（同站不同路径也会 goto）
                         try:
                             ensure_browser(headless=False, url=nav_url, browser="edge")
                             browser_ready_holder["nav_done"] = True
@@ -8726,11 +8756,14 @@ def api_ai_task_execute():
                             extras["navigate_url"] = nav_url
                         except Exception:
                             pass
-                    browser_ready_holder["ready"] = True
-                    if not hermes_cdp_attached():
+
+                    # 启动后再验一次存活
+                    if not is_browser_alive():
                         if run_platform == "auto":
                             return True, ""
-                        return False, "浏览器 CDP 未连接"
+                        return False, "浏览器已启动但 CDP 不可用（窗口可能已关闭），请重试"
+
+                    browser_ready_holder["ready"] = True
                     pending = (browser_ready_holder.get("pending_nav_record") or "").strip()
                     if pending:
                         extras["navigate_url"] = pending
@@ -8963,6 +8996,13 @@ def api_ai_task_execute():
                 _page_snapshot = ""
                 _probe_registry = None
                 _dom_context_pack = ""
+                # 新任务：丢弃上一轮 DOM 短缓存，避免 Agent 拿旧页结构当本轮已完成
+                try:
+                    from modules.ai.ai_external_browser_bridge import invalidate_dom_cache
+
+                    invalidate_dom_cache()
+                except Exception:
+                    pass
 
                 screen_share_state = _screen_share_states.get(user_id, {})
                 from modules.execution.execution_events import ExecutionEventCollector, ROUTE_DECIDED
@@ -14269,6 +14309,21 @@ def api_run_case(case_id):
                         pass
     
                     action = step.get('action', '')
+                    # 生产级别名：AI/录制常产出 type/fill，执行器只认 input
+                    if isinstance(action, str):
+                        _act_low = action.strip().lower()
+                        if _act_low in ("type", "fill"):
+                            action = "input"
+                            step = dict(step)
+                            step["action"] = "input"
+                        elif _act_low in ("goto",):
+                            action = "navigate"
+                            step = dict(step)
+                            step["action"] = "navigate"
+                        elif _act_low == "click_element":
+                            action = "click"
+                            step = dict(step)
+                            step["action"] = "click"
                     selector_type = step.get('selector_type', 'css')
                     # 变量替换：支持 {{变量名}} 语法
                     selector_value = db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id)
@@ -14477,7 +14532,8 @@ def api_run_case(case_id):
                             uat_logger.log_automation_step("navigate", fixed_url, "导航到URL")
                             sync_navigate_to(fixed_url)
                         else:
-                            uat_logger.warning("导航步骤URL为空，跳过")
+                            # 禁止「空导航跳过仍标成功」假绿
+                            raise Exception("导航步骤URL为空，无法执行（禁止跳过假成功）")
                     elif action == 'click':
                                 if not selector_value:
                                     raise Exception("点击步骤缺少选择器")
@@ -14636,6 +14692,8 @@ def api_run_case(case_id):
                                 uat_logger.error(f"执行下拉框选择操作时出错: {select_error}")
                                 # 直接抛出错误，视为测试用例执行失败
                                 raise
+                        else:
+                            raise Exception("下拉选择步骤缺少选择器或选项值，禁止跳过假成功")
                     elif action == 'date':
                         # 新增：日期选择器操作
                         if selector_value and input_value:
@@ -14647,6 +14705,8 @@ def api_run_case(case_id):
                                 uat_logger.error(f"执行日期选择操作时出错: {date_error}")
                                 # 直接抛出错误，视为测试用例执行失败
                                 raise
+                        else:
+                            raise Exception("日期选择步骤缺少选择器或日期值，禁止跳过假成功")
                     elif action == 'scroll':
                         try:
                             _run_db_step_scroll(
@@ -14748,7 +14808,7 @@ def api_run_case(case_id):
                                 # 直接抛出错误，视为测试用例执行失败
                                 raise
                         else:
-                            uat_logger.warning("进入iframe操作缺少选择器")
+                            raise Exception("进入iframe操作缺少选择器，禁止跳过假成功")
                     elif action == 'exit_iframe':
                         # 跳出 iframe：清除 automation.current_iframe，后续步骤回到主文档（除非步骤自身勾选 iframe）
                         try:
@@ -14769,6 +14829,16 @@ def api_run_case(case_id):
                                 f"（action={action!r}，automation_layer={step.get('automation_layer')!r}）。"
                                 "请在步骤编辑器中确认自动化层为「桌面」并保存后重试。"
                             )
+                        if _layer_web == 'android':
+                            raise RuntimeError(
+                                f"步骤 #{step.get('id')} 为 Android 步骤，但未通过移动端执行器完成"
+                                f"（action={action!r}）。请确认 ENABLE_MOBILE=1。"
+                            )
+                        # Fail-closed：未知 action 不得标成功（历史假绿根因）
+                        raise RuntimeError(
+                            f"不支持的步骤类型 action={action!r}（步骤 #{step.get('id')}）。"
+                            "请编辑步骤选择平台支持的动作，或重新由 AI 生成完整用例。"
+                        )
     
                     # 🔥 修复：步骤执行到这里说明成功，更新状态为 success
                     step_status = 'success'

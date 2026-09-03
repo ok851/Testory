@@ -51,23 +51,14 @@ def case_steps_include_web(steps: List[Dict[str, Any]]) -> bool:
 def ensure_mixed_run_environment(steps: List[Dict[str, Any]]) -> Optional[str]:
     """
     混排用例运行前检查。返回 None 表示通过；否则为错误/警告文案。
-    跨端桥接步骤（extract_otp / api_call）不参与 Android 混排检查，
-    因为它们始终从桌面执行器内部调用，不需要独立 Android 运行环境。
+
+    生产策略：允许 Web / Desktop / Android 在同一用例内**串行**混排（与 AI 多端联动一致）。
+    仅校验各端运行时是否可用；跨端桥接步骤（extract_otp / api_call）不额外要求手机环境预检
+    （由桌面执行器内部按需调用）。
     """
     has_desktop = case_steps_include_desktop(steps)
     has_android = case_steps_include_android(steps)
     has_web = case_steps_include_web(steps)
-
-    # 跨端桥接步骤（extract_otp/api_call）不计入混排检查
-    _cross_end_count = sum(
-        1 for s in (steps or [])
-        if isinstance(s, dict) and (s.get("action") or "").strip().lower() in ("extract_otp", "api_call")
-    )
-
-    if has_android and has_web:
-        return "暂不支持 Web 与 Android 步骤混排，请将用例拆分为独立平台用例。"
-    if has_android and has_desktop:
-        return "暂不支持 Android 与桌面步骤混排，请将用例拆分为独立平台用例。"
 
     if has_android:
         try:
@@ -79,19 +70,18 @@ def ensure_mixed_run_environment(steps: List[Dict[str, Any]]) -> Optional[str]:
         except ImportError:
             return "移动端模块未安装"
 
-    if not has_desktop:
-        return None
-    if not desktop_runtime_available():
-        detail = desktop_runtime_unavailable_reason()
-        base = (
-            "用例包含桌面自动化步骤，但当前环境不支持（需 Windows 且已安装 opencv-python、mss、numpy）。"
-        )
-        return detail or base
-    if resolve_playwright_headless(True) and has_web:
-        return (
-            "用例包含桌面与 Web 混排步骤：请将 PLAYWRIGHT_HEADLESS 设为 0，"
-            "并在有交互桌面的用户会话中运行平台。"
-        )
+    if has_desktop:
+        if not desktop_runtime_available():
+            detail = desktop_runtime_unavailable_reason()
+            base = (
+                "用例包含桌面自动化步骤，但当前环境不支持（需 Windows 且已安装 opencv-python、mss、numpy）。"
+            )
+            return detail or base
+        if resolve_playwright_headless(True) and has_web:
+            return (
+                "用例包含桌面与 Web 混排步骤：请将 PLAYWRIGHT_HEADLESS 设为 0，"
+                "并在有交互桌面的用户会话中运行平台。"
+            )
     return None
 
 
@@ -288,7 +278,18 @@ def validate_desktop_step_result(result: Any, action: str) -> Dict[str, Any]:
         raise RuntimeError(
             f"桌面步骤返回无效结果（期望 dict，得到 {type(result).__name__}）"
         )
-    status = str(result.get("status") or "success").strip().lower()
+    status = str(result.get("status") or "").strip().lower()
+    if not status:
+        # 兼容仅返回 ok/success 布尔、无 status 字段的旧结果
+        if result.get("success") is True or result.get("ok") is True:
+            status = "success"
+        elif result.get("success") is False or result.get("ok") is False:
+            raise RuntimeError(result.get("error") or "桌面步骤执行失败")
+        else:
+            raise RuntimeError(
+                result.get("error")
+                or "桌面步骤未返回 status，禁止默认成功（fail-closed）"
+            )
     if status not in ("success", "ok", "passed", "warning"):
         raise RuntimeError(result.get("error") or "桌面步骤执行失败")
     if act in DESKTOP_POINTER_ACTIONS:

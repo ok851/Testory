@@ -123,17 +123,20 @@ def normalize_automation_layer(step: Dict[str, Any]) -> str:
         return layer
     if layer == "cross_end":
         return "desktop"
-    try:
-        from modules.mobile.mobile_automation import _MOBILE_ONLY_ACTIONS, normalize_mobile_action
-
-        if normalize_mobile_action(action) in _MOBILE_ONLY_ACTIONS:
-            return "android"
-        if layer == "android":
-            return "android"
-    except ImportError:
-        pass
-    if action in _DESKTOP_ACTIONS or action in ("fill",):
+    # 显式平台 spec 优先于动作名推断（避免 click/input 误判）
+    if step.get("desktop_spec"):
         return "desktop"
+    if step.get("mobile_spec"):
+        return "android"
+    # 仅「移动端专有动作名」才推断为 android；禁止把 click→tap / input→input_text
+    # 的别名映射用于层推断（否则缺 automation_layer 的 Web 步骤会被当成手机步骤跳过/假绿）
+    _UNAMBIGUOUS_MOBILE = frozenset({
+        "open_app", "close_app", "tap", "input_text", "back", "home",
+        "ai_tap", "ai_input", "swipe",
+    })
+    if action in _UNAMBIGUOUS_MOBILE:
+        return "android"
+    # 共享动作（click/input/wait/assert）缺层时默认 web，勿因在 _DESKTOP_ACTIONS 中就判桌面
     return "web"
 
 

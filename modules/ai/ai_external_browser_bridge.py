@@ -26,6 +26,31 @@ _dom_cache: Dict[str, Dict[str, Any]] = {}
 import time as _time_mod
 
 
+def urls_match_for_browser_reuse(page_url: str, target: str) -> bool:
+    """同 host 且路径基本一致才视为已在目标页（避免同站旧页被当成已完成）。"""
+    if not target:
+        return True
+    cur = (page_url or "").strip()
+    tgt = target.strip()
+    if not cur or cur.lower() in ("about:blank", "chrome://newtab/", "edge://newtab/"):
+        return False
+    try:
+        from urllib.parse import urlparse
+
+        a, b = urlparse(cur), urlparse(tgt)
+        if (a.netloc or "").lower() != (b.netloc or "").lower():
+            return False
+        ap = (a.path or "/").rstrip("/") or "/"
+        bp = (b.path or "/").rstrip("/") or "/"
+        if ap == bp:
+            return True
+        if bp != "/" and (ap.startswith(bp) or bp.startswith(ap)):
+            return True
+        return False
+    except Exception:
+        return tgt.rstrip("/") in cur or cur.rstrip("/") in tgt
+
+
 def _dom_cache_get(key: str) -> Optional[str]:
     try:
         entry = _dom_cache.get(key)
@@ -77,7 +102,7 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
     Hermes 通过 sync_hermes_cdp_endpoint() attach 到同一浏览器。
 
     启动策略：有业务 URL 时命令行直接打开目标页；无 URL 时用 about:blank。
-    若已有页面且目标 URL 不同，再 page.goto；启动后清理多余空白标签。
+    若已有页面且目标 URL 不同（含同站不同路径），再 page.goto；启动后清理多余空白标签。
 
     force_new: True 时强制关闭现有浏览器实例并重新启动，确保全新会话。
     """
@@ -95,7 +120,7 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
             (_cdp_mod._snap() or {}).get("pending_start_url") or ""
         ).strip()
 
-        # 强制新浏览器：先清理现有实例
+        # 强制新浏览器：先清理现有实例（勿再调 force_cleanup_browser，同锁会死锁）
         if force_new:
             uat_logger.info("[Browser] force_new=True, 正在清理现有浏览器实例...")
             try:
@@ -103,32 +128,54 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
             except Exception:
                 pass
             try:
-                force_cleanup_browser()
+                if _context:
+                    _context.close()
+            except Exception:
+                pass
+            try:
+                if _browser:
+                    _browser.close()
             except Exception:
                 pass
             _browser = None
             _context = None
             _page = None
             _cdp_ws = ""
+            try:
+                from modules.hermes.hermes_config import clear_hermes_cdp_endpoint
+
+                clear_hermes_cdp_endpoint(restart_gateway=False)
+            except Exception:
+                pass
+            try:
+                invalidate_dom_cache()
+            except Exception:
+                pass
+
+        def _urls_on_same_target(page_url: str, target: str) -> bool:
+            return urls_match_for_browser_reuse(page_url, target)
 
         def _need_goto(page_url: str, target: str) -> bool:
             if not target:
                 return False
-            cur = (page_url or "").strip().lower()
-            tgt = target.strip().lower()
-            if not cur or cur in ("about:blank", "chrome://newtab/", "edge://newtab/"):
-                return True
+            return not _urls_on_same_target(page_url, target)
+
+        def _local_page_usable() -> bool:
+            if not _page:
+                return False
             try:
-                from urllib.parse import urlparse
-
-                a, b = urlparse(cur), urlparse(tgt)
-                if (a.netloc or "").lower() == (b.netloc or "").lower() and (b.netloc or ""):
+                if _page.is_closed():
                     return False
+                _ = _page.url
+                # CDP 端口也必须活着（用户关窗后 page 对象可能短暂仍“未 closed”）
+                port = int((_cdp_mod._snap() or {}).get("debug_port") or 0)
+                if port > 0 and not _cdp_mod.fetch_cdp_ws(port):
+                    return False
+                return True
             except Exception:
-                pass
-            return tgt.rstrip("/") not in cur and cur.rstrip("/") not in tgt
+                return False
 
-        if _page and not _page.is_closed():
+        if not force_new and _local_page_usable():
             if nav_url:
                 try:
                     cur_u = ""
@@ -137,17 +184,44 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
                     except Exception:
                         cur_u = ""
                     if _need_goto(cur_u, nav_url):
+                        uat_logger.info("[Browser] 同站/跨站路径不同，重新导航到 %s", nav_url[:120])
                         _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
                     _cdp_mod._set(pending_start_url="")
+                except Exception as exc:
+                    uat_logger.warning("[Browser] 复用页导航失败，将重建: %s", exc)
+                    try:
+                        if _context:
+                            _context.close()
+                    except Exception:
+                        pass
+                    try:
+                        if _browser:
+                            _browser.close()
+                    except Exception:
+                        pass
+                    _browser = _context = _page = None
+                    _cdp_ws = ""
+                    try:
+                        _cdp_mod.disconnect(stop_browser=False)
+                    except Exception:
+                        pass
+            if _local_page_usable():
+                try:
+                    port = int((_cdp_mod._snap() or {}).get("debug_port") or 0)
+                    _cdp_mod.close_blank_cdp_targets(port, keep_url_substr=nav_url or "")
                 except Exception:
                     pass
+                uat_logger.info("[Browser] 复用现有浏览器实例")
+                return True
+
+        # 本地页不可用：清引用后再启动/附着
+        if _page is not None or _browser is not None:
             try:
-                port = int((_cdp_mod._snap() or {}).get("debug_port") or 0)
-                _cdp_mod.close_blank_cdp_targets(port, keep_url_substr=nav_url or "")
+                _browser = _context = _page = None
+                _cdp_ws = ""
             except Exception:
-                pass
-            uat_logger.info("[Browser] 复用现有浏览器实例")
-            return True
+                _browser = _context = _page = None
+                _cdp_ws = ""
 
         try:
             _cdp_state = _cdp_mod._snap()
@@ -155,6 +229,13 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
             _ws = ""
             if _debug_port:
                 _ws = _cdp_mod.fetch_cdp_ws(_debug_port) or ""
+                if not _ws:
+                    # 残留端口/状态：先 disconnect 再开新进程
+                    try:
+                        _cdp_mod.disconnect(stop_browser=True)
+                    except Exception:
+                        pass
+                    _debug_port = 0
 
             if not _ws:
                 uat_logger.info("[Browser] 正在启动新的 %s 浏览器实例...", kind)
@@ -222,7 +303,6 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
                         cur_u = str(_page.url or "")
                     except Exception:
                         cur_u = ""
-                    # 命令行已打开目标页则跳过二次 goto；仅空白/错页时补导航
                     if _need_goto(cur_u, nav_url):
                         _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
                     _cdp_mod._set(pending_start_url="")
@@ -305,28 +385,54 @@ def is_browser_alive() -> bool:
                         raise RuntimeError("Browser process exited")
                 # 再检查 page 是否可交互
                 _ = _page.url
-                if not _page.is_closed():
+                if _page.is_closed():
+                    _local_dead = True
+                else:
+                    # 用户关窗后：CDP HTTP 不通则视为死亡（避免误判仍存活）
+                    try:
+                        from web_capture import cdp_browser as _cdp_mod
+
+                        port = int((_cdp_mod._snap() or {}).get("debug_port") or 0)
+                        if port > 0 and not _cdp_mod.fetch_cdp_ws(port):
+                            raise RuntimeError("CDP endpoint unreachable")
+                    except RuntimeError:
+                        raise
+                    except Exception:
+                        pass
                     return True
-                _local_dead = True
             except Exception:
                 _local_dead = True
 
         # --- 第二层：先检查 cdp_browser 是否有存活的浏览器（在清理 hermes 之前） ---
         _cdp_alive = False
+        _ws = ""
         try:
             from web_capture import cdp_browser as _cdp_mod
             _cdp_state = _cdp_mod._snap()
-            _debug_port = _cdp_state.get("debug_port") or 0
+            _debug_port = int(_cdp_state.get("debug_port") or 0)
             if _debug_port:
-                _ws = _cdp_mod.fetch_cdp_ws(_debug_port)
+                _ws = _cdp_mod.fetch_cdp_ws(_debug_port) or ""
                 if _ws:
-                    _cdp_ws = _ws
-                    _cdp_alive = True
+                    # 还要有至少一个 page，否则是僵尸调试端口
+                    pages = _cdp_mod.fetch_cdp_pages(_debug_port) or []
+                    if pages:
+                        _cdp_ws = _ws
+                        _cdp_alive = True
+                    else:
+                        _ws = ""
+            # 跟踪进程已退出：清掉假存活状态
+            proc = _cdp_state.get("browser_process")
+            if proc is not None:
+                try:
+                    if proc.poll() is not None and not _cdp_alive:
+                        _cdp_mod.disconnect(stop_browser=True)
+                except Exception:
+                    pass
         except Exception:
             pass
 
         # 本地实例已死，清理引用（但只在 cdp_browser 也死了的时候才清理 hermes 配置）
-        if _local_dead and _browser is not None:
+        if _local_dead and (_browser is not None or _page is not None):
             try:
                 if _context:
                     _context.close()

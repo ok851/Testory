@@ -416,6 +416,17 @@ def launch_debug_browser(
         )
 
 
+def _tracked_browser_process_alive() -> bool:
+    snap = _snap()
+    proc = snap.get("browser_process")
+    if proc is None:
+        return False
+    try:
+        return proc.poll() is None
+    except Exception:
+        return False
+
+
 def _launch_debug_browser_unlocked(
     *,
     browser: str = "edge",
@@ -426,30 +437,45 @@ def _launch_debug_browser_unlocked(
     snap = _snap()
     kind = (browser or "edge").strip().lower() or "edge"
 
-    # 1) 复用本进程已跟踪且仍存活的实例
+    # 1) 复用本进程已跟踪且仍存活的实例（进程 + CDP 双检；用户关窗后 poll()!=None 或 CDP 不通）
     if snap.get("browser_process") and snap.get("debug_port"):
         proc = snap["browser_process"]
         try:
-            if proc.poll() is None:
-                debug_port = int(snap["debug_port"])
-                ws = fetch_cdp_ws(debug_port) or (snap.get("cdp_ws") or "")
-                if ws:
-                    _set(cdp_ws=ws)
-                    return {
-                        "success": True,
-                        "already_running": True,
-                        "debug_port": debug_port,
-                        "cdp_ws": ws,
-                        "executable": snap.get("executable") or "",
-                    }
+            alive = proc.poll() is None
+            debug_port = int(snap["debug_port"])
+            ws = fetch_cdp_ws(debug_port) if alive else None
+            if alive and ws:
+                _set(cdp_ws=ws)
+                return {
+                    "success": True,
+                    "already_running": True,
+                    "debug_port": debug_port,
+                    "cdp_ws": ws,
+                    "executable": snap.get("executable") or "",
+                }
+            # 进程已退 / CDP 不通：清掉残留状态，避免一直 already_running
+            _set(
+                browser_process=None,
+                cdp_ws="",
+                debug_port=0 if not ws else debug_port,
+                page=None,
+                context=None,
+                browser=None,
+            )
         except Exception:
-            pass
+            _set(browser_process=None, cdp_ws="", page=None, context=None, browser=None)
 
     preferred = int(port or os.environ.get("WEB_CAPTURE_CDP_PORT", "9222") or 9222)
 
-    # 2) 复用本机已在监听的 CDP（避免反复换端口新开浏览器）
-    for candidate in (preferred, int(snap.get("debug_port") or 0)):
+    # 2) 复用本机已在监听的 CDP（必须真有可交互 page；纯端口开着但无页则不 adopt）
+    for candidate in (preferred, int(_snap().get("debug_port") or 0)):
         if candidate <= 0:
+            continue
+        ws = fetch_cdp_ws(candidate)
+        if not ws:
+            continue
+        pages = fetch_cdp_pages(candidate)
+        if not pages:
             continue
         adopted = _adopt_existing_cdp(candidate, kind=kind)
         if adopted:
@@ -672,19 +698,58 @@ def disconnect(*, stop_browser: bool = False) -> Dict[str, Any]:
     except Exception:
         pass
     proc = snap.get("browser_process")
-    if stop_browser and proc:
+    if stop_browser and proc is not None:
         try:
-            proc.terminate()
+            pid = int(getattr(proc, "pid", 0) or 0)
+        except Exception:
+            pid = 0
+        try:
+            if sys.platform == "win32" and pid > 0:
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=10,
+                )
+            else:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
         except Exception:
             pass
-    _set(
-        browser_process=None if stop_browser else proc,
-        playwright=None,
-        browser=None,
-        context=None,
-        page=None,
-    )
+    # 用户手动关窗后进程可能已死，但 debug_port / cdp_ws 仍残留 → 后续误判「还在跑」
+    if stop_browser:
+        _set(
+            browser_process=None,
+            playwright=None,
+            browser=None,
+            context=None,
+            page=None,
+            cdp_ws="",
+            debug_port=0,
+            pending_start_url="",
+        )
+    else:
+        _set(
+            browser_process=proc,
+            playwright=None,
+            browser=None,
+            context=None,
+            page=None,
+        )
     return {"success": True}
+
+
+def cdp_endpoint_reachable(debug_port: int = 0) -> bool:
+    """CDP HTTP /json/version 是否可达（窗口关闭后通常为 False）。"""
+    port = int(debug_port or (_snap().get("debug_port") or 0) or 0)
+    if port <= 0:
+        return False
+    return bool(fetch_cdp_ws(port))
 
 
 def navigate(url: str) -> Dict[str, Any]:

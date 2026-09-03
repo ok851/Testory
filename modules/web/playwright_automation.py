@@ -9611,6 +9611,7 @@ class PlaywrightAutomation:
         from modules.execution.step_executor import (
             enrich_execution_step,
             is_desktop_step,
+            is_mobile_step,
             validate_desktop_step_result,
         )
         from modules.desktop.desktop_automation import sync_desktop_execute_step
@@ -9623,6 +9624,20 @@ class PlaywrightAutomation:
             _step_status = "success"
             _step_msg = ""
             action = step.get("action")
+            if isinstance(action, str):
+                _al = action.strip().lower()
+                if _al in ("type", "fill"):
+                    action = "input"
+                    step = dict(step)
+                    step["action"] = "input"
+                elif _al == "goto":
+                    action = "navigate"
+                    step = dict(step)
+                    step["action"] = "navigate"
+                elif _al == "click_element":
+                    action = "click"
+                    step = dict(step)
+                    step["action"] = "click"
             uat_logger.info(f"🎯 [STEP_DEBUG] ========== 开始执行步骤 {step_index}/{len(steps)} ==========")
             uat_logger.info(f"🎯 [STEP_DEBUG] 步骤类型: {action}, 详情: {step}")
             uat_logger.info(f"🎯 [STEP_DEBUG] 当前操作状态: has_clicked={has_clicked}, has_submitted={has_submitted}")
@@ -9654,6 +9669,32 @@ class PlaywrightAutomation:
                         has_clicked = True
                     uat_logger.info(
                         "✅ [STEP_DEBUG] ========== 桌面步骤 %s/%s 执行成功 ==========",
+                        step_index,
+                        len(steps),
+                    )
+                    continue
+
+                if is_mobile_step(exec_step):
+                    import asyncio as _asyncio_mob
+                    from modules.mobile.mobile_automation import (
+                        sync_mobile_execute_step,
+                        validate_mobile_step_result,
+                    )
+                    from modules.mobile.mobile_executor import get_mobile_executor
+
+                    uat_logger.info(
+                        "📱 [MOBILE_SCRIPT] 移动端步骤走 sync_mobile_execute_step: %s",
+                        action,
+                    )
+                    mob_result = await _asyncio_mob.to_thread(
+                        sync_mobile_execute_step, exec_step, get_mobile_executor()
+                    )
+                    validate_mobile_step_result(mob_result, action)
+                    row = dict(mob_result) if isinstance(mob_result, dict) else {"status": "success"}
+                    row["step"] = step
+                    results.append(row)
+                    uat_logger.info(
+                        "✅ [STEP_DEBUG] ========== 移动端步骤 %s/%s 执行成功 ==========",
                         step_index,
                         len(steps),
                     )
@@ -10409,6 +10450,19 @@ class PlaywrightAutomation:
                     uat_logger.info(f"✅ [ASSERT_DEBUG] 断言步骤成功")
                     results.append({"status": "success", "step": step})
                     continue
+                # Fail-closed：未进入上方任一 action 分支时禁止默认成功
+                _script_web_actions = frozenset({
+                    "navigate", "click", "batch_input", "fill", "input", "type",
+                    "hover", "double_click", "right_click", "wait", "select", "date",
+                    "scroll", "swipe", "verify", "extract_text", "text_compare",
+                    "extract_json", "assert", "enter_iframe", "exit_iframe",
+                    "submit", "press_key", "keypress", "ai_tap", "ai_input", "ai_scroll",
+                    "assert_vision", "wait_vision", "extract_vision",
+                })
+                if str(action or "").strip().lower() not in _script_web_actions:
+                    raise Exception(
+                        f"不支持的脚本步骤类型 action={action!r}，禁止跳过假成功"
+                    )
                 if target_page:
                     try:
                         # 等待页面稳定,确保上一步操作完成
@@ -11307,7 +11361,28 @@ class PlaywrightAutomation:
                     get_executor_factory().execute_step_async(step, self),
                     timeout=60  # 60秒超时
                 )
-                case_results.extend(step_result if isinstance(step_result, list) else [step_result])
+                rows = step_result if isinstance(step_result, list) else [step_result]
+                case_results.extend(rows)
+                # 禁止「执行器返回 error/skipped 仍计成功」
+                bad = [
+                    r for r in rows
+                    if isinstance(r, dict)
+                    and str(r.get("status") or "").strip().lower()
+                    in ("error", "failed", "fail", "stopped")
+                ]
+                if bad:
+                    err = (bad[0].get("error") or bad[0].get("status") or "步骤执行失败")
+                    raise RuntimeError(str(err))
+                skipped_only = rows and all(
+                    isinstance(r, dict)
+                    and str(r.get("status") or "").strip().lower() == "skipped"
+                    for r in rows
+                )
+                if skipped_only:
+                    raise RuntimeError(
+                        f"步骤 {i+1} 被跳过且未实际执行（禁止假绿）: "
+                        f"{step.get('action') or 'unknown'}"
+                    )
                 steps_completed += 1
                 uat_logger.info(f"✅ [CASE_STEP] 步骤 {i+1} 执行成功")
 

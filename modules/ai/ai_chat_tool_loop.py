@@ -3451,13 +3451,14 @@ def _handle_agent_execute(
             pass
         return target.rstrip("/") in current or current.rstrip("/") in target
 
-    # 本任务尚未完成平台预导航 / 首次 hermes：即使同站残留页也不锁死 navigate
-    _fresh_web = not bool(meta.get("_web_task_browser_touched"))
+    # 本任务尚未完成「首次 hermes 指令拼装」：即使平台已预导航，也不注入旧 DOM 快照
+    _hermes_first = not bool(meta.get("_hermes_instr_seeded"))
+    _fresh_web = _hermes_first or not bool(meta.get("_web_task_browser_touched"))
     already_on = False
     if start_url and not _fresh_web:
         already_on = _url_looks_on_target(cur_url, start_url)
     elif start_url and _fresh_web:
-        # 仅当平台本轮已预导航到目标后才视为已在页上
+        # 平台本轮已预导航到目标：仅用于「不必再 navigate」，不代表可跳过表单
         already_on = bool(meta.get("_platform_nav_done")) and _url_looks_on_target(cur_url, start_url)
     elif cur_url and cur_url not in ("about:blank", "chrome://newtab/", "edge://newtab/"):
         already_on = not _fresh_web
@@ -3474,8 +3475,8 @@ def _handle_agent_execute(
             pass
 
     rich_context = ""
-    # 新任务首次：不注入上一页 DOM「快照」，避免模型以为表单已填完而跳步
-    if not _fresh_web or already_on:
+    # 新任务首次 hermes：绝不注入上一任务/残留页的 DOM「快照」
+    if (not _fresh_web) and already_on and (not _hermes_first):
         try:
             from modules.ai.ai_external_browser_bridge import get_rich_page_context
 
@@ -3492,7 +3493,17 @@ def _handle_agent_execute(
             except Exception:
                 rich_context = ""
 
-    if already_on and cur_url:
+    if already_on and cur_url and _hermes_first:
+        # 平台刚打开目标页：只告知 URL，强制从零操作，禁止把空表单当已完成
+        instr = (
+            f"【当前浏览器状态】URL={cur_url}，标题={cur_title}。\n"
+            f"这是**新任务**：页面刚打开或刚导航到目标，表单/登录状态请视为未完成；"
+            f"必须按用户指令逐步填写与点击，禁止假设上次任务已填好。"
+            f"不要重新 browser_navigate 到空白页；禁止 skill_view / terminal；"
+            f"禁止连续反复 browser_snapshot（全程最多 2 次）。\n\n"
+            + instr
+        )
+    elif already_on and cur_url:
         instr = (
             f"【当前浏览器状态】URL={cur_url}，标题={cur_title}。\n"
             f"浏览器已在目标站，请按用户指令逐步操作，不要跳过步骤；"
@@ -3520,8 +3531,9 @@ def _handle_agent_execute(
 
     # 仅当真实已在目标页时限制重复 navigate；新任务首次永不永久锁定
     meta["hermes_already_on_page"] = bool(already_on)
-    meta["hermes_forbid_navigate"] = bool(already_on)
+    meta["hermes_forbid_navigate"] = bool(already_on) and (not _hermes_first)
     meta["_web_task_browser_touched"] = True
+    meta["_hermes_instr_seeded"] = True
 
     plat = (getattr(params, "platform_type", None) or "auto") if params else "auto"
     vision_summary = ""
@@ -4654,12 +4666,12 @@ def run_ai_chat_with_tools(
                             }
                         )
                         continue
-                    # 非流式路径：导航记录写入 meta，供后续用例导出
+                    # 非流式路径：仅标记平台已预导航；勿提前置 _web_task_browser_touched，
+                    # 否则 _handle_agent_execute 会把「刚打开的页」当旧任务快照注入。
                     _nav_recs = _platform_navigate_action_records(_br_extras)
                     if _nav_recs:
                         meta.setdefault("platform_pre_nav_records", []).extend(_nav_recs)
                         meta["_platform_nav_done"] = True
-                        meta["_web_task_browser_touched"] = True
                 result_text = _handle_agent_execute(
                     name=name,
                     args=args,
@@ -5671,8 +5683,8 @@ def run_ai_chat_with_tools_stream(
                         continue
                     _nav_recs = _platform_navigate_action_records(_br_extras)
                     if _nav_recs:
+                        # 仅标记平台已预导航；勿提前置 _web_task_browser_touched
                         meta["_platform_nav_done"] = True
-                        meta["_web_task_browser_touched"] = True
                         yield ("action_records", _nav_recs)
                 result_text = ""
                 _trace_q: Any = None

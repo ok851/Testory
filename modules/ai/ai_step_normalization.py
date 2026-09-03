@@ -274,7 +274,8 @@ def normalize_ai_step(step: dict) -> dict:
         "navigate", "click", "input", "wait", "verify", "extract_text", "assert",
         "ai_tap", "ai_input", "ai_scroll",
         "assert_vision", "wait_vision", "extract_vision",
-        "snapshot", "scroll", "press_key", "type", "fill",
+        "snapshot", "scroll", "press_key", "type", "fill", "hover",
+        "double_click", "right_click", "select",
     }
     allowed_actions |= cross_end_actions  # web 用例也可含 api_call
     if layer == "desktop":
@@ -284,16 +285,32 @@ def normalize_ai_step(step: dict) -> dict:
     elif layer == "cross_end":
         allowed_actions = cross_end_actions | {"input", "wait", "tap", "click"}
     action = _str(step.get("action")).lower()
+    # 全端别名：保证执行器/编辑器识别
+    web_alias = {"type": "input", "fill": "input", "goto": "navigate", "click_element": "click"}
     if layer == "android":
-        alias = {"click": "tap", "input": "input_text", "fill": "input_text", "verify": "assert_element", "assert": "assert_text"}
+        alias = {"click": "tap", "input": "input_text", "fill": "input_text", "type": "input_text",
+                 "verify": "assert_element", "assert": "assert_text", "click_element": "tap"}
         action = alias.get(action, action)
+    else:
+        action = web_alias.get(action, action)
     if action not in allowed_actions:
+        # 未知动作：保留原值并告警式降级（避免把 hotkey 静默改成 launch_app）
         if layer == "desktop":
-            action = "launch_app"
+            if action in ("click_element",):
+                action = "click"
+            elif action in ("type_text", "type", "fill"):
+                action = "input"
+            elif action in ("press_key",):
+                action = "hotkey"
+            else:
+                # 不静默改写为 launch_app（会导致用例步骤类型全错）
+                action = action or "click"
+                if action not in allowed_actions:
+                    action = "click"
         elif layer == "android":
             action = "open_app" if not _str(step.get("selector_value")) else "tap"
         else:
-            action = "click"
+            action = "click" if action not in ("navigate", "input", "wait") else action
     strategy = _str(step.get("strategy")) or _str(step.get("selector_type")) or ""
     if layer == "android":
         selector_type = strategy or "accessibility_id"
@@ -303,6 +320,43 @@ def normalize_ai_step(step: dict) -> dict:
     input_value = _str(step.get("input_value"))
     description = _str(step.get("description"))
     locate_prompt = _str(step.get("locate_prompt"))
+    # 从 target/locator 回填（录制器中间字段，落库前必须提升）
+    if not selector_value:
+        for alt_key in ("locator", "target"):
+            alt = _str(step.get(alt_key))
+            if not alt:
+                continue
+            # 跳过 ephemeral hermes ref
+            if alt.startswith("@") and len(alt) <= 6:
+                if not locate_prompt:
+                    locate_prompt = description or alt
+                continue
+            if action == "navigate" and (alt.startswith("http://") or alt.startswith("https://")):
+                if not input_value:
+                    input_value = alt
+                continue
+            selector_value = alt
+            if not selector_type:
+                if alt.startswith(("/", "(")) or alt.startswith("xpath="):
+                    selector_type = "xpath"
+                elif alt.startswith(("#", ".", "[")) or (layer == "web" and ("#" in alt or "." in alt)):
+                    selector_type = "css"
+                elif layer == "desktop":
+                    selector_type = "name"
+                elif layer == "android":
+                    selector_type = "text"
+                else:
+                    selector_type = "text"
+            break
+    if action == "navigate" and not input_value:
+        # URL 也可能误放在 selector_value
+        maybe_url = selector_value or _str(step.get("url")) or _str(step.get("target"))
+        if maybe_url.startswith("http://") or maybe_url.startswith("https://") or maybe_url.startswith("/"):
+            input_value = maybe_url
+            selector_value = ""
+            selector_type = ""
+    if not locate_prompt and description and action in ("click", "input", "tap", "input_text"):
+        locate_prompt = description
     compare_type = _str(step.get("compare_type"))
     if action == "assert":
         from modules.auth.auth_batch_helpers import normalize_assert_compare_type

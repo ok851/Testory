@@ -184,7 +184,11 @@ _DESKTOP_CASE_ACTIONS = frozenset(
         "launch_app",
         "open_app",
         "focus_app",
+        "attach_window",
         "click",
+        "click_element",
+        "double_click",
+        "right_click",
         "type",
         "fill",
         "input",
@@ -193,6 +197,8 @@ _DESKTOP_CASE_ACTIONS = frozenset(
         "press_key",
         "wait",
         "assert",
+        "verify",
+        "scroll",
         "extract_otp",
         "api_call",
     }
@@ -221,6 +227,7 @@ def is_case_worthy_for_platform(action_type: str, platform: str = "web") -> bool
     """实时用例是否收录该动作：必须可回放，且属于当前主平台（+跨端）步骤词汇。
 
     网页任务不收录 launch_app/windows_* 等桌面模拟开浏览器步骤。
+    多端联动（auto/cross/all）或未知平台：取三端并集，避免丢桌面/手机步骤。
     """
     a = (action_type or "").strip().lower()
     if a.startswith("browser_"):
@@ -231,13 +238,24 @@ def is_case_worthy_for_platform(action_type: str, platform: str = "web") -> bool
         a = {
             "launch_app": "launch_app",
             "focus_app": "focus_app",
+            "attach_window": "attach_window",
             "click_element": "click",
+            "click_text": "click",
             "type_text": "input",
-            "press_key": "press_key",
+            "press_key": "hotkey",
             "wait": "wait",
         }.get(raw, raw)
     if a.startswith("mobile_"):
         a = a[len("mobile_") :]
+    # 归一化别名：保证与 to_case_steps / normalize_ai_step 一致
+    a = {
+        "click_element": "click",
+        "goto": "navigate",
+        "type": "input",
+        "fill": "input",
+        "focus_app": "launch_app",
+        "press_key": "hotkey",
+    }.get(a, a)
     if not is_replayable_action_type(a) and a not in _REPLAYABLE_ACTION_TYPES:
         # extract_otp / 已在 replayable 集合
         if a not in ("extract_otp", "api_call"):
@@ -249,8 +267,43 @@ def is_case_worthy_for_platform(action_type: str, platform: str = "web") -> bool
         return a in _DESKTOP_CASE_ACTIONS
     if plat in ("android", "mobile"):
         return a in _ANDROID_CASE_ACTIONS
-    # auto / cross：三端并集，但仍排除纯元工具名
+    # auto / cross / all / 空：三端并集，但仍排除纯元工具名
     return a in (_WEB_CASE_ACTIONS | _DESKTOP_CASE_ACTIONS | _ANDROID_CASE_ACTIONS)
+
+
+def _coerce_tool_result_dict(result: Any) -> Optional[Dict[str, Any]]:
+    """工具结果常以 JSON 字符串回传；解析失败返回 None，不抛。"""
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, str):
+        text = result.strip()
+        if not text or text[0] not in "{[":
+            return None
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+_EPHEMERAL_REF_RE = re.compile(r"^@?e\d+$", re.IGNORECASE)
+
+
+def _is_ephemeral_browser_ref(value: str) -> bool:
+    """Hermes snapshot ref（@e5）仅会话有效，不可落库作选择器。"""
+    return bool(_EPHEMERAL_REF_RE.match((value or "").strip()))
+
+
+def _looks_like_css_or_xpath(value: str) -> bool:
+    s = (value or "").strip()
+    if not s or _is_ephemeral_browser_ref(s):
+        return False
+    if s.startswith(("//", "(//", "./", "(", "#", ".", "[", "/")):
+        return True
+    if s.startswith("text=") or s.startswith("xpath="):
+        return True
+    return False
 
 # browser_console expression → 可回放步骤
 _CONSOLE_CLICK_RE = re.compile(
@@ -479,12 +532,17 @@ class ActionRecorder:
         elif is_observation_tool(name):
             return []
 
+        # 桌面/手机工具结果多为 JSON 字符串；必须先解析才能拿到 uia_anchor
+        result_dict = _coerce_tool_result_dict(result)
+        if result_dict is not None:
+            result = result_dict
+
         ok: Optional[bool] = None
         verified: Optional[bool] = None
         summary = ""
         target = ""
         is_browser_tool = name.startswith("browser_")
-        is_desktop_tool = name.startswith("windows_")
+        is_desktop_tool = name.startswith("windows_") or name.startswith("desktop_")
         is_mobile_tool = name.startswith("mobile_")
         is_platform_tool = is_browser_tool or is_desktop_tool or is_mobile_tool
         
@@ -526,23 +584,26 @@ class ActionRecorder:
                     )[:80]
                 target = sanitize_target(raw_target)
             
-            # ── 桌面工具：优先用 app_name/title/label 等窗口标识 ──
+            # ── 桌面工具：优先用 app_name/title/label/description 等控件标识 ──
             elif is_desktop_tool:
                 raw_target = str(
-                    result.get("app_name")
+                    result.get("matched")
+                    or result.get("description")
+                    or result.get("app_name")
                     or result.get("title")
                     or result.get("label")
-                    or result.get("matched")
-                    or result.get("description")
                     or ""
                 )[:80]
                 if not raw_target:
                     raw_target = str(
-                        args.get("app")
+                        args.get("description")
+                        or args.get("locate")
                         or args.get("text")
+                        or args.get("app")
                         or args.get("app_name")
                         or args.get("title")
                         or args.get("path")
+                        or args.get("key")
                         or ""
                     )[:80]
                 target = sanitize_target(raw_target)
@@ -649,19 +710,59 @@ class ActionRecorder:
         if st in ("fail", "failed", "error"):
             return []
         action_type = self._normalize_action_type(name, args)
-        input_data = str(args.get("text") or args.get("input_value") or "")[:500]
+        input_data = str(args.get("text") or args.get("input_value") or args.get("value") or "")[:500]
+        # navigate / hotkey / launch：关键值常在 url/key/app，不在 text
+        if action_type in ("navigate", "goto") and not input_data:
+            input_data = str(
+                args.get("url")
+                or (result.get("url") if isinstance(result, dict) else "")
+                or target
+                or ""
+            )[:500]
+        if action_type in ("hotkey", "press_key") and not input_data:
+            input_data = str(args.get("key") or args.get("keys") or target or "")[:200]
+        if action_type in ("launch_app", "focus_app", "open_app") and not input_data:
+            input_data = str(
+                args.get("app")
+                or args.get("app_name")
+                or args.get("path")
+                or args.get("package")
+                or target
+                or ""
+            )[:500]
+        if action_type == "wait" and not input_data:
+            input_data = str(
+                args.get("duration_ms")
+                or args.get("timeout_ms")
+                or args.get("ms")
+                or args.get("seconds")
+                or ""
+            )[:40]
         if lifted:
             action_type = lifted["action_type"]
             target = lifted["target"] or target
             input_data = lifted.get("input_data") or input_data
+        # Web 别名统一，避免落库 type/fill 后执行器不识别
+        if action_type in ("type", "fill"):
+            action_type = "input"
+        if action_type == "goto":
+            action_type = "navigate"
         if not is_replayable_action_type(action_type):
             return []
+        # 描述优先用人话目标，避免 result 仅有工具名导致用例步骤无意义
+        human_desc = ""
+        if target and not self._is_bad_target(target) and target not in (name, action_type):
+            human_desc = target
+        elif summary and summary not in (name, action_type):
+            human_desc = summary
+        else:
+            human_desc = f"{action_type}"
         rec = ActionRecord(
             action_id=f"act_{len(self.records)}",
             action_type=action_type,
             target=target or name,
             input_data=input_data,
-            result=summary or f"{name}",
+            result=(human_desc or summary or name)[:200],
             status=st,
             raw_text=json.dumps({"name": name, "args": args}, ensure_ascii=False)[:2000],
             uia_anchor=result.get("uia_anchor") if isinstance(result, dict) else None,
@@ -669,6 +770,10 @@ class ActionRecorder:
             platform_layer=_layer_for_tool_name(name),
             device_serial=str(args.get("serial") or args.get("device_id") or "")[:80],
         )
+        # 从 args 直接带上选择器线索（供 to_case_steps 回填，避免只剩 ephemeral ref）
+        sel = str(args.get("selector") or args.get("css") or args.get("xpath") or "").strip()
+        if sel and not _is_ephemeral_browser_ref(sel):
+            rec.locator = sel[:500]
         self.records.append(rec)
         return [rec]
 
@@ -808,15 +913,20 @@ class ActionRecorder:
         # 桌面工具
         if n.startswith("windows_"):
             base = n.replace("windows_", "", 1)
-            # 映射桌面工具到标准步骤类型
+            # 映射桌面工具到标准步骤类型（click_element 是 Agent 主点击工具）
             _DESKTOP_MAP = {
                 "launch_app": "launch_app",
                 "focus_app": "launch_app",
+                "attach_window": "attach_window",
                 "click_text": "click",
+                "click_element": "click",
                 "click": "click",
+                "double_click": "double_click",
+                "right_click": "right_click",
                 "type_text": "input",
                 "input": "input",
                 "press_key": "hotkey",
+                "wait": "wait",
                 "screenshot": "screenshot",
                 "get_screen_text": "extract_text",
                 "scroll": "scroll",
@@ -905,13 +1015,22 @@ class ActionRecorder:
                 "browser_get_images",
             ):
                 continue
-            if not is_case_worthy_for_platform(rec.action_type, self.platform):
+            # 按 per-record 工具层判断可复用性（多端联动时 desktop 平台也要收录手机步骤）
+            _worthy_plat = (
+                rec.platform_layer
+                if rec.platform_layer in ("web", "desktop", "android")
+                else (self.platform or "web")
+            )
+            if not is_case_worthy_for_platform(rec.action_type, _worthy_plat):
                 continue
             step: Dict[str, Any] = {
                 "action": rec.action_type,
                 "target": rec.target,
                 "input_value": rec.input_data,
-                "description": rec.result[:100] if rec.result else "",
+                "description": (
+                    (rec.target if rec.target and not self._is_bad_target(rec.target) else "")
+                    or (rec.result[:100] if rec.result else "")
+                ),
                 # 多端联动录制：优先 per-record 工具前缀层，其次平台单值
                 "automation_layer": rec.platform_layer
                 if rec.platform_layer in ("web", "desktop", "android")
@@ -941,7 +1060,7 @@ class ActionRecorder:
                     cross_spec["pattern"] = _raw_args["pattern"]
                 step["cross_end_spec"] = json.dumps(cross_spec, ensure_ascii=False)
                 step["description"] = step.get("description") or "提取手机短信验证码"
-            elif _raw_name == "desktop_type_text":
+            elif _raw_name in ("desktop_type_text", "windows_type_text"):
                 step["action"] = "input"
                 step["automation_layer"] = "desktop"
                 if _raw_args.get("text"):
@@ -950,6 +1069,30 @@ class ActionRecorder:
                     ds = json.loads(step.get("desktop_spec") or "{}") if step.get("desktop_spec") else {}
                     ds["clear"] = bool(_raw_args["clear"])
                     step["desktop_spec"] = json.dumps(ds, ensure_ascii=False)
+                # 选择器留给下方 uia_anchor / 回填逻辑；此处只记 locate_prompt
+                _desk_label = str(
+                    _raw_args.get("description")
+                    or _raw_args.get("locate")
+                    or rec.target
+                    or ""
+                ).strip()
+                if _desk_label:
+                    step["locate_prompt"] = _desk_label[:200]
+                    if not step.get("description"):
+                        step["description"] = _desk_label[:100]
+            elif _raw_name in ("windows_click_element", "windows_click_text"):
+                step["action"] = "click"
+                step["automation_layer"] = "desktop"
+                _desk_label = str(
+                    _raw_args.get("description")
+                    or _raw_args.get("locate")
+                    or _raw_args.get("text")
+                    or rec.target
+                    or ""
+                ).strip()
+                if _desk_label:
+                    step["description"] = step.get("description") or _desk_label
+                    step["locate_prompt"] = _desk_label[:200]
             elif _raw_name == "api_call" or rec.action_type == "api_call":
                 step["action"] = "api_call"
                 step["automation_layer"] = "web"
@@ -966,18 +1109,20 @@ class ActionRecorder:
                     api_spec["case_id"] = _raw_args["case_id"]
                 step["cross_end_spec"] = json.dumps(api_spec, ensure_ascii=False)
                 step["description"] = step.get("description") or f"{api_spec.get('method','GET')} {api_spec.get('url','')}"
-            if rec.locator:
-                step["locator"] = rec.locator
-            # UIA 树锚点补录：候选链 → selector_type/selector_value + locator_candidates
-            # （此前 locator 恒空导致不产出任何选择器，DB 回放无法定位）
-            elif rec.uia_anchor and isinstance(rec.uia_anchor, dict):
+            # UIA 树锚点优先于文本回填（automation_id > name）
+            if rec.uia_anchor and isinstance(rec.uia_anchor, dict):
                 cands = rec.uia_anchor.get("candidates") or []
                 if cands:
-                    c0 = cands[0]
-                    step["selector_type"] = c0.get("type") or ""
-                    step["selector_value"] = c0.get("value") or ""
-                step["locator_candidates"] = cands
+                    c0 = cands[0] if isinstance(cands[0], dict) else {}
+                    # 锚点始终覆盖弱回填，保证 DB 回放优先稳定键
+                    if c0.get("value"):
+                        step["selector_type"] = c0.get("type") or step.get("selector_type") or ""
+                        step["selector_value"] = c0.get("value") or ""
+                    step["locator_candidates"] = cands
                 step["uia_anchor"] = rec.uia_anchor
+            if rec.locator and not _is_ephemeral_browser_ref(rec.locator):
+                if not step.get("selector_value"):
+                    step["locator"] = rec.locator
             hit = probe_by_text.get((rec.target or "").strip())
             if hit:
                 if hit.get("i") is not None:
@@ -986,14 +1131,74 @@ class ActionRecorder:
                 if css and not step.get("locator") and not step.get("selector_value"):
                     step["locator"] = css
                     step["target"] = css
+            # ── 生产级回填：把 target/locator 提升为可回放 selector_* ──
+            layer = str(step.get("automation_layer") or "web")
+            act = str(step.get("action") or "")
+            if act == "navigate":
+                url = (
+                    str(step.get("input_value") or "").strip()
+                    or str(rec.input_data or "").strip()
+                    or str(rec.target or "").strip()
+                )
+                if url and (url.startswith("http://") or url.startswith("https://") or url.startswith("/")):
+                    step["input_value"] = url
+                    step["selector_type"] = ""
+                    step["selector_value"] = ""
+            elif not step.get("selector_value"):
+                cand = (
+                    str(step.get("locator") or "").strip()
+                    or str(rec.locator or "").strip()
+                    or str(step.get("locate_prompt") or "").strip()
+                    or str(rec.target or "").strip()
+                )
+                if cand and not _is_ephemeral_browser_ref(cand) and not self._is_bad_target(cand):
+                    if layer == "web":
+                        if _looks_like_css_or_xpath(cand):
+                            stype = "xpath" if cand.startswith(("/", "(")) or cand.startswith("xpath=") else "css"
+                            if cand.startswith("text="):
+                                stype, cand = "text", cand[5:]
+                            step["selector_type"] = stype
+                            step["selector_value"] = cand[:500]
+                        elif act in ("click", "input", "hover", "double_click", "right_click", "verify", "assert", "extract_text"):
+                            # 可见文案 → text 定位（平台可回放）
+                            step["selector_type"] = "text"
+                            step["selector_value"] = cand[:200]
+                            step["locate_prompt"] = cand[:200]
+                    elif layer == "desktop":
+                        step["selector_type"] = step.get("selector_type") or "name"
+                        step["selector_value"] = cand[:200]
+                        step["locate_prompt"] = cand[:200]
+                    elif layer == "android":
+                        # 默认 text；有 resource-id 形态时用 id
+                        if ":id/" in cand or cand.startswith("com."):
+                            step["selector_type"] = "id"
+                        else:
+                            step["selector_type"] = "text"
+                        step["selector_value"] = cand[:200]
+                elif cand and _is_ephemeral_browser_ref(cand):
+                    # 会话 ref 不可回放：至少保留 locate_prompt，避免空步骤
+                    hint = str(_raw_args.get("text") or step.get("description") or "").strip()
+                    if hint:
+                        step["locate_prompt"] = hint[:200]
+                        if not step.get("description"):
+                            step["description"] = hint[:100]
             if step.get("automation_layer") == "desktop":
-                # 已有 UIA 锚点（automation_id/name）时保留，否则回退窗口级选择器
+                # 已有 UIA 锚点（automation_id/name）时保留，否则用 name/locate_prompt
                 if not step.get("selector_type"):
-                    step["selector_type"] = "window"
-                if rec.action_type == "launch_app":
+                    step["selector_type"] = "window" if act in ("launch_app", "attach_window", "wait") else "name"
+                if rec.action_type == "launch_app" and not step.get("input_value"):
                     step["input_value"] = rec.target
-                elif rec.action_type == "hotkey":
-                    step["input_value"] = rec.target
+                elif rec.action_type == "hotkey" and not step.get("input_value"):
+                    step["input_value"] = rec.target or rec.input_data
+                # 桌面 click/input 无 selector 时用 description 兜底
+                if act in ("click", "input", "double_click", "right_click") and not step.get("selector_value"):
+                    label = str(
+                        step.get("locate_prompt") or step.get("description") or rec.target or ""
+                    ).strip()
+                    if label and not self._is_bad_target(label):
+                        step["selector_type"] = "name"
+                        step["selector_value"] = label[:200]
+                        step["locate_prompt"] = label[:200]
             if rec.vision_info:
                 step["vision_info"] = rec.vision_info
             if rec.verification and isinstance(rec.verification, dict):
@@ -1003,9 +1208,9 @@ class ActionRecorder:
                 prev = steps[-1]
                 if should_skip_duplicate_case_step(
                     str(prev.get("action") or ""),
-                    str(prev.get("target") or ""),
+                    str(prev.get("target") or prev.get("selector_value") or ""),
                     str(step.get("action") or ""),
-                    str(step.get("target") or ""),
+                    str(step.get("target") or step.get("selector_value") or ""),
                 ):
                     continue
             steps.append(step)
@@ -1035,20 +1240,40 @@ class ActionRecorder:
             }, []
 
         plat = (self.platform or "web").strip().lower()
-        if plat in ("auto", "all", "cross"):
-            plat = "web"
-        if plat not in ("web", "desktop", "android"):
+        # 多端联动：保留 auto，供校验走三端并集；勿强制降为 web（会丢桌面/手机语义）
+        layers_in_raw = {
+            str(s.get("automation_layer") or "").strip().lower()
+            for s in raw
+            if isinstance(s, dict)
+        }
+        multi_end = bool(layers_in_raw & {"web", "desktop"}) and bool(
+            layers_in_raw & {"android", "mobile"}
+        )
+        if plat in ("auto", "all", "cross") or multi_end:
+            plat = "auto"
+        elif plat not in ("web", "desktop", "android"):
             plat = "web"
         normalized = [normalize_ai_step(s) for s in raw]
         warnings1 = repair_raw_ai_steps_for_platform(normalized) or []
         clean, warnings2 = dedupe_and_validate_ai_steps(normalized, platform=plat)
+        plan_platform = plat
+        if multi_end:
+            plan_platform = "cross_end"
+        elif plat == "auto":
+            # 单端 auto：按步骤层推断
+            if layers_in_raw <= {"desktop", ""}:
+                plan_platform = "desktop"
+            elif layers_in_raw <= {"android", "mobile", ""}:
+                plan_platform = "android"
+            else:
+                plan_platform = "web"
         plan = {
             "case_name": (case_name or instruction or "AI 生成用例")[:80],
             "case_url": case_url or "",
             "description": (instruction or "")[:400],
             "steps": clean,
-            "platform": plat,
-            "meta": {"source": "action_recorder", "platform_type": plat},
+            "platform": plan_platform,
+            "meta": {"source": "action_recorder", "platform_type": plan_platform},
         }
         plan, warnings3 = apply_step_normalization_to_plan(plan)
         try:
@@ -1158,7 +1383,19 @@ def _group_steps_into_stages(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
     def _branch(run: Dict[str, Any]) -> Dict[str, Any]:
         if run["side"] == "pc":
-            return {"name": "pc", "layer": "desktop", "steps": run["steps"]}
+            # 保留真实层：全 web → web；含 desktop → desktop；混合仍标 desktop 但步骤自带 layer
+            layers = {
+                str(s.get("automation_layer") or "").strip().lower()
+                for s in (run.get("steps") or [])
+                if isinstance(s, dict)
+            }
+            if layers and layers <= {"web"}:
+                pc_layer = "web"
+            elif "desktop" in layers:
+                pc_layer = "desktop"
+            else:
+                pc_layer = "desktop"
+            return {"name": "pc", "layer": pc_layer, "steps": run["steps"]}
         dev_id = ""
         for s in run["steps"]:
             if isinstance(s, dict) and s.get("device_id"):

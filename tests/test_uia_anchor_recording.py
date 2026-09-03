@@ -91,16 +91,17 @@ def test_mixed_platform_per_record_layer():
 
 
 def test_no_anchor_keeps_legacy_behavior():
-    # 无锚点时：移动端不产出选择器；桌面端仍回退 "window"（与现状一致）
+    # 无锚点时：用可见文案/description 回填可回放选择器（生产级复用，不再空 selector）
     rec = ActionRecorder(platform="desktop")
     _capture(rec, "mobile_tap", {"text": "登录"}, {"ok": True, "text": "登录"})
     _capture(rec, "windows_click_element", {"description": "确定"}, {"ok": True, "matched": "确定"})
     steps = rec.to_case_steps()
     mob = [s for s in steps if s["automation_layer"] == "android"]
     dsk = [s for s in steps if s["automation_layer"] == "desktop"]
-    assert mob and "selector_type" not in mob[0]
-    assert "selector_value" not in mob[0]
-    assert dsk and dsk[0]["selector_type"] == "window"
+    assert mob and mob[0].get("selector_value") == "登录"
+    assert mob[0].get("selector_type") in ("text", "accessibility_id")
+    assert dsk and dsk[0].get("selector_value") == "确定"
+    assert dsk[0]["selector_type"] == "name"
 
 
 def test_layer_for_tool_name_prefixes():
