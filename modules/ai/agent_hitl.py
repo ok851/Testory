@@ -522,16 +522,46 @@ def looks_like_hitl_needed(
     """仅在真正需要用户介入时返回 True。
 
     关键排除条件（AI 有能力自动处理时不触发 HITL）：
-    - 有 sms_otp 变量（mobile_extract_otp 已成功取码）→ 验证码关键词不触发
+    - 有 sms_otp 变量（mobile_extract_otp 已成功取码）→ 短信验证码回填相关 NEED_USER_ACTION 不触发
     - 有 mobile_extract_otp 工具调用过 → 验证码/登录相关关键词不触发
-    - 只有 NEED_USER_ACTION 显式标记 或 扫码/人机验证（AI 无法自动处理的）才触发
+    - 只有真正无法自动处理的扫码/人机验证，或与 OTP 无关的 NEED_USER_ACTION 才触发
     """
     raw = text or ""
     t = raw.lower()
-    # 显式 NEED_USER_ACTION 标记才触发最高优先级
-    if "NEED_USER_ACTION:" in raw:
-        return True
-    if "need_user_action" in t and ("need_user_action:" in t or "NEED_USER_ACTION" in raw):
+    tools_used = tools_used or []
+    cross_end_vars = cross_end_vars or {}
+    has_otp_capability = (
+        any("extract_otp" in str(x) for x in tools_used)
+        or bool(str(cross_end_vars.get("sms_otp") or "").strip())
+    )
+    # 短信验证码已取到：模型却输出 NEED_USER_ACTION 请用户手填 → 一律不当 HITL
+    # （应继续 hermes_execute / browser_type 回填）
+    otp_fill_hitl = any(
+        k in raw
+        for k in (
+            "验证码",
+            "sms_otp",
+            "填入",
+            "填验证码",
+            "输入框填",
+            "手动完成登录",
+            "无法直接操作",
+            "OTP",
+            "otp",
+        )
+    )
+    captcha_or_qr = any(
+        k in raw or k in t
+        for k in ("人机验证", "captcha", "滑块", "点选验证", "扫码登录", "扫描二维码", "qr code", "二维码登录")
+    )
+    if "NEED_USER_ACTION:" in raw or (
+        "need_user_action" in t and ("need_user_action:" in t or "NEED_USER_ACTION" in raw)
+    ):
+        if has_otp_capability and otp_fill_hitl and not captcha_or_qr:
+            return False
+        # 纯「请用户在浏览器手填验证码」而无图形验证 → 有 OTP 能力时不触发
+        if has_otp_capability and ("验证码" in raw or "登录" in raw) and not captcha_or_qr:
+            return False
         return True
     # 鉴权/兜底失败不是 HITL
     if any(
@@ -546,15 +576,8 @@ def looks_like_hitl_needed(
         )
     ):
         return False
-    # AI 可自动处理的条件：已成功调用 mobile_extract_otp 或已有 sms_otp
-    tools_used = tools_used or []
-    cross_end_vars = cross_end_vars or {}
-    has_otp_capability = (
-        "mobile_extract_otp" in tools_used
-        or bool(cross_end_vars.get("sms_otp"))
-    )
     # 扫码登录、人机验证（滑动/点选）AI 无法自动处理 → 触发
-    must_hitl_keys = ("人机验证", "captcha", "扫码登录")
+    must_hitl_keys = ("人机验证", "captcha", "扫码登录", "滑块验证", "点选验证")
     if any(k in raw or k in t for k in must_hitl_keys):
         return True
     # 其他关键词只有在 AI 不具备自动处理能力时才触发

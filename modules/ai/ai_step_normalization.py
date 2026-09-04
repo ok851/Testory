@@ -320,11 +320,25 @@ def normalize_ai_step(step: dict) -> dict:
     input_value = _str(step.get("input_value"))
     description = _str(step.get("description"))
     locate_prompt = _str(step.get("locate_prompt"))
+    # 拒绝工具名占位（browser_type / navigate 等）污染选择器与输入值
+    try:
+        from modules.ai.ai_action_recorder import is_tool_name_placeholder as _is_tool_ph
+    except Exception:
+        def _is_tool_ph(v: str) -> bool:  # type: ignore
+            return False
+    if _is_tool_ph(selector_value):
+        selector_value = ""
+    if _is_tool_ph(input_value) and action != "hotkey":
+        input_value = ""
+    if _is_tool_ph(description):
+        description = ""
+    if _is_tool_ph(locate_prompt):
+        locate_prompt = ""
     # 从 target/locator 回填（录制器中间字段，落库前必须提升）
     if not selector_value:
         for alt_key in ("locator", "target"):
             alt = _str(step.get(alt_key))
-            if not alt:
+            if not alt or _is_tool_ph(alt):
                 continue
             # 跳过 ephemeral hermes ref
             if alt.startswith("@") and len(alt) <= 6:
@@ -355,6 +369,14 @@ def normalize_ai_step(step: dict) -> dict:
             input_value = maybe_url
             selector_value = ""
             selector_type = ""
+        elif _is_tool_ph(maybe_url):
+            selector_value = ""
+            selector_type = ""
+    # extract_otp：层固定 android，避免误标成 Web
+    if action == "extract_otp" and layer in ("web", "cross_end", ""):
+        layer = "android"
+        if not description:
+            description = "提取手机短信验证码"
     if not locate_prompt and description and action in ("click", "input", "tap", "input_text"):
         locate_prompt = description
     compare_type = _str(step.get("compare_type"))

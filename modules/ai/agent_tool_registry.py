@@ -57,7 +57,9 @@ REGISTERED_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "等待手机本机提取短信/通知中的验证码（默认4-8位数字，优先匹配「验证码」附近）。"
             "优先走 scrcpy 视觉（截图+OCR，2-5秒），失败后走 APK 通知监听兜底。"
-            "成功返回 {sms_otp, variables:{sms_otp}}，可直接用于后续 desktop_type_text/windows_type_text 的文本参数。"
+            "成功返回 {sms_otp, variables:{sms_otp}}。"
+            "网页任务请再 hermes_execute 用 browser_type 填 {{sms_otp}}；"
+            "仅纯桌面本机应用才用 windows_type_text。"
             "参数：timeout_sec=120(默认), sender_hint(可选,如「10086」), pattern(可选,自定义正则分组1)"
         ),
         "input_schema": {

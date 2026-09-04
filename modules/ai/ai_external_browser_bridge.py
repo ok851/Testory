@@ -526,6 +526,110 @@ def get_page_snapshot() -> str:
             return ""
 
 
+def resolve_element_from_live_dom(
+    *,
+    hint: str = "",
+    typed_value: str = "",
+    prefer_focused: bool = False,
+) -> Dict[str, str]:
+    """从当前页面 DOM/probe 解析可回放定位（供 ActionRecorder 落库）。
+
+    返回可能含：selector(css)、text、name、placeholder、tag、matched。
+    """
+    out: Dict[str, str] = {}
+    hint = (hint or "").strip()
+    typed_value = (typed_value or "").strip()
+    try:
+        if not _page or _page.is_closed():
+            return out
+    except Exception:
+        return out
+
+    # 1) 输入后优先取焦点元素（browser_type 后 activeElement 最准）
+    if prefer_focused or typed_value:
+        try:
+            focused = _page.evaluate(
+                """() => {
+                    const el = document.activeElement;
+                    if (!el || el === document.body || el === document.documentElement) return null;
+                    const tag = (el.tagName || '').toLowerCase();
+                    const id = el.id || '';
+                    const name = el.getAttribute('name') || '';
+                    const ph = el.getAttribute('placeholder') || '';
+                    const aria = el.getAttribute('aria-label') || '';
+                    const typ = el.getAttribute('type') || '';
+                    const text = (el.innerText || el.textContent || '').trim().slice(0, 80);
+                    let css = '';
+                    if (id && /^[\\w.-]+$/.test(id)) {
+                      css = (tag === 'input' || tag === 'button' || tag === 'textarea' || tag === 'select')
+                        ? (tag + '#' + id) : ('#' + id);
+                    } else if (name) {
+                      css = tag + '[name=\"' + name.replace(/"/g, '\\\\\"') + '\"]';
+                    } else if (ph) {
+                      css = tag + '[placeholder=\"' + ph.replace(/"/g, '\\\\\"').slice(0, 40) + '\"]';
+                    }
+                    return { tag, id, name, placeholder: ph, ariaLabel: aria, type: typ, text, css,
+                             value: (el.value || '').toString().slice(0, 80) };
+                }"""
+            )
+            if isinstance(focused, dict) and (focused.get("css") or focused.get("placeholder") or focused.get("name")):
+                if focused.get("css"):
+                    out["selector"] = str(focused["css"])[:300]
+                label = (
+                    focused.get("placeholder")
+                    or focused.get("ariaLabel")
+                    or focused.get("name")
+                    or focused.get("text")
+                    or ""
+                )
+                if label:
+                    out["text"] = str(label)[:120]
+                    out["matched"] = str(label)[:120]
+                if typed_value and str(focused.get("value") or "") == typed_value:
+                    out["verified_value"] = typed_value
+                return out
+        except Exception:
+            pass
+
+    # 2) probe 注册表按 hint / typed 文案匹配
+    try:
+        registry = get_probe_registry() or []
+    except Exception:
+        registry = []
+    hint_l = hint.lower()
+    best = None
+    best_score = 0
+    for entry in registry:
+        if not isinstance(entry, dict):
+            continue
+        blob = " ".join(
+            str(entry.get(k) or "")
+            for k in ("text", "aria_label", "id", "css", "role", "value", "type")
+        ).lower()
+        score = 0
+        if hint_l and hint_l in blob:
+            score += 10 + min(len(hint_l), 20)
+        if typed_value and typed_value in str(entry.get("value") or ""):
+            score += 8
+        if hint and str(entry.get("text") or "").strip() == hint:
+            score += 15
+        if score > best_score:
+            best_score = score
+            best = entry
+    if best and best_score > 0:
+        css = str(best.get("css") or "").strip()
+        text = str(best.get("text") or best.get("aria_label") or "").strip()
+        if css:
+            out["selector"] = css[:300]
+        if text:
+            out["text"] = text[:120]
+            out["matched"] = text[:120]
+        elif hint:
+            out["text"] = hint[:120]
+            out["matched"] = hint[:120]
+    return out
+
+
 def get_probe_registry() -> List[Dict[str, Any]]:
     """获取 probe 注册表（供 ai_locator_resolution 使用）。"""
     if not _page or _page.is_closed():

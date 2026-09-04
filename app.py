@@ -9012,7 +9012,11 @@ def api_ai_task_execute():
                 )
 
                 from modules.ai.ai_action_recorder import ActionRecorder
-                recorder = ActionRecorder(vision_enabled=bool(allow_screen_tools), platform=run_platform)
+                recorder = ActionRecorder(
+                    vision_enabled=bool(allow_screen_tools),
+                    platform=run_platform,
+                    case_url=(url or "").strip(),
+                )
 
                 run_platform = run_platform_early
                 # 桌面 NL：外层直接 windows_*（OpenClaw 式）；避免 hermes_execute 嵌套空转
@@ -9306,7 +9310,16 @@ def api_ai_task_execute():
                             if (result_preview or "").startswith("NEED_USER_ACTION:") or "NEED_USER_ACTION:" in (result_preview or ""):
                                 _tools_used = [str(tr.get("tool") or "") for tr in task_ctx.tool_trace]
                                 _ce_vars = dict(task_ctx.vars)
-                                if looks_like_hitl_needed(
+                                # 工具结果显式 forbid_hitl（已有 sms_otp）时绝不弹人工介入
+                                _forbid_hitl = False
+                                try:
+                                    import json as _j_hitl
+                                    _pj_hitl = _j_hitl.loads(result_preview)
+                                    if isinstance(_pj_hitl, dict) and _pj_hitl.get("forbid_hitl"):
+                                        _forbid_hitl = True
+                                except Exception:
+                                    pass
+                                if (not _forbid_hitl) and looks_like_hitl_needed(
                                     result_preview,
                                     tools_used=_tools_used,
                                     cross_end_vars=_ce_vars,

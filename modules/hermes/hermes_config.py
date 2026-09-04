@@ -513,8 +513,11 @@ def _testory_soul_md() -> str:
         "browser_snapshot is an accessibility/DOM ref tree (NOT a screenshot) — use at most once when DOM list is insufficient; "
         "vision/screenshot is last-resort only.\n"
         "3. Never open blank tabs / about:blank as a destination.\n"
-        "4. Same tool twice with no progress → stop and say NEED_USER_ACTION.\n"
-        "5. Desktop short tasks prefer MCP windows_* / get_screen_* when available.\n"
+        "4. Same tool twice with no progress → change strategy (e.g. browser_console JS). "
+        "Do NOT ask the user to type an SMS OTP that the platform already provided. "
+        "NEED_USER_ACTION only for image captcha / slider / QR scan.\n"
+        "5. Desktop short tasks prefer MCP windows_* / get_screen_* when available "
+        "(never for web/CDP pages).\n"
     )
 
 

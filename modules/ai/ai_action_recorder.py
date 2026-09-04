@@ -74,6 +74,88 @@ _BAD_TARGETS = frozenset(
         "status",
     }
 )
+# 工具名 / 归一化动作名：绝不能当作选择器或输入值落库
+_TOOL_NAME_PLACEHOLDERS = frozenset(
+    {
+        "browser_navigate",
+        "browser_goto",
+        "browser_click",
+        "browser_type",
+        "browser_fill",
+        "browser_scroll",
+        "browser_press",
+        "browser_press_key",
+        "browser_snapshot",
+        "browser_console",
+        "browser_get_images",
+        "windows_launch_app",
+        "windows_focus_app",
+        "windows_click_element",
+        "windows_click_text",
+        "windows_type_text",
+        "windows_press_key",
+        "mobile_open_app",
+        "mobile_tap",
+        "mobile_input_text",
+        "mobile_swipe",
+        "mobile_extract_otp",
+        "mobile_scrcpy_extract_otp",
+        "navigate",
+        "goto",
+        "click",
+        "type",
+        "fill",
+        "input",
+        "scroll",
+        "extract_otp",
+        "tap",
+        "swipe",
+        "launch_app",
+        "open_app",
+        "hotkey",
+        "press_key",
+        "tool",
+    }
+)
+_TOOL_NAME_PREFIX_RE = re.compile(
+    r"^(?:browser_|windows_|desktop_|mobile_|scrcpy_)[a-z0-9_]+$",
+    re.IGNORECASE,
+)
+
+
+def is_tool_name_placeholder(value: str) -> bool:
+    """判断文本是否为工具名/动作名占位（不可作 selector / input / URL）。"""
+    t = (value or "").strip().lower()
+    if not t:
+        return False
+    if t in _TOOL_NAME_PLACEHOLDERS or t in _BAD_TARGETS:
+        return True
+    return bool(_TOOL_NAME_PREFIX_RE.match(t))
+
+
+def _looks_like_url(value: str) -> bool:
+    s = (value or "").strip()
+    return bool(s) and (
+        s.startswith("http://")
+        or s.startswith("https://")
+        or (s.startswith("/") and len(s) > 1 and " " not in s)
+    )
+
+
+def _first_nonempty_str(*candidates: Any, limit: int = 500) -> str:
+    for c in candidates:
+        if c is None:
+            continue
+        s = str(c).strip()
+        if s and not is_tool_name_placeholder(s):
+            return s[:limit]
+    return ""
+
+
+def _args_pick(args: Dict[str, Any], *keys: str, limit: int = 500) -> str:
+    if not isinstance(args, dict):
+        return ""
+    return _first_nonempty_str(*(args.get(k) for k in keys), limit=limit)
 # 浏览器工具 result 中属于 UI 元数据/状态观察的噪声后缀，应从 target 中剥离
 _NOISE_PAREN_SUFFIXES = [
     r"[（(]\s*class\s*[)）]",
@@ -227,7 +309,8 @@ def is_case_worthy_for_platform(action_type: str, platform: str = "web") -> bool
     """实时用例是否收录该动作：必须可回放，且属于当前主平台（+跨端）步骤词汇。
 
     网页任务不收录 launch_app/windows_* 等桌面模拟开浏览器步骤。
-    多端联动（auto/cross/all）或未知平台：取三端并集，避免丢桌面/手机步骤。
+    多端联动（auto/cross/all/cross_end）或未知平台：取三端并集，避免丢桌面/手机/
+    回 PC 后的 Web 步骤。
     """
     a = (action_type or "").strip().lower()
     if a.startswith("browser_"):
@@ -261,13 +344,16 @@ def is_case_worthy_for_platform(action_type: str, platform: str = "web") -> bool
         if a not in ("extract_otp", "api_call"):
             return False
     plat = (platform or "web").strip().lower()
+    # 多端 / 未知：用并集，避免 PC→手机→PC 回程步骤被单端白名单丢掉
+    if plat in ("auto", "all", "cross", "cross_end", "multi", ""):
+        return a in (_WEB_CASE_ACTIONS | _DESKTOP_CASE_ACTIONS | _ANDROID_CASE_ACTIONS)
     if plat in ("web",):
-        return a in _WEB_CASE_ACTIONS
+        # Web 主任务仍允许跨端 OTP（否则多端联动实时卡缺手机步）
+        return a in _WEB_CASE_ACTIONS or a in ("extract_otp", "api_call")
     if plat in ("desktop", "pc", "windows"):
         return a in _DESKTOP_CASE_ACTIONS
     if plat in ("android", "mobile"):
         return a in _ANDROID_CASE_ACTIONS
-    # auto / cross / all / 空：三端并集，但仍排除纯元工具名
     return a in (_WEB_CASE_ACTIONS | _DESKTOP_CASE_ACTIONS | _ANDROID_CASE_ACTIONS)
 
 
@@ -469,10 +555,18 @@ def _status_from_flags(*, ok: Optional[bool] = None, verified: Optional[bool] = 
 class ActionRecorder:
     """结构化动作记录；不再从 Hermes 长文本关键词臆造成功步骤。"""
 
-    def __init__(self, *, vision_enabled: bool = False, platform: str = "web"):
+    def __init__(
+        self,
+        *,
+        vision_enabled: bool = False,
+        platform: str = "web",
+        case_url: str = "",
+    ):
         self.records: List[ActionRecord] = []
         self.vision_enabled = vision_enabled
         self.platform = platform
+        # 任务起始 URL：navigate 缺省 args.url 时回填，避免落成工具名
+        self.case_url = (case_url or "").strip()
 
     def capture_from_hermes_result(self, result_text: str) -> List[ActionRecord]:
         """
@@ -564,84 +658,111 @@ class ActionRecorder:
             
             # ── 浏览器工具：优先用 matched/selector/ref 等 DOM 元素标识 ──
             if is_browser_tool:
-                raw_target = str(
-                    result.get("matched")
-                    or result.get("selector")
-                    or result.get("ref")
-                    or result.get("element")
-                    or result.get("key")
-                    or result.get("url")
-                    or ""
-                )[:80]
+                _is_type_tool = name in (
+                    "browser_type", "browser_fill", "type", "fill",
+                ) or name.endswith("_type") or name.endswith("_fill")
+                raw_target = _first_nonempty_str(
+                    result.get("matched"),
+                    result.get("selector"),
+                    result.get("elementDescription"),
+                    result.get("element_description"),
+                    result.get("description"),
+                    result.get("label"),
+                    result.get("name"),
+                    # type/fill 的 text 是输入值，不能当定位
+                    (None if _is_type_tool else result.get("text")),
+                    result.get("element"),
+                    result.get("key"),
+                    result.get("url"),
+                    result.get("ref"),
+                    limit=120,
+                )
                 if not raw_target:
-                    raw_target = str(
-                        args.get("ref")
-                        or args.get("text")
-                        or args.get("selector")
-                        or args.get("url")
-                        or args.get("element")
-                        or ""
-                    )[:80]
+                    _type_keys = (
+                        "elementDescription",
+                        "element_description",
+                        "description",
+                        "label",
+                        "name",
+                        "selector",
+                        "css",
+                        "xpath",
+                        "url",
+                        "element",
+                        "ref",
+                    )
+                    _click_keys = _type_keys + ("text",)
+                    raw_target = _args_pick(
+                        args,
+                        *(_type_keys if _is_type_tool else _click_keys),
+                        limit=120,
+                    )
                 target = sanitize_target(raw_target)
             
             # ── 桌面工具：优先用 app_name/title/label/description 等控件标识 ──
             elif is_desktop_tool:
-                raw_target = str(
-                    result.get("matched")
-                    or result.get("description")
-                    or result.get("app_name")
-                    or result.get("title")
-                    or result.get("label")
-                    or ""
-                )[:80]
+                raw_target = _first_nonempty_str(
+                    result.get("matched"),
+                    result.get("description"),
+                    result.get("app_name"),
+                    result.get("title"),
+                    result.get("label"),
+                    limit=120,
+                )
                 if not raw_target:
-                    raw_target = str(
-                        args.get("description")
-                        or args.get("locate")
-                        or args.get("text")
-                        or args.get("app")
-                        or args.get("app_name")
-                        or args.get("title")
-                        or args.get("path")
-                        or args.get("key")
-                        or ""
-                    )[:80]
+                    raw_target = _args_pick(
+                        args,
+                        "description",
+                        "locate",
+                        "elementDescription",
+                        "text",
+                        "app",
+                        "app_name",
+                        "title",
+                        "path",
+                        "key",
+                        limit=120,
+                    )
                 target = sanitize_target(raw_target)
             
             # ── 移动端工具：优先用 package_name/text/resource_id 等元素标识 ──
             elif is_mobile_tool:
-                raw_target = str(
-                    result.get("text")
-                    or result.get("resource_id")
-                    or result.get("content_desc")
-                    or result.get("package_name")
-                    or result.get("app_name")
-                    or result.get("description")
-                    or ""
-                )[:80]
+                raw_target = _first_nonempty_str(
+                    result.get("text"),
+                    result.get("resource_id"),
+                    result.get("content_desc"),
+                    result.get("package_name"),
+                    result.get("app_name"),
+                    result.get("description"),
+                    limit=120,
+                )
                 if not raw_target:
-                    raw_target = str(
-                        args.get("text")
-                        or args.get("selector")
-                        or args.get("package")
-                        or args.get("app")
-                        or args.get("resource_id")
-                        or ""
-                    )[:80]
+                    raw_target = _args_pick(
+                        args,
+                        "text",
+                        "selector",
+                        "package",
+                        "app",
+                        "resource_id",
+                        "description",
+                        limit=120,
+                    )
                 target = sanitize_target(raw_target)
             
             # ── 其他跨端/通用工具 ──
             else:
-                target = sanitize_target(str(
-                    result.get("matched")
-                    or result.get("app_name")
-                    or result.get("description")
-                    or result.get("key")
-                    or args.get("app")
-                    or args.get("text")
-                    or args.get("instruction")
-                    or ""
-                )[:80])
+                target = sanitize_target(
+                    _first_nonempty_str(
+                        result.get("matched"),
+                        result.get("app_name"),
+                        result.get("description"),
+                        result.get("key"),
+                        args.get("app") if isinstance(args, dict) else "",
+                        args.get("text") if isinstance(args, dict) else "",
+                        args.get("instruction") if isinstance(args, dict) else "",
+                        limit=120,
+                    )
+                )
         elif result is not None:
             summary = str(result)[:200]
             low = summary.lower()
@@ -650,45 +771,58 @@ class ActionRecorder:
             elif '"ok": true' in low or '"success": true' in low:
                 ok = True
         if not target:
-            raw_target = str(
-                args.get("app")
-                or args.get("text")
-                or args.get("element")
-                or args.get("action")
-                or args.get("name")
-                or args.get("url")
-                or args.get("title")
-                or args.get("package")
-                or name
-            )[:80]
+            raw_target = _args_pick(
+                args,
+                "elementDescription",
+                "element_description",
+                "description",
+                "label",
+                "app",
+                "text",
+                "element",
+                "selector",
+                "url",
+                "title",
+                "package",
+                "name",
+                "ref",
+                limit=120,
+            )
+            # 禁止把工具名塞进 target（历史根因：空 args → target=browser_type）
+            if not raw_target and name not in _TOOL_NAME_PLACEHOLDERS and not _TOOL_NAME_PREFIX_RE.match(name):
+                raw_target = name[:80]
             target = sanitize_target(raw_target)
         # 跳过：target 是状态观察文本（如"后变为禁用态"），不应作为独立步骤
         if is_state_observation(target) and is_platform_tool:
             # 平台工具的状态观察：用 args 构造一个有意义的 target
             if is_browser_tool:
-                alt = str(args.get("ref") or args.get("text") or args.get("selector") or "")[:60]
+                alt = _args_pick(args, "elementDescription", "description", "text", "selector", "ref", limit=60)
             elif is_desktop_tool:
-                alt = str(args.get("app") or args.get("text") or args.get("title") or "")[:60]
+                alt = _args_pick(args, "description", "locate", "app", "text", "title", limit=60)
             elif is_mobile_tool:
-                alt = str(args.get("text") or args.get("selector") or args.get("package") or "")[:60]
+                alt = _args_pick(args, "text", "selector", "package", "description", limit=60)
             else:
                 alt = ""
             if alt:
                 target = sanitize_target(alt)
             else:
-                target = name.replace("browser_", "", 1).replace("windows_", "", 1).replace("mobile_", "", 1)
-        if self._is_bad_target(target):
-            target = name
+                target = ""
+        if self._is_bad_target(target) or is_tool_name_placeholder(target):
+            target = ""
         # 跳过负向片段污染的 target（如包含"失败或风险点"）
         if contains_negative_snippet(target) and is_platform_tool:
             if is_browser_tool:
-                target = sanitize_target(str(args.get("ref") or args.get("text") or name)[:60])
+                target = sanitize_target(
+                    _args_pick(args, "elementDescription", "description", "text", "selector", "ref", limit=60)
+                )
             elif is_desktop_tool:
-                target = sanitize_target(str(args.get("app") or args.get("text") or name)[:60])
+                target = sanitize_target(_args_pick(args, "description", "app", "text", "title", limit=60))
             elif is_mobile_tool:
-                target = sanitize_target(str(args.get("text") or args.get("selector") or name)[:60])
+                target = sanitize_target(_args_pick(args, "text", "selector", "package", limit=60))
             else:
-                target = sanitize_target(str(args.get("text") or name)[:60])
+                target = sanitize_target(_args_pick(args, "text", limit=60))
+            if is_tool_name_placeholder(target):
+                target = ""
         st = (status or "").strip().lower()
         if st in ("running", "in_progress", "started", "progress"):
             st = "running"
@@ -710,59 +844,159 @@ class ActionRecorder:
         if st in ("fail", "failed", "error"):
             return []
         action_type = self._normalize_action_type(name, args)
-        input_data = str(args.get("text") or args.get("input_value") or args.get("value") or "")[:500]
+        input_data = _args_pick(
+            args,
+            "text",
+            "input_value",
+            "value",
+            "content",
+            "input",
+            limit=500,
+        )
         # navigate / hotkey / launch：关键值常在 url/key/app，不在 text
-        if action_type in ("navigate", "goto") and not input_data:
-            input_data = str(
-                args.get("url")
-                or (result.get("url") if isinstance(result, dict) else "")
-                or target
-                or ""
-            )[:500]
+        if action_type in ("navigate", "goto") and not _looks_like_url(input_data):
+            input_data = _first_nonempty_str(
+                args.get("url") if isinstance(args, dict) else "",
+                (result.get("url") if isinstance(result, dict) else ""),
+                self.case_url,
+                target if _looks_like_url(target) else "",
+                limit=500,
+            )
+            # 仍无真实 URL：尝试当前页
+            if not input_data:
+                try:
+                    from modules.ai import ai_external_browser_bridge as _br
+
+                    _page = getattr(_br, "_page", None)
+                    if _page is not None and not getattr(_page, "is_closed", lambda: True)():
+                        _u = str(getattr(_page, "url", "") or "").strip()
+                        if _looks_like_url(_u) and "about:blank" not in _u.lower():
+                            input_data = _u[:500]
+                except Exception:
+                    pass
         if action_type in ("hotkey", "press_key") and not input_data:
-            input_data = str(args.get("key") or args.get("keys") or target or "")[:200]
+            input_data = _args_pick(args, "key", "keys", limit=200) or (
+                target if not is_tool_name_placeholder(target) else ""
+            )
         if action_type in ("launch_app", "focus_app", "open_app") and not input_data:
-            input_data = str(
-                args.get("app")
-                or args.get("app_name")
-                or args.get("path")
-                or args.get("package")
-                or target
-                or ""
-            )[:500]
+            input_data = _args_pick(
+                args, "app", "app_name", "path", "package", limit=500
+            ) or (target if not is_tool_name_placeholder(target) else "")
         if action_type == "wait" and not input_data:
-            input_data = str(
-                args.get("duration_ms")
-                or args.get("timeout_ms")
-                or args.get("ms")
-                or args.get("seconds")
-                or ""
-            )[:40]
+            input_data = _args_pick(
+                args, "duration_ms", "timeout_ms", "ms", "seconds", limit=40
+            )
         if lifted:
             action_type = lifted["action_type"]
-            target = lifted["target"] or target
-            input_data = lifted.get("input_data") or input_data
+            if lifted.get("target") and not is_tool_name_placeholder(lifted["target"]):
+                target = lifted["target"]
+            if lifted.get("input_data"):
+                input_data = lifted["input_data"]
         # Web 别名统一，避免落库 type/fill 后执行器不识别
         if action_type in ("type", "fill"):
             action_type = "input"
         if action_type == "goto":
             action_type = "navigate"
+        # Web：用实时 DOM / 焦点元素补全定位（Hermes 常只回 ok，无 matched）
+        if is_browser_tool and action_type in ("click", "input", "hover", "double_click", "right_click"):
+            weak = (
+                not target
+                or is_tool_name_placeholder(target)
+                or _is_ephemeral_browser_ref(target)
+            )
+            if weak or (action_type == "input" and input_data):
+                try:
+                    from modules.ai.ai_external_browser_bridge import resolve_element_from_live_dom
+
+                    hint = _args_pick(
+                        args,
+                        "elementDescription",
+                        "element_description",
+                        "description",
+                        "label",
+                        "text",
+                        "name",
+                        limit=120,
+                    ) or (
+                        target
+                        if target and not _is_ephemeral_browser_ref(target) and not is_tool_name_placeholder(target)
+                        else ""
+                    )
+                    enriched = resolve_element_from_live_dom(
+                        hint=hint,
+                        typed_value=input_data if action_type == "input" else "",
+                        prefer_focused=(action_type == "input"),
+                    )
+                    if enriched.get("matched") and (
+                        not target or _is_ephemeral_browser_ref(target) or is_tool_name_placeholder(target)
+                    ):
+                        target = sanitize_target(enriched["matched"])
+                    if enriched.get("selector"):
+                        args = dict(args) if isinstance(args, dict) else {}
+                        if not str(args.get("selector") or args.get("css") or "").strip():
+                            args["selector"] = enriched["selector"]
+                    if enriched.get("text") and action_type == "click" and (
+                        not target or _is_ephemeral_browser_ref(target)
+                    ):
+                        target = sanitize_target(enriched["text"])
+                except Exception:
+                    pass
         if not is_replayable_action_type(action_type):
             return []
+        # 无有效定位/输入的平台动作：不落库（避免 browser_type 当选择器）
+        if is_platform_tool and action_type not in ("extract_otp", "wait", "api_call", "back", "home"):
+            if action_type in ("navigate",):
+                if not _looks_like_url(input_data):
+                    return []
+            elif action_type in ("input", "input_text", "type", "fill"):
+                # 输入步：至少要有输入值，或非工具名目标/选择器
+                has_sel = bool(
+                    (target and not is_tool_name_placeholder(target) and not _is_ephemeral_browser_ref(target))
+                    or _args_pick(args, "selector", "css", "xpath", "elementDescription", "description")
+                )
+                if not input_data and not has_sel:
+                    return []
+            elif action_type in ("click", "tap", "double_click", "right_click", "hover"):
+                has_sel = bool(
+                    (target and not is_tool_name_placeholder(target))
+                    or _args_pick(
+                        args,
+                        "selector",
+                        "css",
+                        "xpath",
+                        "elementDescription",
+                        "description",
+                        "text",
+                        "ref",
+                    )
+                )
+                if not has_sel:
+                    return []
         # 描述优先用人话目标，避免 result 仅有工具名导致用例步骤无意义
         human_desc = ""
-        if target and not self._is_bad_target(target) and target not in (name, action_type):
-            human_desc = target
-        elif summary and summary not in (name, action_type):
+        if target and not self._is_bad_target(target) and not is_tool_name_placeholder(target):
+            if target not in (name, action_type):
+                human_desc = target
+        if not human_desc and summary and not is_tool_name_placeholder(summary) and summary not in (name, action_type):
             human_desc = summary
-        else:
-            human_desc = f"{action_type}"
+        if not human_desc:
+            if action_type == "extract_otp":
+                human_desc = "提取手机短信验证码"
+            elif action_type == "navigate" and input_data:
+                human_desc = f"打开 {input_data[:80]}"
+            elif input_data and action_type in ("input", "input_text"):
+                human_desc = f"输入 {input_data[:40]}"
+            else:
+                human_desc = action_type
+        # navigate：URL 进 input_data，target 用 URL（勿留空导致描述丢失）
+        if action_type == "navigate" and _looks_like_url(input_data):
+            target = input_data
         rec = ActionRecord(
             action_id=f"act_{len(self.records)}",
             action_type=action_type,
-            target=target or name,
-            input_data=input_data,
-            result=(human_desc or summary or name)[:200],
+            target=target or (human_desc if not is_tool_name_placeholder(human_desc) else ""),
+            input_data=input_data if not is_tool_name_placeholder(input_data) else "",
+            result=(human_desc or summary or action_type)[:200],
             status=st,
             raw_text=json.dumps({"name": name, "args": args}, ensure_ascii=False)[:2000],
             uia_anchor=result.get("uia_anchor") if isinstance(result, dict) else None,
@@ -771,9 +1005,14 @@ class ActionRecorder:
             device_serial=str(args.get("serial") or args.get("device_id") or "")[:80],
         )
         # 从 args 直接带上选择器线索（供 to_case_steps 回填，避免只剩 ephemeral ref）
-        sel = str(args.get("selector") or args.get("css") or args.get("xpath") or "").strip()
-        if sel and not _is_ephemeral_browser_ref(sel):
+        sel = _args_pick(args, "selector", "css", "xpath", "elementDescription", "description", "text", limit=500)
+        if sel and not _is_ephemeral_browser_ref(sel) and not is_tool_name_placeholder(sel):
             rec.locator = sel[:500]
+        # 仅有 @eN：把 description 类字段记入 locator 旁路（locate_prompt 在 to_case_steps）
+        if not rec.locator:
+            hint = _args_pick(args, "elementDescription", "element_description", "description", "label", limit=200)
+            if hint:
+                rec.locator = hint[:500]
         self.records.append(rec)
         return [rec]
 
@@ -902,7 +1141,7 @@ class ActionRecorder:
     @staticmethod
     def _is_bad_target(target: str) -> bool:
         t = (target or "").strip().lower()
-        return (not t) or t in _BAD_TARGETS or t in ('"ok"', "'ok'")
+        return (not t) or t in _BAD_TARGETS or t in ('"ok"', "'ok'") or is_tool_name_placeholder(t)
 
     @staticmethod
     def _normalize_action_type(name: str, args: Dict[str, Any]) -> str:
@@ -1005,32 +1244,60 @@ class ActionRecorder:
                 continue
             if not is_replayable_action_type(rec.action_type):
                 continue
-            # 丢弃 target 仍是工具名的噪声（如 console → browser_console）
-            tgt_low = (rec.target or "").strip().lower()
+            # 丢弃 target 仍是工具名的噪声（如 console → browser_console / browser_type）
+            tgt_raw = (rec.target or "").strip()
+            tgt_low = tgt_raw.lower()
+            _keep_despite_bad_tgt = (
+                (rec.action_type in ("navigate", "goto") and _looks_like_url(rec.input_data))
+                or (rec.action_type in ("input", "input_text") and (rec.input_data or "").strip())
+                or rec.action_type in ("extract_otp", "wait", "api_call")
+                or ((rec.locator or "").strip() and not is_tool_name_placeholder(rec.locator))
+            )
             if tgt_low in (
                 "browser_console",
                 "browser_snapshot",
                 "console",
                 "snapshot",
                 "browser_get_images",
-            ):
-                continue
+            ) or is_tool_name_placeholder(tgt_low):
+                if not _keep_despite_bad_tgt:
+                    continue
+                tgt_raw = ""
             # 按 per-record 工具层判断可复用性（多端联动时 desktop 平台也要收录手机步骤）
             _worthy_plat = (
                 rec.platform_layer
                 if rec.platform_layer in ("web", "desktop", "android")
-                else (self.platform or "web")
+                else (
+                    "auto"
+                    if (self.platform or "").strip().lower() in ("auto", "all", "cross", "cross_end", "")
+                    else (self.platform or "web")
+                )
             )
             if not is_case_worthy_for_platform(rec.action_type, _worthy_plat):
                 continue
+            _desc = ""
+            if (
+                tgt_raw
+                and not self._is_bad_target(tgt_raw)
+                and not is_tool_name_placeholder(tgt_raw)
+                and not _is_ephemeral_browser_ref(tgt_raw)
+            ):
+                _desc = tgt_raw
+            elif rec.result and not is_tool_name_placeholder(rec.result):
+                _desc = rec.result[:100]
             step: Dict[str, Any] = {
                 "action": rec.action_type,
-                "target": rec.target,
-                "input_value": rec.input_data,
-                "description": (
-                    (rec.target if rec.target and not self._is_bad_target(rec.target) else "")
-                    or (rec.result[:100] if rec.result else "")
+                "target": (
+                    tgt_raw
+                    if (
+                        tgt_raw
+                        and not is_tool_name_placeholder(tgt_raw)
+                        and not _is_ephemeral_browser_ref(tgt_raw)
+                    )
+                    else ""
                 ),
+                "input_value": rec.input_data if not is_tool_name_placeholder(rec.input_data) else "",
+                "description": _desc,
                 # 多端联动录制：优先 per-record 工具前缀层，其次平台单值
                 "automation_layer": rec.platform_layer
                 if rec.platform_layer in ("web", "desktop", "android")
@@ -1135,23 +1402,32 @@ class ActionRecorder:
             layer = str(step.get("automation_layer") or "web")
             act = str(step.get("action") or "")
             if act == "navigate":
-                url = (
-                    str(step.get("input_value") or "").strip()
-                    or str(rec.input_data or "").strip()
-                    or str(rec.target or "").strip()
+                url = _first_nonempty_str(
+                    step.get("input_value"),
+                    rec.input_data,
+                    rec.target if _looks_like_url(rec.target) else "",
+                    self.case_url,
+                    limit=500,
                 )
-                if url and (url.startswith("http://") or url.startswith("https://") or url.startswith("/")):
+                if _looks_like_url(url):
                     step["input_value"] = url
+                    step["target"] = url
                     step["selector_type"] = ""
                     step["selector_value"] = ""
+                    if not step.get("description") or is_tool_name_placeholder(step.get("description") or ""):
+                        step["description"] = f"打开 {url[:80]}"
+                else:
+                    # 无真实 URL 的导航不可回放
+                    continue
             elif not step.get("selector_value"):
-                cand = (
-                    str(step.get("locator") or "").strip()
-                    or str(rec.locator or "").strip()
-                    or str(step.get("locate_prompt") or "").strip()
-                    or str(rec.target or "").strip()
+                cand = _first_nonempty_str(
+                    step.get("locator"),
+                    rec.locator,
+                    step.get("locate_prompt"),
+                    rec.target,
+                    limit=500,
                 )
-                if cand and not _is_ephemeral_browser_ref(cand) and not self._is_bad_target(cand):
+                if cand and not _is_ephemeral_browser_ref(cand) and not self._is_bad_target(cand) and not is_tool_name_placeholder(cand):
                     if layer == "web":
                         if _looks_like_css_or_xpath(cand):
                             stype = "xpath" if cand.startswith(("/", "(")) or cand.startswith("xpath=") else "css"
@@ -1177,11 +1453,36 @@ class ActionRecorder:
                         step["selector_value"] = cand[:200]
                 elif cand and _is_ephemeral_browser_ref(cand):
                     # 会话 ref 不可回放：至少保留 locate_prompt，避免空步骤
-                    hint = str(_raw_args.get("text") or step.get("description") or "").strip()
+                    # input 的 text/value 是输入内容，绝不能当定位文案
+                    if act in ("input", "input_text", "type", "fill"):
+                        hint = _first_nonempty_str(
+                            _raw_args.get("elementDescription"),
+                            _raw_args.get("element_description"),
+                            _raw_args.get("description"),
+                            _raw_args.get("label"),
+                            _raw_args.get("name"),
+                            step.get("description") if not is_tool_name_placeholder(step.get("description") or "") else "",
+                            limit=200,
+                        )
+                    else:
+                        hint = _first_nonempty_str(
+                            _raw_args.get("elementDescription"),
+                            _raw_args.get("element_description"),
+                            _raw_args.get("description"),
+                            _raw_args.get("text"),
+                            step.get("description"),
+                            limit=200,
+                        )
                     if hint:
                         step["locate_prompt"] = hint[:200]
                         if not step.get("description"):
                             step["description"] = hint[:100]
+                        # 有人话描述时用 text 定位，便于平台回放
+                        if act in ("click", "input", "hover", "double_click", "right_click"):
+                            step["selector_type"] = "text"
+                            step["selector_value"] = hint[:200]
+                    # 清除 ephemeral target，避免落库 @eN
+                    step["target"] = ""
             if step.get("automation_layer") == "desktop":
                 # 已有 UIA 锚点（automation_id/name）时保留，否则用 name/locate_prompt
                 if not step.get("selector_type"):

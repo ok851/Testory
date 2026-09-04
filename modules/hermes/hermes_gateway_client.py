@@ -221,7 +221,8 @@ class HermesGatewayClient:
             "browser_snapshot 是 DOM/a11y ref（非截图）：仅难定位时兜底（全程最多 2 次，禁止连续反复）；视觉仅兜底。"
             "禁止 skill_view / terminal。"
             "Windows 桌面优先 MCP windows_* / get_screen_*。"
-            "未核验勿声称已完成。同一工具连续无进展超过 2 次必须换策略或 NEED_USER_ACTION。"
+            "未核验勿声称已完成。同一工具连续无进展超过 2 次必须换策略（如 browser_console），"
+            "禁止因短信验证码请用户手填；仅图形验证码/滑块/扫码才 NEED_USER_ACTION。"
         )
 
     def _build_chat_payload(
@@ -432,14 +433,30 @@ class HermesGatewayClient:
                                                "launch_app", "focus_app", "press_key", "screenshot")
                             )
                             if is_platform_tool and te.get("args"):
-                                # 合并 delta 到 tool_events：如果已有同名工具则更新 args，否则新增
+                                # 合并 delta：优先 call_id，其次同名 running；避免多次 click 互相覆盖
                                 _existing = None
-                                for _e in tool_events:
-                                    if _e.get("name") == te_name:
-                                        _existing = _e
-                                        break
+                                _cid = str(te.get("call_id") or "").strip()
+                                if _cid:
+                                    for _e in tool_events:
+                                        if str(_e.get("call_id") or "").strip() == _cid:
+                                            _existing = _e
+                                            break
+                                if _existing is None:
+                                    for _e in tool_events:
+                                        if _e.get("name") != te_name:
+                                            continue
+                                        _st = str(_e.get("status") or "").lower()
+                                        if _st in ("running", "in_progress", "started", "progress", ""):
+                                            _existing = _e
+                                            break
                                 if _existing:
-                                    _existing["args"] = te.get("args")
+                                    _ea = _existing.get("args") if isinstance(_existing.get("args"), dict) else {}
+                                    _na = te.get("args") if isinstance(te.get("args"), dict) else {}
+                                    _merged_args = dict(_ea)
+                                    _merged_args.update(_na)
+                                    _existing["args"] = _merged_args
+                                    if _cid:
+                                        _existing["call_id"] = _cid
                                     if not _existing.get("result"):
                                         _existing["result"] = {"ok": True}
                                     if not _existing.get("status") or _existing["status"] == "running":
@@ -667,7 +684,14 @@ def _normalize_hermes_tool_progress(
     if not summary:
         act = args.get("action") or args.get("app") or args.get("text") or args.get("ref") or args.get("url") or ""
         summary = f"{name}" + (f"({act})" if act else "")
-    return {
+    call_id = _norm(
+        data.get("call_id")
+        or data.get("id")
+        or data.get("tool_call_id")
+        or data.get("toolCallId")
+        or ""
+    )
+    out = {
         "name": name,
         "args": args,
         "status": status,
@@ -675,6 +699,9 @@ def _normalize_hermes_tool_progress(
         "summary": summary[:240],
         "sse_event": sse_event or "",
     }
+    if call_id:
+        out["call_id"] = call_id
+    return out
 
 
 def _tool_call_delta_to_event(tc: Any) -> Optional[Dict[str, Any]]:
@@ -691,11 +718,112 @@ def _tool_call_delta_to_event(tc: Any) -> Optional[Dict[str, Any]]:
             args = {"raw": raw_args[:200]}
     elif isinstance(raw_args, dict):
         args = raw_args
+    call_id = _norm(tc.get("id") or tc.get("tool_call_id") or "")
     return {
         "name": name,
         "args": args,
         "status": "running",
         "summary": name,
         "sse_event": "tool_calls_delta",
+        "call_id": call_id,
     }
+
+
+def _args_richness(args: Any) -> int:
+    if not isinstance(args, dict) or not args:
+        return 0
+    score = 0
+    for k, v in args.items():
+        if v is None or v == "" or v == {}:
+            continue
+        if k == "raw":
+            score += 1
+            continue
+        score += 2 + min(len(str(v)), 40) // 10
+    return score
+
+
+def merge_hermes_tool_events(tool_evs: Any) -> List[Dict[str, Any]]:
+    """合并同一工具调用的 args（delta）与 result（completed）。
+
+    根因：completed 事件常只带 result/ok，args 留在先前 running delta；
+    若按 name+args 分桶，空 args 的 completed 会单独成条并落成工具名占位步骤。
+    """
+    if not isinstance(tool_evs, list):
+        return []
+    pending_by_id: Dict[str, Dict[str, Any]] = {}
+    pending_by_name: Dict[str, List[Dict[str, Any]]] = {}
+    out: List[Dict[str, Any]] = []
+
+    def _merge(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(a)
+        merged.update({k: v for k, v in b.items() if v is not None and v != ""})
+        a_args = a.get("args") if isinstance(a.get("args"), dict) else {}
+        b_args = b.get("args") if isinstance(b.get("args"), dict) else {}
+        if _args_richness(b_args) >= _args_richness(a_args):
+            merged["args"] = dict(a_args)
+            merged["args"].update(b_args)
+        else:
+            merged["args"] = dict(b_args)
+            merged["args"].update(a_args)
+        if b.get("result") is not None:
+            merged["result"] = b.get("result")
+        elif a.get("result") is not None:
+            merged["result"] = a.get("result")
+        cid = _norm(a.get("call_id") or b.get("call_id") or "")
+        if cid:
+            merged["call_id"] = cid
+        return merged
+
+    for te in tool_evs:
+        if not isinstance(te, dict):
+            continue
+        name = _norm(te.get("name") or "tool") or "tool"
+        args = te.get("args") if isinstance(te.get("args"), dict) else {}
+        call_id = _norm(te.get("call_id") or te.get("id") or te.get("tool_call_id") or "")
+        ts = _norm(te.get("status") or "").lower()
+        has_result = te.get("result") is not None
+        is_done = ts in (
+            "completed", "success", "succeeded", "done", "finished", "failed", "error", "fail"
+        ) or has_result
+        has_args = _args_richness(args) > 0
+
+        if call_id and call_id in pending_by_id and is_done:
+            base = pending_by_id.pop(call_id)
+            out.append(_merge(base, te))
+            continue
+        if is_done:
+            queue = pending_by_name.get(name) or []
+            if queue:
+                base = queue.pop(0)
+                out.append(_merge(base, te))
+                continue
+            if call_id and call_id in pending_by_id:
+                base = pending_by_id.pop(call_id)
+                out.append(_merge(base, te))
+                continue
+            out.append(dict(te))
+            continue
+        # running / 仅有 args：入队等待 completed
+        if has_args or call_id:
+            item = dict(te)
+            if call_id:
+                pending_by_id[call_id] = item
+            pending_by_name.setdefault(name, []).append(item)
+
+    # 残留 pending：有有效 args 的仍保留（后续 capture 可凭 args 落库）
+    for cid, item in list(pending_by_id.items()):
+        if item not in out:
+            out.append(item)
+    for _name, queue in pending_by_name.items():
+        for item in queue:
+            if item not in out and item not in pending_by_id.values():
+                # 已按 call_id 加入的不再重复
+                already = False
+                cid = _norm(item.get("call_id") or "")
+                if cid and any(_norm(x.get("call_id") or "") == cid for x in out):
+                    already = True
+                if not already:
+                    out.append(item)
+    return out
 

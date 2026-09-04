@@ -152,8 +152,12 @@ def web_browser_cdp_hint() -> str:
             "  - document.querySelectorAll 获取元素列表\n",
             "- **重要**：snapshot 返回的 ref ID（如 @e5）仅在当前会话有效，"
             "若页面刷新或重新导航后必须重新 snapshot。\n",
-            "- 同一工具连续 2 次无进展：换策略（改用 JavaScript）或 NEED_USER_ACTION。\n",
-            "- 遇登录/验证码：NEED_USER_ACTION，请用户在本机窗口完成。\n",
+            "- 同一工具连续 2 次无进展：换策略（改用 JavaScript / browser_console），"
+            "**禁止**因短信验证码定位失败就输出 NEED_USER_ACTION 让用户手填。\n",
+            "- 图形验证码/滑块/扫码：才允许 NEED_USER_ACTION。\n",
+            "- **短信验证码**：若指令中已有验证码数字或 {{sms_otp}}，必须用 "
+            "browser_type / browser_fill / browser_console 自动填入并点击登录；"
+            "禁止 navigate 刷新页面；禁止请用户手动输入。\n",
         ]
     )
     return "".join(lines)
@@ -216,7 +220,9 @@ def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = Non
             "  禁止连续反复调用 browser_snapshot（全程最多 2 次）\n"
             "DOM 优先，snapshot 兜底，JavaScript 最终手段；未核验勿声称已登录/已搜索。\n"
             "若遇 401/空流：立刻停止并说明原因。\n"
-            "若需要验证码/扫码，回复 NEED_USER_ACTION:<原因>。\n\n"
+            "【验证码规则】指令已含短信验证码/{{sms_otp}} → 必须 browser_type/browser_console 填入并登录，"
+            "禁止 browser_navigate 刷新，禁止 NEED_USER_ACTION 请用户手填；"
+            "仅图形验证码/滑块/扫码才可 NEED_USER_ACTION。\n\n"
         )
     elif platform in ("desktop",):
         prefix = (
@@ -247,7 +253,8 @@ def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = Non
             f"参考技能 {skill_line}：**不要**反复 skill_view。\n"
             "网页已打开目标页则禁止 navigate；禁止 terminal 探 CDP。\n"
             "每步 observe→act→observe。勿另起独立浏览器。\n"
-            "若遇 401/空流：立刻停止。需要人工时 NEED_USER_ACTION:<原因>。\n\n"
+            "若遇 401/空流：立刻停止。仅图形验证码/滑块/扫码才 NEED_USER_ACTION；"
+            "短信验证码已给出时必须 browser_type/console 填入，禁止请用户手填。\n\n"
         )
     body = (message or meta.get("message") or "").strip()
     return ctx_prefix + prefix + vision_note + body

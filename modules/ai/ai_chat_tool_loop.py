@@ -480,6 +480,114 @@ def _synthesize_auto_execute_tool_calls(
     ]
 
 
+def _looks_like_asking_user_for_sms_otp(text: str) -> bool:
+    """模型是否在向用户索要短信验证码（应改为调 mobile_extract_otp）。"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    ask = any(
+        k in t
+        for k in (
+            "告诉我",
+            "发给我",
+            "回复验证码",
+            "回复我",
+            "请把验证码",
+            "将验证码",
+            "把验证码",
+            "查看手机",
+            "请查看手机",
+            "手机短信",
+            "来自",
+            "告诉我验证码",
+            "验证码告诉",
+            "验证码内容",
+            "手动输入",
+            "请提供验证码",
+            "发我验证码",
+        )
+    )
+    otp_ctx = any(k in t for k in ("验证码", "短信", "otp", "OTP", "sms"))
+    return bool(ask and otp_ctx)
+
+
+def _web_otp_flow_needs_mobile_extract(params: Any, meta: Dict[str, Any]) -> bool:
+    """网页已跑过 + 用户要求从手机取码 + 尚未取得 sms_otp。"""
+    msg = str(getattr(params, "message", "") or "")
+    try:
+        from modules.ai.agent_intent import message_needs_browser, message_needs_mobile_await
+
+        if not (message_needs_browser(msg) and message_needs_mobile_await(msg)):
+            # 用户明确写「从移动端获取验证码」也算
+            if not any(k in msg for k in ("从移动端", "从手机", "mobile_extract", "手机获取验证码", "短信验证码")):
+                if "验证码" not in msg:
+                    return False
+                if not message_needs_browser(msg):
+                    return False
+    except Exception:
+        if "验证码" not in msg:
+            return False
+    sms = str((meta.get("cross_end_vars") or {}).get("sms_otp") or "").strip()
+    if sms:
+        return False
+    used = [str(x or "") for x in (meta.get("tools_used") or [])]
+    if any("extract_otp" in u for u in used):
+        return False
+    # 浏览器段至少已调用过（或平台已标记触达）
+    browser_done = bool(meta.get("_web_task_browser_touched") or meta.get("_platform_nav_done"))
+    if not browser_done:
+        browser_done = any(
+            u.startswith("hermes_execute") or u.startswith("openclaw_execute") for u in used
+        )
+    return browser_done
+
+
+def _synthesize_mobile_extract_otp_tool_calls(
+    *,
+    tools: List[Any],
+    meta: Dict[str, Any],
+) -> Optional[List[Dict[str, Any]]]:
+    """强制注入 mobile_extract_otp，禁止模型停下来向用户要验证码。"""
+    if meta.get("_auto_injected_otp"):
+        return None
+    names = _available_tool_names(tools)
+    tool_name = ""
+    if "mobile_extract_otp" in names:
+        tool_name = "mobile_extract_otp"
+    elif "mobile_scrcpy_extract_otp" in names:
+        tool_name = "mobile_scrcpy_extract_otp"
+    if not tool_name:
+        return None
+    meta["_auto_injected_otp"] = True
+    meta["auto_injected_otp"] = True
+    return [
+        {
+            "id": f"call_auto_otp_{uuid.uuid4().hex[:12]}",
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "arguments": json.dumps(
+                    {"timeout_sec": 120, "sender_hint": "163"},
+                    ensure_ascii=False,
+                ),
+            },
+        }
+    ]
+
+
+def _maybe_force_mobile_otp_tool_calls(
+    text: str,
+    *,
+    params: Any,
+    meta: Dict[str, Any],
+    tools: List[Any],
+) -> Optional[List[Dict[str, Any]]]:
+    """hermes 后若仍缺 sms_otp：自动调取码工具（尤其当模型向用户要码时）。"""
+    if not _web_otp_flow_needs_mobile_extract(params, meta):
+        return None
+    return _synthesize_mobile_extract_otp_tool_calls(tools=tools, meta=meta)
+
+
 def _resolve_no_tool_assistant_text(
     text: str,
     *,
@@ -736,8 +844,9 @@ def _web_hermes_system_prompt() -> str:
         "4. 仅当需要确认界面是否变化时才调用 browser_snapshot 验证\n\n"
         "【📌 重要提示】\n"
         "- 已在目标站时不要重复 navigate；不要打开空白页\n"
-        "- 遇到验证码/扫码：等待用户在浏览器窗口完成\n"
-        "- 操作失败时换另一种方式，不要死循环\n"
+        "- 图形验证码/滑块/扫码：可暂停并说明原因（不要假装已完成）\n"
+        "- 短信验证码若指令已给出数字：必须 browser_type/browser_console 填入，禁止请用户手填、禁止刷新页面\n"
+        "- 操作失败时换另一种方式（snapshot→console），不要死循环\n"
     )
 
 
@@ -748,8 +857,12 @@ def _desktop_hermes_system_prompt() -> str:
         "2. description 仅写短控件名（如「登录」「确定」「搜索」），禁止把用户整句当目标；\n"
         "3. 点击失败时系统自动：触发屏幕观察 → 从 OCR/VLM 候选取最相似文本 → 重试；仍失败再返回详细错误信息；\n"
         "4. 对 Electron / DirectUI / 微信 / QQ 等应用：系统自动降级为 OCR + VLM 视觉定位，无需特殊配置；\n"
-        "5. 连续两次同类工具无进展 → 输出 NEED_USER_ACTION 并停止，禁止死循环；\n"
-        "6. 任务涉及手机验证码 → PC 回填：先调 mobile_extract_otp（等待短信/通知），再用 windows_type_text 填 text='{{sms_otp}}'；\n"
+        "5. 连续两次同类工具无进展 → 换策略或停止并报告真实错误，禁止死循环；"
+        "仅图形验证码/滑块/扫码才输出 NEED_USER_ACTION；\n"
+        "6. 任务涉及手机短信验证码：\n"
+        "   - 网页任务 → mobile_extract_otp 后必须 hermes_execute + browser_type 回填 {{sms_otp}}，"
+        "**禁止** windows_type_text；\n"
+        "   - 纯桌面本机应用（非浏览器）→ 才可用 windows_click_element 聚焦后再 windows_type_text('{{sms_otp}}')；\n"
         "7. 【浏览器导航流程】启动 → Ctrl+L 聚焦地址栏 → 输入 URL → Enter 确认 → 等待 1-2 秒加载 → 操作页面内元素；\n"
         "8. 输入 URL 后可能提示「未核验内容」，这是正常现象——直接紧跟 windows_press_key('Enter') 即可；\n"
         "9. 表单填写流程：windows_click_element('用户名/账号输入框') → windows_type_text('账号') → windows_click_element('密码输入框') → windows_type_text('密码') → windows_click_element('登录')。\n"
@@ -2409,6 +2522,19 @@ def chat_tool_schemas(
         True if (hands is None or hands.get("desktop")) else False
     )
     include_phone = True if (hands is None or hands.get("phone")) else False
+    # 用户任务明确要「从移动端/手机取验证码」时强制挂载 mobile_*（否则模型只能向用户要码）
+    if not include_phone and (message or "").strip():
+        try:
+            from modules.ai.agent_intent import message_needs_mobile_await
+
+            if message_needs_mobile_await(message) or any(
+                k in message
+                for k in ("从移动端", "从手机", "手机获取验证码", "短信验证码", "mobile_extract")
+            ):
+                include_phone = True
+        except Exception:
+            if any(k in (message or "") for k in ("验证码", "从移动端", "从手机")):
+                include_phone = True
 
     # ===== 2. 挂载可用工具 =====
     if allow:
@@ -2700,6 +2826,109 @@ def _reject_invented_otp_type(
     return None
 
 
+def _reject_web_task_desktop_input(
+    tool_name: str,
+    call_args: Dict[str, Any],
+    meta: Dict[str, Any],
+    params: Optional["ChatToolLoopParams"] = None,
+) -> Optional[str]:
+    """网页/CDP 任务禁止用 windows_type_text 回填验证码或在浏览器场景乱打字。"""
+    n = (tool_name or "").strip().lower()
+    if n not in (
+        "windows_type_text",
+        "desktop_type_text",
+        "windows_click_element",
+        "windows_click_text",
+        "windows_press_key",
+        "windows_launch_app",
+        "windows_focus_app",
+    ):
+        return None
+    # 已明确走过浏览器：禁止桌面工具代替 CDP 回填
+    if meta.get("_web_task_browser_touched") or meta.get("_platform_nav_done"):
+        sms = str((meta.get("cross_end_vars") or {}).get("sms_otp") or "").strip()
+        text = str((call_args or {}).get("text") or "").strip()
+        if n in ("windows_type_text", "desktop_type_text") and (
+            sms or re.fullmatch(r"\d{4,6}", text) or "验证码" in str(meta.get("user_goal") or "")
+        ):
+            return (
+                "当前是网页任务（浏览器已打开）。请调用 hermes_execute，"
+                "在 instruction 中用 browser_type/browser_console 把验证码填回网页；"
+                "禁止 windows_type_text（会打到错误窗口且无法确认）。"
+            )
+        if n.startswith("windows_") and sms:
+            return (
+                "网页登录+短信验证码回填必须走 hermes_execute（browser_*），"
+                f"已取得 sms_otp={sms}；禁止改用桌面 windows_* 工具。"
+            )
+    msg = ""
+    if params is not None:
+        msg = str(getattr(params, "message", "") or "")
+    if not msg:
+        msg = str(meta.get("user_goal") or meta.get("task") or "")
+    try:
+        from modules.ai.agent_intent import message_needs_browser
+
+        if msg and message_needs_browser(msg):
+            if n in ("windows_type_text", "desktop_type_text", "windows_launch_app", "windows_focus_app"):
+                return (
+                    "检测到网页/URL 任务：请使用 hermes_execute 操作本机浏览器，"
+                    "不要用 windows_* 模拟浏览器输入。"
+                )
+    except Exception:
+        pass
+    return None
+
+
+def _rewrite_spurious_otp_need_user_action(
+    result_text: str,
+    meta: Dict[str, Any],
+) -> str:
+    """已有 sms_otp 时，把 Hermes 的「请用户手填验证码」改写成可重试错误，禁止触发 HITL。"""
+    raw = result_text or ""
+    if "NEED_USER_ACTION" not in raw:
+        return raw
+    sms = str((meta.get("cross_end_vars") or {}).get("sms_otp") or "").strip()
+    if not sms:
+        return raw
+    # 图形验证码/扫码仍保留原文
+    if any(k in raw for k in ("人机验证", "captcha", "滑块", "点选验证", "扫码", "二维码")):
+        if "验证码输入" not in raw and "sms" not in raw.lower():
+            return raw
+    otp_related = any(
+        k in raw
+        for k in ("验证码", "填入", "登录", "无法直接操作", "手动", "otp", "OTP")
+    )
+    if not otp_related:
+        return raw
+    payload = {
+        "ok": False,
+        "error": (
+            f"定位验证码输入框失败，但平台已取得短信验证码 sms_otp={sms}。"
+            "请勿请求用户手动输入，也禁止 browser_navigate 刷新页面。"
+        ),
+        "sms_otp": sms,
+        "hint": (
+            "立即再次调用 hermes_execute，instruction 明确："
+            f"1) 禁止 navigate；2) 用 browser_snapshot 或 browser_console 定位验证码框；"
+            f"3) browser_type / element.value='{sms}' + dispatchEvent 填入；4) 点击登录。"
+            "禁止输出 NEED_USER_ACTION。"
+        ),
+        "retry_required": True,
+        "forbid_hitl": True,
+    }
+    # 保留 env_verify 等附加字段
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            for k in ("_env_verify", "had_tool_activity", "tool_events"):
+                if k in parsed:
+                    payload[k] = parsed[k]
+    except Exception:
+        pass
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _seed_cross_end_vars_from_message(message: str) -> Dict[str, str]:
     try:
         from modules.ai.agent_intent import extract_cross_end_seed_vars
@@ -2718,8 +2947,9 @@ def _cross_end_strategy_lines() -> List[str]:
         "**绝对不要**用 desktop_* / windows_* 启动应用或按键盘，禁止在非浏览器窗口乱点！",
         "- 【网页登录 + 手机验证码（强制顺序，禁止跳步）】",
         "  1) 先 hermes_execute：打开 URL → 填账号/密码/手机号 → 点击「获取验证码」；",
-        "  2) 再 mobile_extract_otp / mobile_scrcpy_extract_otp 读验证码；",
-        "  3) 再 hermes_execute：把 {{sms_otp}} 填回网页并点击登录。",
+        "  2) 再 **立即** mobile_extract_otp / mobile_scrcpy_extract_otp 读验证码；",
+        "     **严禁**让用户查看短信、把验证码告诉你或手动输入；取码只能走 mobile_* 工具。",
+        "  3) 再 hermes_execute：把 {{sms_otp}} 填回网页并点击登录/下一步。",
         "  **严禁**在未完成网页打开与「获取验证码」点击前，先调任何 mobile_* 取码工具。",
         "- 桌面 GUI（非浏览器本机应用：微信、钉钉、Word、记事本等）：用 desktop_* / windows_*；"
         "每步根据工具返回再决定下一步，禁止臆造成功。",
@@ -2851,8 +3081,8 @@ def _build_system_prompt(
             "",
             "多端联动（网页 + 手机短信验证码）必须分三段执行，禁止在一次 hermes_execute 里空等短信：",
             "  ① 第 1 次 hermes_execute：打开网页 → 填写手机号 → 点击「获取验证码」→ 停在验证码输入框，立即结束（不要等待短信、不要提交）。",
-            "  ② 调用 mobile_extract_otp 等待手机短信，拿到的验证码会自动存入 {{sms_otp}} 变量。",
-            "  ③ 第 2 次 hermes_execute：把验证码 {{sms_otp}} 填入验证码输入框并点击提交/登录。",
+            "  ② **立刻**调用 mobile_extract_otp（禁止问用户要验证码、禁止「请查看手机短信告诉我」）。",
+            "  ③ 第 2 次 hermes_execute：把验证码 {{sms_otp}} 填入验证码输入框，勾选协议，点击下一步/提交。",
             "  切分点以「点击获取验证码」为界；禁止在 hermes_execute 内部空等短信，禁止编造验证码。",
             (
                 "【收尾】开启生成用例：hermes_execute 完成后一两句中文汇报即可；"
@@ -2882,8 +3112,9 @@ def _build_system_prompt(
                 if generate_case_after_run
                 else "- 未开启生成用例：完成后简短汇报，禁止 refine_test_plan / 用例 JSON。"
             ),
-            "- 收到 NEED_USER_ACTION / stream_empty / auth_fatal 时向用户说明；",
-            "禁止编造未实际执行的 steps JSON。",
+            "- 收到 **图形验证码/滑块/扫码** 的 NEED_USER_ACTION 时向用户说明真实原因；",
+            "- 已取得短信验证码（sms_otp）时：禁止请用户手填，必须再调 hermes_execute 用 browser_* 回填；",
+            "- stream_empty / auth_fatal 时向用户说明错误，禁止编造未实际执行的 steps JSON。",
             "",
             "禁止在未确认用户要操作真实环境时调用自动化工具。",
         ]
@@ -3463,6 +3694,36 @@ def _handle_agent_execute(
     elif cur_url and cur_url not in ("about:blank", "chrome://newtab/", "edge://newtab/"):
         already_on = not _fresh_web
 
+    # 短信验证码回填轮：已有浏览器会话 + 非空白页 → 强制停留，禁止重新 navigate 刷掉表单
+    _sms_otp = ""
+    try:
+        _sms_otp = str((meta.get("cross_end_vars") or {}).get("sms_otp") or "").strip()
+    except Exception:
+        _sms_otp = ""
+    if not _sms_otp and params and getattr(params, "meta", None):
+        try:
+            _sms_otp = str((params.meta.get("cross_end_vars") or {}).get("sms_otp") or "").strip()
+        except Exception:
+            pass
+    if not _sms_otp:
+        try:
+            from modules.ai.agent_task_context import get_task_context
+
+            _sid_otp = str(getattr(params, "agent_session_id", None) or "").strip() if params else ""
+            _ctx_otp = get_task_context(_sid_otp) if _sid_otp else None
+            if _ctx_otp and isinstance(getattr(_ctx_otp, "vars", None), dict):
+                _sms_otp = str(_ctx_otp.vars.get("sms_otp") or "").strip()
+                if _sms_otp:
+                    meta.setdefault("cross_end_vars", {})["sms_otp"] = _sms_otp
+        except Exception:
+            pass
+    _otp_fill_round = bool(_sms_otp) and bool(meta.get("_web_task_browser_touched"))
+    if _otp_fill_round and cur_url and cur_url.lower() not in (
+        "about:blank", "chrome://newtab/", "edge://newtab/", ""
+    ):
+        already_on = True
+        meta["hermes_forbid_navigate"] = True
+
     # 平台侧清理空白标签：仅首次调用时执行
     if not meta.get("_cleared_blank_tabs"):
         meta["_cleared_blank_tabs"] = True
@@ -3504,11 +3765,22 @@ def _handle_agent_execute(
             + instr
         )
     elif already_on and cur_url:
+        _otp_block = ""
+        if _otp_fill_round and _sms_otp:
+            _otp_block = (
+                f"【短信验证码回填 — 最高优先级】已取得验证码 sms_otp={_sms_otp}。\n"
+                f"请立即用 browser_type / browser_fill / browser_console 将「{_sms_otp}」填入验证码输入框，"
+                f"然后点击登录/提交。\n"
+                f"**严禁** browser_navigate（会刷新页面导致表单丢失）；\n"
+                f"**严禁** 输出 NEED_USER_ACTION 请用户手动填写；\n"
+                f"定位失败时改用 browser_console 执行 JS（querySelector + value= + dispatchEvent）。\n\n"
+            )
         instr = (
             f"【当前浏览器状态】URL={cur_url}，标题={cur_title}。\n"
             f"浏览器已在目标站，请按用户指令逐步操作，不要跳过步骤；"
             f"不要重新 browser_navigate 到空白页或其它无关地址。\n"
             f"**禁止** skill_view / terminal / 新开空白标签 / 连续反复 browser_snapshot（全程最多 2 次）。\n\n"
+            + _otp_block
             + (f"{rich_context[:8000]}\n\n" if rich_context else "")
             + instr
         )
@@ -3530,8 +3802,11 @@ def _handle_agent_execute(
         )
 
     # 仅当真实已在目标页时限制重复 navigate；新任务首次永不永久锁定
+    # OTP 回填轮：无论路径是否完全匹配，都禁止 navigate
     meta["hermes_already_on_page"] = bool(already_on)
-    meta["hermes_forbid_navigate"] = bool(already_on) and (not _hermes_first)
+    meta["hermes_forbid_navigate"] = bool(already_on) and (not _hermes_first or _otp_fill_round)
+    if _otp_fill_round:
+        meta["hermes_forbid_navigate"] = True
     meta["_web_task_browser_touched"] = True
     meta["_hermes_instr_seeded"] = True
 
@@ -4171,6 +4446,8 @@ def _handle_agent_execute(
     result_text = _inject_execution_env_verify(
         result_text, before_state, after_state, platform_type=plat
     )
+    # 已有 sms_otp 时禁止 Hermes 把「请用户手填」冒充成功 HITL
+    result_text = _rewrite_spurious_otp_need_user_action(result_text, meta)
 
     try:
         from modules.ai.agent_task_context import get_task_context
@@ -4356,16 +4633,18 @@ def run_ai_chat_with_tools(
                 _lines.append("📱 **多端联动场景检测：需要手机验证码**")
                 _lines.append("   对于「网页 + 手机验证码」的组合任务，必须分三段执行：")
                 _lines.append("   1. 第 1 次 hermes_execute：打开网页、填手机号、点「获取验证码」，停在验证码输入框后立即结束")
-                _lines.append("   2. 调用 mobile_extract_otp 等待短信，验证码自动存入 {{sms_otp}} 变量")
-                _lines.append("   3. 第 2 次 hermes_execute：把 {{sms_otp}} 填入验证码框并提交/登录")
-                _lines.append("   禁止在一次 hermes_execute 里空等短信；禁止编造验证码。")
+                _lines.append("   2. **立即调用 mobile_extract_otp**（不要问用户要验证码、不要让用户看短信）")
+                _lines.append("   3. 第 2 次 hermes_execute：把 {{sms_otp}} 填入验证码框、勾选协议、点下一步/登录")
+                _lines.append("   禁止在一次 hermes_execute 里空等短信；禁止编造验证码；")
+                _lines.append("   **严禁**回复「请把验证码告诉我 / 请查看手机短信」——取码是工具职责。")
         elif _has_mobile_otp and not _has_url:
             _lines.append("")
             _lines.append("📱 **检测到手机验证码需求**")
             _lines.append("   如果需要从手机获取验证码：")
             _lines.append("   - 使用 mobile_extract_otp 工具")
             _lines.append("   - 获取的验证码会存入 {{sms_otp}} 变量")
-            _lines.append("   - 如果后续需要在桌面应用中使用，用 windows_type_text 输入")
+            _lines.append("   - 如果后续需要在**桌面本机应用**（非浏览器）中填写，才用 windows_type_text")
+            _lines.append("   - 若任务含 URL/网页：必须 hermes_execute + browser_type 回填，禁止 windows_type_text")
         else:
             _lines.append("")
             _lines.append("💻 **桌面 GUI 任务（无 URL 检测）**")
@@ -4514,12 +4793,23 @@ def run_ai_chat_with_tools(
                 meta["savable"] = False
                 meta["reply_text"] = _strip_invented_case_json(text)
                 return {}, [], meta
+            # 网页段已完成但仍缺 sms_otp：禁止「请把验证码告诉我」终态，强制 mobile_extract_otp
+            _forced_otp = _maybe_force_mobile_otp_tool_calls(
+                text, params=params, meta=meta, tools=tools
+            )
+            if _forced_otp:
+                tool_calls = _forced_otp
+                uat_logger.info(
+                    "auto_injected mobile_extract_otp (ask_user=%s tools_used=%s)",
+                    _looks_like_asking_user_for_sms_otp(text),
+                    list(meta.get("tools_used") or [])[-6:],
+                )
             _allow_ref = getattr(params, "allow_refine_test_plan", None)
             allow_parse_plan = bool(_allow_ref) if _allow_ref is not None else True
             tools_used = list(meta.get("tools_used") or [])
             expect_auto = _automation_expected(params, meta, tools)
             # 期望自动化却零工具：优先还原/自动提升为 hermes_execute，而非硬失败
-            if expect_auto and not tools_used:
+            if not tool_calls and expect_auto and not tools_used:
                 resolved = _resolve_no_tool_assistant_text(
                     text, params=params, meta=meta, tools=tools, round_idx=round_idx
                 )
@@ -4770,6 +5060,20 @@ def run_ai_chat_with_tools(
                         call_args.setdefault("field", "compose")
                     if name in ("windows_click_element", "windows_type_text"):
                         call_args = _prepare_element_context(params, name, call_args, meta)
+                    _layer_block = _reject_web_task_desktop_input(name, call_args, meta, params)
+                    if _layer_block:
+                        result_text = json.dumps(
+                            {
+                                "ok": False,
+                                "success": False,
+                                "error": _layer_block,
+                                "error_code": "WRONG_SURFACE",
+                            },
+                            ensure_ascii=False,
+                        )
+                        meta["tools_used"].append(f"{name}_blocked_web_surface")
+                        messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                        continue
                     _otp_invent = _reject_invented_otp_type(name, call_args, meta)
                     if _otp_invent:
                         result_text = json.dumps(
@@ -5351,6 +5655,22 @@ def run_ai_chat_with_tools_stream(
                     },
                 )
                 return
+            # 网页段已完成但仍缺 sms_otp：禁止向用户要码，强制 mobile_extract_otp
+            _forced_otp = _maybe_force_mobile_otp_tool_calls(
+                text, params=params, meta=meta, tools=tools
+            )
+            if _forced_otp:
+                tool_calls = _forced_otp
+                yield (
+                    "thinking",
+                    {
+                        "round": round_idx,
+                        "content": (
+                            "检测到需从手机取验证码（禁止向用户索要），"
+                            "已自动调用 mobile_extract_otp…"
+                        ),
+                    },
+                )
             # 任务执行默认禁止 refine：一律当对话回复，禁止把胡乱 JSON 当「完成用例」
             _allow_ref = getattr(params, "allow_refine_test_plan", None)
             allow_parse_plan = (
@@ -5360,7 +5680,7 @@ def run_ai_chat_with_tools_stream(
             )
             tools_used = list(meta.get("tools_used") or [])
             expect_auto = _automation_expected(params, meta, tools)
-            if expect_auto and not tools_used:
+            if not tool_calls and expect_auto and not tools_used:
                 resolved = _resolve_no_tool_assistant_text(
                     text, params=params, meta=meta, tools=tools, round_idx=round_idx
                 )
@@ -5787,29 +6107,39 @@ def run_ai_chat_with_tools_stream(
                     except Exception:
                         pass
 
-                    # tool_events 来自 final result 事件时，按签名合并状态：
-                    # 同一工具（name+args）如果有 completed/error 则取，否则取最后一条
-                    _deduped: Dict[str, Dict[str, Any]] = {}
-                    for te in (tool_evs or []):
-                        if not isinstance(te, dict):
-                            continue
-                        try:
-                            _sig_key = json.dumps(
-                                [str(te.get("name") or ""), te.get("args") if isinstance(te.get("args"), dict) else {}],
-                                sort_keys=True,
-                                ensure_ascii=False,
-                            )
-                        except Exception:
-                            _sig_key = str(te.get("name") or id(te))
-                        prev = _deduped.get(_sig_key)
-                        ts = str(te.get("status") or "").strip().lower()
-                        is_done = ts in ("completed", "success", "succeeded", "done", "finished", "failed", "error")
-                        has_result = te.get("result") is not None
-                        if (prev is None) or is_done or (has_result and not (prev.get("result") is not None)):
-                            _deduped[_sig_key] = dict(te)
-                    tool_evs = list(_deduped.values())
+                    # tool_events：合并 delta(args) 与 completed(result)，避免空 args 落成工具名步骤
+                    try:
+                        from modules.hermes.hermes_gateway_client import merge_hermes_tool_events
+
+                        tool_evs = merge_hermes_tool_events(tool_evs)
+                    except Exception:
+                        # 降级：按 name+args 签名合并（旧逻辑）
+                        _deduped: Dict[str, Dict[str, Any]] = {}
+                        for te in (tool_evs or []):
+                            if not isinstance(te, dict):
+                                continue
+                            try:
+                                _sig_key = json.dumps(
+                                    [str(te.get("name") or ""), te.get("args") if isinstance(te.get("args"), dict) else {}],
+                                    sort_keys=True,
+                                    ensure_ascii=False,
+                                )
+                            except Exception:
+                                _sig_key = str(te.get("name") or id(te))
+                            prev = _deduped.get(_sig_key)
+                            ts = str(te.get("status") or "").strip().lower()
+                            is_done = ts in ("completed", "success", "succeeded", "done", "finished", "failed", "error")
+                            has_result = te.get("result") is not None
+                            if (prev is None) or is_done or (has_result and not (prev.get("result") is not None)):
+                                _deduped[_sig_key] = dict(te)
+                        tool_evs = list(_deduped.values())
 
                     rec_tmp = params.recorder if params.recorder else _AR()
+                    if params.recorder and getattr(params, "url", None) and not getattr(rec_tmp, "case_url", ""):
+                        try:
+                            rec_tmp.case_url = str(getattr(params, "url", "") or "")
+                        except Exception:
+                            pass
                     out_recs = []
                     try:
                         from modules.ai.ai_action_recorder import (
@@ -5817,12 +6147,30 @@ def run_ai_chat_with_tools_stream(
                             is_replayable_action_type as _is_replayable,
                             is_case_worthy_for_platform as _is_case_worthy,
                             lift_console_expression as _lift_console,
+                            _layer_for_tool_name as _layer_for_tool,
                         )
                     except Exception:
                         _is_obs_tool = lambda _n: False  # type: ignore
                         _is_replayable = lambda _a: True  # type: ignore
                         _is_case_worthy = lambda _a, _p: True  # type: ignore
                         _lift_console = lambda _e: None  # type: ignore
+                        _layer_for_tool = lambda _n: ""  # type: ignore
+                    # 多端联动：skip_case 用 auto 并集，避免回 PC 后 Web/桌面步骤被主平台白名单丢掉
+                    _plat_case = str(
+                        getattr(getattr(params, "recorder", None), "platform", None)
+                        or getattr(params, "platform_type", None)
+                        or "web"
+                    ).strip().lower()
+                    if _plat_case in ("auto", "all", "cross", "cross_end", "multi") or not _plat_case:
+                        _plat_case = "auto"
+                    else:
+                        # 若本批事件已跨层，强制 auto
+                        _layers_seen = set()
+                        for _te0 in tool_evs:
+                            if isinstance(_te0, dict):
+                                _layers_seen.add(_layer_for_tool(str(_te0.get("name") or "")))
+                        if len([x for x in _layers_seen if x in ("web", "desktop", "android")]) >= 2:
+                            _plat_case = "auto"
                     for te in tool_evs[-80:]:
                         if not isinstance(te, dict):
                             continue
@@ -5855,10 +6203,16 @@ def run_ai_chat_with_tools_stream(
                         # final result 事件中的工具应视为已完成；若有 result 但 status=running，视为 completed
                         if te_has_result and te_status in ("running", "in_progress", "started", "progress", ""):
                             te_status = "completed"
-                        # 无 result 的进行中平台工具：跳过（不进 case）；有 result 才收录
+                        # 无 result 的进行中平台工具：跳过（不进 case）；有 result 或有效 args 才收录
                         if is_platform_tool and not te_has_result:
                             if te_status in ("running", "in_progress", "started", "progress", ""):
-                                continue
+                                # 合并后仍可能只有 args：允许有实质 args 的 completed/无 status 进入 capture
+                                if te_args and te_status in ("", "completed", "success", "done"):
+                                    te_status = "completed"
+                                    te["result"] = te.get("result") or {"ok": True}
+                                    te_has_result = True
+                                else:
+                                    continue
                         if te_status in ("running", "in_progress", "started", "progress"):
                             if te.get("result") is None and te_seen == "tool_calls_delta":
                                 if not is_platform_tool:
@@ -5887,11 +6241,12 @@ def run_ai_chat_with_tools_stream(
                                     st = "warning"
                                 if not _is_replayable(r.action_type):
                                     continue
-                                _plat_case = str(
-                                    getattr(getattr(params, "recorder", None), "platform", None)
-                                    or getattr(params, "platform_type", None)
-                                    or "web"
-                                )
+                                # 按步骤自身层判断；多端时 _plat_case 已升为 auto
+                                _worthy = (
+                                    getattr(r, "platform_layer", "") or ""
+                                ).strip().lower() or _plat_case
+                                if _plat_case == "auto":
+                                    _worthy = "auto"
                                 out_recs.append(
                                     {
                                         "action_type": r.action_type,
@@ -5903,7 +6258,7 @@ def run_ai_chat_with_tools_stream(
                                         "automation_layer": getattr(r, "platform_layer", "") or "",
                                         "input_value": getattr(r, "input_data", "") or "",
                                         "device_id": getattr(r, "device_serial", "") or "",
-                                        "skip_case": not _is_case_worthy(r.action_type, _plat_case),
+                                        "skip_case": not _is_case_worthy(r.action_type, _worthy),
                                     }
                                 )
                         except Exception:
@@ -5921,6 +6276,8 @@ def run_ai_chat_with_tools_stream(
                             is_state_observation,
                             contains_negative_snippet,
                             is_replayable_action_type as _fb_replayable,
+                            is_tool_name_placeholder as _is_tool_ph,
+                            _layer_for_tool_name as _fb_layer,
                         )
                         fb_recs: List[Dict[str, Any]] = []
                         _seen_sigs: set = set()
@@ -5946,71 +6303,135 @@ def run_ai_chat_with_tools_stream(
                         if len(_parse_text.strip()) < 4:
                             _parse_text = str(result_text or "")
 
+                        def _fb_append(act: str, tgt: str, *, input_value: str = "", raw: str = "", tool_hint: str = ""):
+                            tgt = _sanitize_tgt(str(tgt or "").strip()[:120])
+                            if _is_tool_ph(tgt) and act != "extract_otp":
+                                return
+                            if act == "extract_otp" and (not tgt or _is_tool_ph(tgt)):
+                                tgt = "提取手机短信验证码"
+                            if is_state_observation(tgt) or contains_negative_snippet(tgt):
+                                return
+                            if not _fb_replayable(act):
+                                return
+                            if not _dedup_sig(act, tgt or act):
+                                return
+                            layer = _fb_layer(tool_hint or act) or (
+                                "android" if act in ("extract_otp", "tap", "open_app", "input_text", "swipe")
+                                else ("desktop" if act in ("launch_app", "hotkey") else "web")
+                            )
+                            # 同步写入 recorder，保证热路径 build_normalized_plan 含回退解析到的真实数据
+                            try:
+                                _synth_name = tool_hint or (
+                                    f"browser_{act}" if layer == "web"
+                                    else (f"windows_{act}" if layer == "desktop" else f"mobile_{act}")
+                                )
+                                if act == "navigate":
+                                    _synth_args = {"url": tgt}
+                                elif act in ("input", "input_text"):
+                                    _synth_args = {"text": input_value or "", "elementDescription": tgt}
+                                    if not input_value and ":" in tgt:
+                                        # 「字段: 值」形态
+                                        _parts = tgt.split(":", 1)
+                                        _synth_args = {
+                                            "elementDescription": _parts[0].strip(),
+                                            "text": _parts[1].strip(),
+                                        }
+                                        input_value = _synth_args["text"]
+                                        tgt = _synth_args["elementDescription"]
+                                elif act == "extract_otp":
+                                    _synth_args = {}
+                                    _synth_name = "mobile_extract_otp"
+                                else:
+                                    _synth_args = {"elementDescription": tgt, "text": tgt}
+                                rec_tmp.capture_from_tool_event(
+                                    name=_synth_name,
+                                    args=_synth_args,
+                                    result={"ok": True},
+                                    status="completed",
+                                )
+                            except Exception:
+                                pass
+                            fb_recs.append({
+                                "action_type": act,
+                                "target": tgt,
+                                "status": "success",
+                                "result": (raw or act)[:100],
+                                "has_vision": False,
+                                "env_verify": None,
+                                "automation_layer": layer,
+                                "input_value": input_value or "",
+                                "skip_case": False,
+                            })
+
                         # ── ① 函数调用风格：browser_*(...) / windows_*(...) / mobile_*(...) ──
                         _FN_PATTERNS = [
                             # Web 浏览器工具
                             (r"browser_(?:navigate|goto)\s*\(\s*"
                              r"(?:url\s*=\s*)?['\"]([^'\"]{2,240})['\"]",
-                             "navigate", 0),
+                             "navigate", 0, "browser_navigate"),
                             (r"browser_click\s*\(\s*"
-                             r"(?:ref\s*=\s*)?['\"]?(@?e?\d+|[^'\",\)]{1,40})['\"]?",
-                             "click", 0),
+                             r"(?:ref\s*=\s*|elementDescription\s*=\s*|text\s*=\s*)?['\"]([^'\"]{1,80})['\"]",
+                             "click", 0, "browser_click"),
                             (r"browser_(?:type|fill)\s*\(\s*(?:ref\s*=\s*)?['\"]([^'\"]{0,80})['\"]\s*,\s*(?:text|value)\s*=\s*['\"]([^'\"]{1,200})['\"]",
-                             "input", 2),
-                            (r"browser_(?:type|fill)\s*\(\s*(?:ref\s*=\s*)?['\"]([^'\"]{0,80})['\"]\s*\)",
-                             "input", 1),
+                             "input", 2, "browser_type"),
+                            (r"browser_(?:type|fill)\s*\(\s*(?:text|value)\s*=\s*['\"]([^'\"]{1,200})['\"]",
+                             "input", 0, "browser_type"),
                             (r"browser_scroll\s*\(\s*direction\s*=\s*['\"]?([^'\",\)\s]{2,20})['\"]?",
-                             "scroll", 0),
+                             "scroll", 0, "browser_scroll"),
                             (r"browser_(?:press_key|keyboard)\s*\(\s*key\s*=\s*['\"]?([^'\",\)\s]{1,20})['\"]?",
-                             "press_key", 0),
+                             "press_key", 0, "browser_press"),
                             # 桌面工具
                             (r"windows_launch_app\s*\(\s*(?:path|app)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
-                             "launch_app", 0),
+                             "launch_app", 0, "windows_launch_app"),
                             (r"windows_click_text\s*\(\s*(?:text|label)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
-                             "click", 0),
+                             "click", 0, "windows_click_text"),
                             (r"windows_type_text\s*\(\s*(?:text|value)\s*=\s*['\"]([^'\"]{1,200})['\"]",
-                             "input", 0),
+                             "input", 0, "windows_type_text"),
                             (r"windows_focus_app\s*\(\s*(?:app_name|title)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
-                             "launch_app", 0),
+                             "launch_app", 0, "windows_focus_app"),
                             (r"windows_press_key\s*\(\s*key\s*=\s*['\"]?([^'\",\)\s]{2,20})['\"]?",
-                             "hotkey", 0),
+                             "hotkey", 0, "windows_press_key"),
                             # 移动端工具
                             (r"mobile_open_app\s*\(\s*(?:package|app)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
-                             "open_app", 0),
+                             "open_app", 0, "mobile_open_app"),
                             (r"mobile_tap\s*\(\s*(?:text|selector)\s*=\s*['\"]?([^'\",\)\s]{2,100})['\"]?",
-                             "tap", 0),
+                             "tap", 0, "mobile_tap"),
                             (r"mobile_input_text\s*\(\s*(?:text|input)\s*=\s*['\"]([^'\"]{1,200})['\"]",
-                             "input_text", 0),
+                             "input_text", 0, "mobile_input_text"),
                             (r"mobile_swipe\s*\(\s*direction\s*=\s*['\"]?([^'\",\)\s]{2,20})['\"]?",
-                             "swipe", 0),
+                             "swipe", 0, "mobile_swipe"),
                             (r"mobile_extract_otp\s*\(",
-                             "extract_otp", 0),
+                             "extract_otp", -1, "mobile_extract_otp"),
                         ]
-                        for _pat, _act, _g in _FN_PATTERNS:
+                        for _pat, _act, _g, _tool in _FN_PATTERNS:
                             try:
                                 for _m in _re.finditer(_pat, _parse_text, flags=_re.IGNORECASE):
-                                    try:
-                                        _tgt = _m.group(_g + 1) if _g == 0 else _m.group(_g)
-                                    except Exception:
-                                        _tgt = _m.group(1) if _m.groups() else _act
-                                    if not _tgt:
-                                        _tgt = _act
-                                    _tgt = _sanitize_tgt(str(_tgt).strip()[:120] or _act)
-                                    # 过滤：target 是状态观察或含负向片段 → 跳过
-                                    if is_state_observation(_tgt) or contains_negative_snippet(_tgt):
+                                    _ival = ""
+                                    if _g < 0:
+                                        _tgt = "提取手机短信验证码"
+                                    elif _act == "input" and _g == 2:
+                                        try:
+                                            _tgt = _m.group(1)
+                                            _ival = _m.group(2)
+                                        except Exception:
+                                            _tgt = _m.group(1) if _m.groups() else ""
+                                    else:
+                                        try:
+                                            _tgt = _m.group(_g + 1) if _g == 0 else _m.group(_g)
+                                        except Exception:
+                                            _tgt = _m.group(1) if _m.groups() else ""
+                                    if _act == "input" and _g == 0 and not _ival:
+                                        _ival = str(_tgt or "")
+                                        _tgt = ""
+                                    if not _tgt and not _ival and _act != "extract_otp":
                                         continue
-                                    if not _fb_replayable(_act):
-                                        continue
-                                    if not _dedup_sig(_act, _tgt):
-                                        continue
-                                    fb_recs.append({
-                                        "action_type": _act,
-                                        "target": _tgt,
-                                        "status": "success",
-                                        "result": _m.group(0)[:100],
-                                        "has_vision": False,
-                                        "env_verify": None,
-                                    })
+                                    _fb_append(
+                                        _act,
+                                        _tgt or _ival,
+                                        input_value=_ival,
+                                        raw=_m.group(0),
+                                        tool_hint=_tool,
+                                    )
                             except Exception:
                                 continue
 
@@ -6025,8 +6446,6 @@ def run_ai_chat_with_tools_stream(
                              "click", 1),
                             (r"(?:在|向)\s*([^，。；：\s]{1,30}?)\s*(?:输入框|文本框|框|栏|字段)\s*(?:中|里)?\s*(?:输入|填写|填入)\s*[:：]\s*['\"]?([^\"'，。；\n]{1,160})",
                              "input", 2),
-                            (r"([一二三四五六12345])\s*项(?:信息|填写|输入)\s*(?:已)?成功",
-                             "input", 0),
                             # 桌面
                             (r"(?:启动|打开)\s*([^，。；：\s]{1,30}?)\s*(?:应用|程序|软件)",
                              "launch_app", 1),
@@ -6041,43 +6460,26 @@ def run_ai_chat_with_tools_stream(
                              "input_text", 1),
                             (r"(?:提取|获取|读取)\s*(?:短信|验证码|OTP|otp)",
                              "extract_otp", 0),
-                            (r"验证码\s*[:：]\s*['\"]?([^\"'，。；\n]{4,8})",
-                             "extract_otp", 1),
                         ]
                         for _pat, _act, _tg in _CN_PATTERNS:
                             try:
                                 for _m in _re.finditer(_pat, _parse_text):
+                                    _ival = ""
                                     try:
-                                        _raw_tgt = _m.group(_tg) if _tg > 0 else _m.group(0)
+                                        if _act == "input" and _tg == 2:
+                                            _tgt = _m.group(1)
+                                            _ival = _m.group(2)
+                                        elif _tg > 0:
+                                            _tgt = _m.group(_tg)
+                                        else:
+                                            _tgt = "提取手机短信验证码" if _act == "extract_otp" else ""
                                     except Exception:
-                                        _raw_tgt = _m.group(0)
-                                    if _act == "input" and _tg == 2:
-                                        try:
-                                            _field = _m.group(1)
-                                            _val = _raw_tgt
-                                            _tgt = f"{_sanitize_tgt(str(_field))}: {_sanitize_tgt(str(_val))[:60]}"
-                                        except Exception:
-                                            _tgt = _sanitize_tgt(str(_raw_tgt))[:120]
-                                    elif _act == "input" and _tg == 0:
-                                        _tgt = f"批量填写{str(_raw_tgt).strip()[:6]}"
-                                    elif _act in ("click", "tap") and _tg >= 1:
-                                        _tgt = _sanitize_tgt(str(_raw_tgt))[:120]
-                                        if is_state_observation(_tgt) or contains_negative_snippet(_tgt):
-                                            continue
-                                    else:
-                                        _tgt = _sanitize_tgt(str(_raw_tgt))[:120] or _act
-                                    if not _fb_replayable(_act):
                                         continue
-                                    if not _dedup_sig(_act, _tgt):
+                                    if not _tgt and not _ival:
                                         continue
-                                    fb_recs.append({
-                                        "action_type": _act,
-                                        "target": _tgt,
-                                        "status": "success",
-                                        "result": str(_m.group(0) or _act)[:100],
-                                        "has_vision": False,
-                                        "env_verify": None,
-                                    })
+                                    if _is_tool_ph(str(_tgt)):
+                                        continue
+                                    _fb_append(_act, str(_tgt), input_value=str(_ival), raw=_m.group(0))
                             except Exception:
                                 continue
 
@@ -6097,7 +6499,7 @@ def run_ai_chat_with_tools_stream(
                         try:
                             import logging as _LOG3
                             _LOG3.getLogger("hermes_tool_events").warning(
-                                "fallback_extract_all_platforms_records failed: %s", str(_fb_ex)[:200]
+                                "fallback_extract failed: %s", _fb_ex
                             )
                         except Exception:
                             pass
@@ -6213,22 +6615,35 @@ def run_ai_chat_with_tools_stream(
                         call_args.setdefault("field", "compose")
                     if name in ("windows_click_element", "windows_type_text"):
                         call_args = _prepare_element_context(params, name, call_args, meta)
-                    _otp_invent = _reject_invented_otp_type(name, call_args, meta)
-                    if _otp_invent:
+                    _layer_block = _reject_web_task_desktop_input(name, call_args, meta, params)
+                    if _layer_block:
                         result_text = json.dumps(
-                            {"ok": False, "success": False, "error": _otp_invent, "error_code": "OTP_INVENTED"},
+                            {
+                                "ok": False,
+                                "success": False,
+                                "error": _layer_block,
+                                "error_code": "WRONG_SURFACE",
+                            },
                             ensure_ascii=False,
                         )
-                        meta["tools_used"].append(f"{name}_blocked_otp")
+                        meta["tools_used"].append(f"{name}_blocked_web_surface")
                     else:
-                        result_text = _dispatch_desktop_or_screen_tool(name, call_args)
-                        if name in ("windows_click_element", "windows_type_text"):
-                            if not _desktop_tool_succeeded(result_text):
-                                result_text = _retry_failed_element_operation(
-                                    params, name, call_args, meta, result_text
-                                )
-                        meta["tools_used"].append(name)
-                        _record_succeeded_desktop_action(meta, name, call_args, result_text)
+                        _otp_invent = _reject_invented_otp_type(name, call_args, meta)
+                        if _otp_invent:
+                            result_text = json.dumps(
+                                {"ok": False, "success": False, "error": _otp_invent, "error_code": "OTP_INVENTED"},
+                                ensure_ascii=False,
+                            )
+                            meta["tools_used"].append(f"{name}_blocked_otp")
+                        else:
+                            result_text = _dispatch_desktop_or_screen_tool(name, call_args)
+                            if name in ("windows_click_element", "windows_type_text"):
+                                if not _desktop_tool_succeeded(result_text):
+                                    result_text = _retry_failed_element_operation(
+                                        params, name, call_args, meta, result_text
+                                    )
+                            meta["tools_used"].append(name)
+                            _record_succeeded_desktop_action(meta, name, call_args, result_text)
                 if name in SCREEN_TOOL_NAMES:
                     try:
                         parsed_vis = json.loads(result_text)
