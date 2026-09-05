@@ -10,6 +10,10 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "packaging" / "inno" / "testory.ico"
 OUT_APP_ICO = ROOT / "static" / "brand" / "app.ico"
 OUT_PNG = ROOT / "static" / "brand" / "app-icon.png"
+# Tauri generate_context! 默认读取 src-tauri/icons/icon.png
+OUT_TAURI_DIR = ROOT / "src-tauri" / "icons"
+OUT_TAURI_PNG = OUT_TAURI_DIR / "icon.png"
+OUT_TAURI_ICO = OUT_TAURI_DIR / "icon.ico"
 SVG_SRC = ROOT / "static" / "brand" / "testory-mark.svg"
 
 ICO_SIZES = (256, 128, 64, 48, 32, 16)
@@ -120,10 +124,15 @@ def save_icons() -> None:
     import shutil
 
     shutil.copy2(OUT, OUT_APP_ICO)
+    OUT_TAURI_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(OUT_PNG, OUT_TAURI_PNG)
+    shutil.copy2(OUT, OUT_TAURI_ICO)
     size_kb = OUT.stat().st_size / 1024
     print(f"Wrote {OUT_PNG}")
     print(f"Wrote {OUT} ({size_kb:.1f} KB, sizes={ICO_SIZES})")
     print(f"Copied {OUT_APP_ICO}")
+    print(f"Copied {OUT_TAURI_PNG}")
+    print(f"Copied {OUT_TAURI_ICO}")
 
 
 def main() -> int:

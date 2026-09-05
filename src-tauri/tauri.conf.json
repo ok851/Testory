@@ -31,7 +31,8 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "../packaging/inno/testory.ico"
+      "icons/icon.png",
+      "icons/icon.ico"
     ]
   }
 }
